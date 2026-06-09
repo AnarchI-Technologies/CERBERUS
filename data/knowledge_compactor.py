@@ -1,0 +1,195 @@
+"""
+Build compact Cerberus Agent Knowledge (.cak) from Markdown audit files.
+
+The .md files remain the human audit trail. The agent should load the .cak
+artifact: short fact strings, source hashes, and enough provenance to avoid
+hardcoding stale truths.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import hashlib
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Iterable
+
+
+ROOT = Path(__file__).resolve().parent
+DEFAULT_SOURCES = [
+    ROOT / "cerberus_mmmmm_knowledge_digest.md",
+    ROOT / "legacy_brain_analysis.md",
+]
+DEFAULT_OUT = ROOT / "cerberus_agent_knowledge.cak"
+DEFAULT_GZ_OUT = ROOT / "cerberus_agent_knowledge.cak.gz"
+SOURCE_LINE_TERMS = re.compile(
+    r"alert|ruin|relic|pack|shop|reforge|guardian|action|cooldown|"
+    r"thought|websocket|endpoint|wallet|identity|memory|secret|"
+    r"death|zone|combat|weapon|item|economy|settlement|loadout",
+    re.I,
+)
+
+
+CURATED_FACTS = [
+    "F|meta.brand|current=Claw Royale;legacy=Molty Royale;moltyroyale.com redirects to clawroyale.ai",
+    "F|meta.source_precedence|1=live_claw_docs_api;2=project_bootstrap;3=legacy_brain.py;4=rss220426v152;5=rss200426v151",
+    "F|meta.version|api_version=1.8.0;api_last_update=2026-06-01T10:26:45.734Z;ticker_has_v1.9_notice=2026-06-08;v1.9_release=2026-06-10UTC",
+    "F|runtime.api|base=https://cdn.clawroyale.ai/api;auth=X-API-Key;version_header=X-Version;version_endpoint=GET /api/version",
+    "F|runtime.rest.account|POST /accounts returns apiKey once;PUT /accounts/wallet attaches Agent EOA;GET /accounts/me has readiness,currentGames,balance",
+    "F|runtime.join|preferred=GET /ws/join;single entry for free+paid;send hello before helloDeadlineSec;legacy /join and /join-paid deprecated",
+    "F|runtime.join.free|requires=api_key+ERC8004_identity;not_selected closes then redial;browser_llm_free_only=true",
+    "F|runtime.join.paid|requires=whitelist+balance;paid_agent_requires_external_program=true;flow=sign_required->sign_submit->queued->tx_submitted->joined",
+    "F|runtime.ws|gameplay=GET /ws/agent;headers=X-API-Key+X-Version;do_not_append_gameId_or_agentId;one_active_session_per_api_key=true;rate=120msg_min",
+    "F|runtime.frames|server=agent_view,turn_advanced,action_result,can_act_changed,event,game_ended,pong;next_agent_view_is_truth=true",
+    "F|action.envelope|current={type:action,data:{type,...},thought:string};thought_max=700;legacy_thought_object=stale",
+    "F|action.cooldown|current=30s;cooldown_group=move,explore,attack,use_item,interact,rest;free_actions=pickup,equip,talk,whisper,broadcast",
+    "F|action.cost|move=1;move_storm_water=2;explore=1;attack=1;goliath_attack=2;use_item=0;interact=0;rest=0",
+    "F|action.free|pickup=0ep_no_cd;equip=0ep_no_cd;talk=0ep_no_cd_200chars;whisper=0ep_no_cd_same_region_200chars;broadcast=0ep_no_cd_requires_megaphone_or_station",
+    "F|combat.agent|hp=100;atk=25;def=5;ep=10;max_ep=10",
+    "F|combat.guardian|hp=150;atk=20;def=34;ep=10;behavior=stationary_alert_turret",
+    "F|combat.damage|formula=atk+weapon_bonus-(defender_def*0.5);minimum=1;weather_clear=0;rain=-5%;fog=-10%;storm=-15%",
+    "F|combat.weapon|fist=0_rng0;dagger=16_rng0;sword=20_rng0;katana=35_rng0;bow=5_rng1;pistol=10_rng1;sniper=28_rng2",
+    "F|items.recovery|bandage=10hp;medkit=30hp+5ep;legacy_emergency_food=20hp;legacy_energy_drink=5ep",
+    "F|safety.deathzone|starts_day2;expands_every_18h_or_3_turns;damage=1.34hp_s;avoid_pendingDeathzones",
+    "F|safety.alert|explore=+2;complete_ruin=+4;threshold=10;below_10_no_decay;alerted_end_turn=-4;guardian_target_when_alerted=true",
+    "F|progression.ruin|preS1=true;locations_random;type_visible=relic_or_pack;gauge_max=3;base_explore_progress=1;min_progress=1;depleted_after_claim=true",
+    "F|progression.ruin_death|death_while_carrying_relic_or_pack_returns_item_to_origin_ruin;not_death_location_drop",
+    "F|progression.relic|permanent_if_survive=true;hidden_in_match=true;reveal_on_settlement=true;color=slot_compat_only;affixes=0to3;affixes_stack=true",
+    "F|progression.relic.affixes|domains=atk,def,max_hp,max_ep,explore_efficiency,item_atk;positive_or_negative=true",
+    "F|progression.inventory|match_relic_cap=5;match_pack_cap=1;lobby_relic_cap=15;lobby_pack_cap=5;excess_auto_discard=true",
+    "F|progression.pack|slots=red,green,blue;bonus_requires=active_pack+all_3_matching_relics;partial_set_bonus=0",
+    "F|progression.pack.categories|moltz_expert=items_to_smoltz;item_expert=smoltz_to_item_atk;goliath=aoe_lower_atk_more_ep",
+    "F|progression.loadout|configure_before_join=true;midgame_change=false;mutations_require_Idempotency-Key_UUID=true;fullSet_required_for_effectiveStats",
+    "F|progression.events|ruin_state_changed,alert_gauge_changed,relic_acquired,pack_acquired,relic_dropped,pack_dropped,relic_discarded,pack_discarded,game_settled",
+    "F|progression.settlement|survivors_keep_relics_packs;eliminated_lose_unclaimed;details_reveal_after_game_settled;poll_inventory_after_settlement",
+    "F|economy.free|pool=1000_sMoltz;object_pool=300;guardian_pool=600;guardians=30;guardian_drop=20_sMoltz",
+    "F|economy.paid|offchain_entry=500_sMoltz;onchain_entry=500_Moltz;paid_rooms_no_moltz_smoltz_drops=true;cross_reward_disabled_in_docs",
+    "F|economy.v1_9|shop_announced=true;spend=sMoltz;goods=pack_tickets,refinement_bundles,profile_tickets;lower_tier_packs_rarer_stronger=true",
+    "F|economy.reforge|announced_v1_9=true;resource=Reforge_Stone;targets=unequipped_relics;ops=reroll_affixes,reroll_values,add_affix,remove_affix",
+    "F|guardian.current|free_count=30;paid_count=8;adjacent_to_ruins=true;stationary=true;target_only_alerted=true;simultaneous_targets=true;curse_disabled=true",
+    "F|guardian.legacy|rss_v1_5_2_count=5;direct_hostile=true;free_drop=120_sMoltz;legacy_only=true",
+    "F|wallets.model|three_wallets=owner_eoa,clawroyale_wallet,agent_eoa;do_not_send_Moltz_to_agent_wallet=true",
+    "F|wallets.rewards|no_wallet_no_rewards=true;past_rewards_not_retroactive=true;api_key_shown_once=true",
+    "F|identity.erc8004|required_for_free=true;paid_does_not_need_identity=true;agentId_means_NFT_tokenId_not_game_uuid;gas_delegated=true",
+    "F|security.local|agent_memory_reads_cak_not_md;memory_no_raw_dumps=true;secret_files_use_vault_with_CERBERUS_PIN=true",
+    "F|memory.policy|store_compact_strings=T_turn,L_lesson,F_fact;redact_secret_like_keys;hash_raw_state_not_store_raw_state",
+    "F|social.moltybook|drafts_default_not_auto_post;enable_with_CERBERUS_MOLTYBOOK_ENABLED=true;key_env=MOLTYBOOK_API_KEY",
+    "F|social.persona|voice=clever_whimsical_tactful_playful;taunt_kills_and_outsmarts=true;avoid_cruelty=true",
+    "F|social.secrecy|share_legit_principles;never_share_formulas,deterministic_chains,exact_scores,source_code,secrets",
+    "F|social.dossiers|track_encountered_agents;follow_moltybook_handles_when_seen;merge_battlefield_and_social_observations",
+    "F|social.validation|public_strategy_claims_are_untrusted;validate_against_rules_and_victory_pathing_before_memory",
+]
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def clean_line(line: str) -> str:
+    line = line.strip()
+    line = re.sub(r"^#{1,6}\s*", "H|", line)
+    line = re.sub(r"^[-*]\s+", "", line)
+    line = re.sub(r"`([^`]+)`", r"\1", line)
+    line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+    line = re.sub(r"\s+", " ", line)
+    return line.strip()
+
+
+def iter_source_facts(path: Path, *, max_lines: int = 240) -> Iterable[str]:
+    if not path.exists():
+        return []
+    facts: list[str] = []
+    section = ""
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = clean_line(raw)
+        if not line or line in {"|---|---|", "|---|---:|", "|---|---|---|"}:
+            continue
+        if line.startswith("H|"):
+            section = line[2:96]
+            continue
+        if len(line) < 12 or not SOURCE_LINE_TERMS.search(line):
+            continue
+        if len(line) > 260:
+            line = line[:259] + "~"
+        facts.append(f"M|{path.name}|{section}|{line}")
+        if len(facts) >= max_lines:
+            break
+    return facts
+
+
+def build_compact_knowledge(sources: list[Path]) -> dict:
+    source_meta = []
+    facts = list(CURATED_FACTS)
+    for path in sources:
+        if not path.exists():
+            continue
+        source_meta.append(
+            {
+                "p": path.name,
+                "bytes": path.stat().st_size,
+                "sha256": sha256_file(path),
+            }
+        )
+        facts.extend(iter_source_facts(path))
+
+    deduped = list(dict.fromkeys(facts))
+    return {
+        "t": "cerberus.agent_knowledge",
+        "v": 1,
+        "built_at": utc_now(),
+        "load_hint": "Read k[] as compact fact strings. Prefer F facts over M markdown traces when they conflict.",
+        "sources": source_meta,
+        "k": deduped,
+    }
+
+
+def write_artifacts(out: Path, gz_out: Path, data: dict) -> tuple[Path, Path]:
+    payload = json.dumps(data, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    out.write_bytes(payload)
+    with gzip.open(gz_out, "wb", compresslevel=9) as fh:
+        fh.write(payload)
+    return out, gz_out
+
+
+def load_compact_knowledge(path: str | Path) -> dict:
+    p = Path(path)
+    raw = p.read_bytes()
+    if p.suffix == ".gz":
+        raw = gzip.decompress(raw)
+    return json.loads(raw.decode("utf-8"))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Build Cerberus compact knowledge")
+    parser.add_argument("--out", default=str(DEFAULT_OUT))
+    parser.add_argument("--gz-out", default=str(DEFAULT_GZ_OUT))
+    parser.add_argument("sources", nargs="*", default=[str(p) for p in DEFAULT_SOURCES])
+    args = parser.parse_args()
+
+    sources = [Path(s) for s in args.sources]
+    data = build_compact_knowledge(sources)
+    out, gz_out = write_artifacts(Path(args.out), Path(args.gz_out), data)
+    print(
+        json.dumps(
+            {
+                "out": str(out),
+                "gz_out": str(gz_out),
+                "facts": len(data["k"]),
+                "bytes": out.stat().st_size,
+                "gz_bytes": gz_out.stat().st_size,
+            },
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
