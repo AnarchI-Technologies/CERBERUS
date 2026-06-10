@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -1055,6 +1056,16 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(envelope["data"], {"type": "move", "regionId": "r2", "reason": "death-zone pressure"})
         self.assertEqual(envelope["thought"], "death-zone pressure")
 
+    def test_claw_runtime_sign_submit_frame_prefers_join_intent_then_request_id(self) -> None:
+        self.assertEqual(
+            claw_runtime.sign_submit_frame({"signature": "0xsigned", "joinIntentId": "join-1", "requestId": "req-1"}),
+            {"type": "sign_submit", "signature": "0xsigned", "joinIntentId": "join-1"},
+        )
+        self.assertEqual(
+            claw_runtime.sign_submit_frame({"signature": "0xsigned", "requestId": "req-2"}),
+            {"type": "sign_submit", "signature": "0xsigned", "requestId": "req-2"},
+        )
+
     def test_claw_runtime_hello_frame_follows_unified_join_docs(self) -> None:
         paid = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         free = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
@@ -1067,6 +1078,58 @@ class HardeningTests(unittest.TestCase):
         payload = {"type": "agent_view", "data": {"gameId": "g1", "canAct": False, "view": {"canAct": False}}}
 
         self.assertFalse(claw_runtime.wants_action(payload, claw_runtime.unwrap_snapshot(payload)))
+
+    def test_claw_runtime_marks_clean_socket_close_without_terminal_frame(self) -> None:
+        updates: list[dict[str, object]] = []
+
+        class FakeSocket:
+            def __aiter__(self) -> "FakeSocket":
+                return self
+
+            async def __anext__(self) -> str:
+                raise StopAsyncIteration
+
+            async def send(self, payload: str) -> None:
+                raise AssertionError(f"unexpected send: {payload}")
+
+        class FakeConnect:
+            async def __aenter__(self) -> FakeSocket:
+                return FakeSocket()
+
+            async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+                return None
+
+        old_connect = claw_runtime.websockets.connect
+        old_discover = claw_runtime.discover_version
+        old_update = claw_runtime.update_status
+        old_read_json = claw_runtime.read_json
+        try:
+            claw_runtime.websockets.connect = lambda *args, **kwargs: FakeConnect()  # type: ignore[assignment]
+            claw_runtime.discover_version = lambda api_base=claw_runtime.CLAW_API_BASE: "1.9.0"  # type: ignore[assignment]
+            claw_runtime.update_status = lambda **kwargs: updates.append(kwargs)  # type: ignore[assignment]
+            claw_runtime.read_json = lambda path: {}  # type: ignore[assignment]
+
+            asyncio.run(
+                claw_runtime.connect_and_play(
+                    claw_runtime.ClawRuntimeConfig(
+                        api_key="mr_test",
+                        api_base="https://cdn.clawroyale.ai/api",
+                        version="1.9.0",
+                        mode="offchain",
+                        enabled=True,
+                    ),
+                    "/ws/join",
+                )
+            )
+        finally:
+            claw_runtime.websockets.connect = old_connect  # type: ignore[assignment]
+            claw_runtime.discover_version = old_discover  # type: ignore[assignment]
+            claw_runtime.update_status = old_update  # type: ignore[assignment]
+            claw_runtime.read_json = old_read_json  # type: ignore[assignment]
+
+        self.assertEqual(updates[0]["state"], "connecting")
+        self.assertEqual(updates[1]["state"], "connected")
+        self.assertEqual(updates[-1], {"state": "socket_closed", "last_error": "websocket closed without terminal game frame"})
 
     def test_claw_paid_join_typed_data_signer_returns_signature(self) -> None:
         from eth_account import Account  # type: ignore
