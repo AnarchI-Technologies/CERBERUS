@@ -934,7 +934,7 @@ class HardeningTests(unittest.TestCase):
             enabled=True,
         )
 
-        self.assertEqual(config.ws_base_url, "wss://cdn.clawroyale.ai/api")
+        self.assertEqual(config.ws_base_url, "wss://cdn.clawroyale.ai")
         self.assertEqual(config.headers["X-API-Key"], "mr_test")
         self.assertEqual(config.headers["X-Version"], "1.9.0")
 
@@ -998,7 +998,7 @@ class HardeningTests(unittest.TestCase):
         )
         self.assertEqual(
             claw_runtime.websocket_url(config, "/ws/agent"),
-            "wss://cdn.clawroyale.ai/api/ws/agent",
+            "wss://cdn.clawroyale.ai/ws/agent",
         )
 
     def test_claw_runtime_uses_fast_probe_delay_for_404_routes(self) -> None:

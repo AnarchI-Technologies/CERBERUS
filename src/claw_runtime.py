@@ -69,7 +69,7 @@ class ClawRuntimeConfig:
     def ws_base_url(self) -> str:
         parsed = urlparse(self.base_url)
         scheme = "wss" if parsed.scheme == "https" else "ws"
-        return f"{scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
+        return f"{scheme}://{parsed.netloc}"
 
     @property
     def headers(self) -> dict[str, str]:
