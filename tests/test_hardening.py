@@ -17,6 +17,7 @@ from agent_dossiers import AgentDossierStore
 from core_loop import cerberus_tick, normalize_action
 import identity_bootstrap
 import claw_identity_token
+import claw_runtime
 import moltbook_claim_assistant
 import x_oauth
 from identity_bootstrap import (
@@ -807,6 +808,33 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(vault.saved)
         self.assertTrue(result["identity_ready"])
         self.assertEqual(vault.data["claw_royale"]["erc8004_id"], "98765")
+
+    def test_claw_runtime_builds_websocket_base_from_api_base(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(
+            api_key="mr_test",
+            api_base="https://cdn.clawroyale.ai/api",
+            version="1.9.0",
+            enabled=True,
+        )
+
+        self.assertEqual(config.ws_base_url, "wss://cdn.clawroyale.ai/api")
+        self.assertEqual(config.headers["X-API-Key"], "mr_test")
+        self.assertEqual(config.headers["X-Version"], "1.9.0")
+
+    def test_claw_runtime_extracts_nested_game_id(self) -> None:
+        payload = {"type": "agent_view", "data": {"view": {"currentGame": {"id": "game-123"}}}}
+
+        self.assertEqual(claw_runtime.extract_game_id(payload), "game-123")
+        self.assertEqual(claw_runtime.extract_game_id(claw_runtime.unwrap_snapshot(payload)), "game-123")
+
+    def test_claw_runtime_action_envelope_matches_contract(self) -> None:
+        envelope = claw_runtime.action_envelope(
+            {"type": "move", "regionId": "r2", "reason": "death-zone pressure", "_warnings": []}
+        )
+
+        self.assertEqual(envelope["type"], "action")
+        self.assertEqual(envelope["data"], {"type": "move", "regionId": "r2", "reason": "death-zone pressure"})
+        self.assertEqual(envelope["thought"], "death-zone pressure")
 
 
 if __name__ == "__main__":

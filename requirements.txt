@@ -2,3 +2,4 @@ eth-account>=0.13.7
 agentmail>=0.5.4
 python-dotenv>=1.2.2
 requests>=2.34.2
+websockets>=16.0

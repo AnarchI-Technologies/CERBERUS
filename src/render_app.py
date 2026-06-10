@@ -11,6 +11,7 @@ import json
 import os
 import sqlite3
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,9 @@ for folder in (ROOT / "src", ROOT / "data"):
         sys.path.insert(0, path)
 
 from core_loop import cerberus_tick  # noqa: E402
+from claw_runtime import read_json as read_runtime_json  # noqa: E402
+from claw_runtime import run_forever as run_claw_runtime  # noqa: E402
+from claw_runtime import runtime_status_file  # noqa: E402
 from env_loader import hydrate_env  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR  # noqa: E402
@@ -43,6 +47,8 @@ def readiness() -> dict[str, Any]:
             "AGENTMAIL_EMAIL",
             "CLAW_ROYALE_API_KEY",
             "CLAW_ROYALE_ERC8004_ID",
+            "CLAW_ROYALE_RUNTIME_ENABLED",
+            "CLAW_ROYALE_GAME_MODE",
             "X_CLIENT_ID",
             "X_CLIENT_SECRET",
             "X_REDIRECT_URI",
@@ -56,6 +62,8 @@ def readiness() -> dict[str, Any]:
         "AGENTMAIL_EMAIL": bool(os.getenv("AGENTMAIL_EMAIL")),
         "CLAW_ROYALE_API_KEY": bool(os.getenv("CLAW_ROYALE_API_KEY")),
         "CLAW_ROYALE_ERC8004_ID": bool(os.getenv("CLAW_ROYALE_ERC8004_ID")),
+        "CLAW_ROYALE_RUNTIME_ENABLED": bool(os.getenv("CLAW_ROYALE_RUNTIME_ENABLED")),
+        "CLAW_ROYALE_GAME_MODE": bool(os.getenv("CLAW_ROYALE_GAME_MODE")),
         "X_CLIENT_ID": bool(os.getenv("X_CLIENT_ID")),
         "X_CLIENT_SECRET": bool(os.getenv("X_CLIENT_SECRET")),
         "X_REDIRECT_URI": bool(os.getenv("X_REDIRECT_URI")),
@@ -126,11 +134,13 @@ def stats() -> dict[str, Any]:
             game_id = json.loads(path.read_text(encoding="utf-8")).get("game_id", "")
     except Exception:
         game_id = ""
+    runtime_status = read_runtime_json(runtime_status_file())
     return {
         "ok": ready.get("ok", False),
         "service": "cerberus",
         "current_game_id": game_id,
         "spectate_url": spectate_url(game_id) if game_id else "",
+        "claw_runtime": runtime_status,
         "memory_dir": ready.get("memory_dir", ""),
         "memory_writable": ready.get("memory_writable", False),
         "memory_error": ready.get("memory_error", ""),
@@ -234,6 +244,11 @@ def dashboard_html(query: str = "") -> bytes:
       ["CERBERUS_PIN", "CLAW_ROYALE_API_KEY", "CLAW_ROYALE_ERC8004_ID"].forEach((key) => {{
         if (env[key] === false) blockers.push("missing " + key);
       }});
+      const runtime = data.claw_runtime || {{}};
+      if (env.CLAW_ROYALE_RUNTIME_ENABLED === false) blockers.push("missing CLAW_ROYALE_RUNTIME_ENABLED=true");
+      if (runtime.state && !["connected", "playing"].includes(runtime.state)) {{
+        blockers.push("claw runtime " + runtime.state + ": " + (runtime.last_error || "no live game yet"));
+      }}
       return blockers;
     }}
     function showRuntimeFallback(blockers) {{
@@ -361,6 +376,10 @@ class CerberusHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     port = int(os.getenv("PORT", "10000"))
+    if os.getenv("CLAW_ROYALE_RUNTIME_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+        thread = threading.Thread(target=lambda: __import__("asyncio").run(run_claw_runtime()), daemon=True)
+        thread.start()
+        print("Claw Royale runtime worker started", flush=True)
     server = ThreadingHTTPServer(("0.0.0.0", port), CerberusHandler)
     print(f"Cerberus Render service listening on 0.0.0.0:{port}", flush=True)
     server.serve_forever()

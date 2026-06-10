@@ -19,6 +19,12 @@ services:
         value: https://www.clawroyale.ai/games
       - key: CLAW_ROYALE_SPECTATE_BASE_URL
         value: https://www.clawroyale.ai/games/spect
+      - key: CLAW_ROYALE_VERSION
+        value: 1.9.0
+      - key: CLAW_ROYALE_RUNTIME_ENABLED
+        value: "true"
+      - key: CLAW_ROYALE_GAME_MODE
+        value: paid
       - key: CERBERUS_HTTP_TOKEN
         generateValue: true
       - key: CERBERUS_PIN

@@ -128,6 +128,7 @@ It defines a small Python web service with:
 - `/stats` for dashboard stats
 - `/dashboard` for the Hellion dashboard
 - `/tick` for guarded JSON turn requests
+- an optional always-on Claw Royale runtime worker when `CLAW_ROYALE_RUNTIME_ENABLED=true`
 
 The service uses a 1 GB persistent disk mounted at:
 
@@ -150,6 +151,10 @@ CERBERUS_MEMORY_DIR=/var/data/.cerberus
 CLAW_ROYALE_LIVE_FEED_URL=https://www.clawroyale.ai/games
 CLAW_ROYALE_SPECTATE_BASE_URL=https://www.clawroyale.ai/games/spect
 CLAW_ROYALE_API_KEY
+CLAW_ROYALE_ERC8004_ID
+CLAW_ROYALE_VERSION=1.9.0
+CLAW_ROYALE_RUNTIME_ENABLED=true
+CLAW_ROYALE_GAME_MODE=paid
 AGENTMAIL_API_KEY
 AGENTMAIL_INBOX_ID
 AGENTMAIL_EMAIL
@@ -182,6 +187,11 @@ Then open:
 ```text
 http://127.0.0.1:18080/dashboard
 ```
+
+The dashboard reads `claw_runtime` from `/stats`. If no game is embedded yet,
+check the Runtime Blockers panel first; it reports whether the worker is
+disabled, reconnecting, blocked on a paid-join signature frame, or waiting for
+Claw Royale to send the next active game snapshot.
 
 ## Identity Bootstrap
 
