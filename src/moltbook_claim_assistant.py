@@ -124,10 +124,48 @@ def post_verification(identity: dict[str, Any], *, include_inbox: bool = False) 
     return post_tweet(text, identity=identity)
 
 
+def claim_with_x_oauth(*, include_inbox: bool = False, check_status: bool = True) -> dict[str, Any]:
+    vault = IdentityVault().load()
+    vault.require_pin_ready()
+    identity = vault.data
+    text = verification_text(identity, include_inbox=include_inbox)
+    tweet = post_tweet(text, identity=identity)
+    tweet_id = ""
+    if isinstance(tweet, dict):
+        data = tweet.get("data", {})
+        if isinstance(data, dict):
+            tweet_id = str(data.get("id") or "")
+
+    moltbook = identity.setdefault("moltbook", {})
+    moltbook["status"] = "x_verification_posted"
+    moltbook["verification_tweet_text"] = text
+    if tweet_id:
+        moltbook["verification_tweet_id"] = tweet_id
+        moltbook["verification_tweet_url"] = f"https://twitter.com/i/web/status/{tweet_id}"
+    moltbook["claim_attempt"] = {"tweet": tweet}
+    vault.event("Posted Moltbook verification via delegated X OAuth", tweet_id=tweet_id)
+
+    status: dict[str, Any] = {}
+    if check_status:
+        status = claim_status(identity)
+        moltbook["claim_status_after_x"] = status
+        if status.get("ok") and str(status).lower().find("claimed") >= 0:
+            moltbook["status"] = "claimed"
+    vault.save()
+    return {
+        "ok": True,
+        "posted": True,
+        "tweet_id": tweet_id,
+        "tweet_url": moltbook.get("verification_tweet_url", ""),
+        "moltbook_status": status,
+    }
+
+
 def _cli() -> int:
     parser = argparse.ArgumentParser(description="Help Hellion complete Moltbook claim workflow")
-    parser.add_argument("command", choices=("packet", "inbox", "status", "tweet"), nargs="?", default="packet")
+    parser.add_argument("command", choices=("packet", "inbox", "status", "tweet", "claim"), nargs="?", default="packet")
     parser.add_argument("--include-inbox", action="store_true", help="Read AgentMail for claim links/codes")
+    parser.add_argument("--no-status", action="store_true", help="Skip Moltbook status check after claim tweet")
     args = parser.parse_args()
     identity = load_identity()
 
@@ -142,6 +180,9 @@ def _cli() -> int:
         return 0
     if args.command == "tweet":
         print(post_verification(identity, include_inbox=args.include_inbox))
+        return 0
+    if args.command == "claim":
+        print(claim_with_x_oauth(include_inbox=args.include_inbox, check_status=not args.no_status))
         return 0
     return 2
 

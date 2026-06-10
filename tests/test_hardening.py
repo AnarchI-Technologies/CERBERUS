@@ -515,6 +515,55 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("Hellion-Meet-Your-Molty-Maker", text)
         self.assertIn("MOLT-12345", text)
 
+    def test_moltbook_claim_with_x_oauth_updates_vault_status(self) -> None:
+        old_identity_vault = moltbook_claim_assistant.IdentityVault
+        old_post_tweet = moltbook_claim_assistant.post_tweet
+        old_claim_status = moltbook_claim_assistant.claim_status
+
+        class FakeVault:
+            saved = False
+
+            def __init__(self):
+                self.data = empty_identity()
+                self.data["moltbook"] = {"verification_code": "MOLT-12345"}
+                self.data["x_account"] = {"access_token": "x_test"}
+                self.events = []
+
+            def load(self):  # type: ignore[no-untyped-def]
+                return self
+
+            def require_pin_ready(self):  # type: ignore[no-untyped-def]
+                return None
+
+            def event(self, message, **metadata):  # type: ignore[no-untyped-def]
+                self.events.append({"message": message, **metadata})
+
+            def save(self):  # type: ignore[no-untyped-def]
+                FakeVault.saved = True
+                return Path("identity.vault.json")
+
+        posted: dict[str, object] = {}
+
+        def fake_post_tweet(text, *, identity=None):  # type: ignore[no-untyped-def]
+            posted["text"] = text
+            posted["identity"] = identity
+            return {"data": {"id": "12345"}}
+
+        try:
+            moltbook_claim_assistant.IdentityVault = FakeVault  # type: ignore[assignment]
+            moltbook_claim_assistant.post_tweet = fake_post_tweet  # type: ignore[assignment]
+            moltbook_claim_assistant.claim_status = lambda identity: {"ok": True, "status": "pending"}  # type: ignore[assignment]
+
+            result = moltbook_claim_assistant.claim_with_x_oauth()
+        finally:
+            moltbook_claim_assistant.IdentityVault = old_identity_vault
+            moltbook_claim_assistant.post_tweet = old_post_tweet
+            moltbook_claim_assistant.claim_status = old_claim_status
+
+        self.assertTrue(FakeVault.saved)
+        self.assertEqual(result["tweet_id"], "12345")
+        self.assertIn("MOLT-12345", posted["text"])
+
     def test_moltbook_inbox_claim_short_circuits_without_inbox(self) -> None:
         claims = extract_moltbook_claims({"messages": []})
         self.assertEqual(claims["claim_urls"], [])

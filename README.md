@@ -220,6 +220,29 @@ python src\x_oauth.py exchange-url "http://127.0.0.1:8765/x/callback?code=...&st
 
 OAuth session files are ignored and should not be committed.
 
+## Moltbook Claim With X OAuth
+
+After X OAuth tokens are stored in the local identity vault, Hellion can post the Moltbook verification text through delegated X access and record the result back into the vault:
+
+```powershell
+$env:CERBERUS_PIN = "your-pin"
+python src\moltbook_claim_assistant.py claim
+```
+
+If the claim code only exists in AgentMail, include inbox lookup:
+
+```powershell
+python src\moltbook_claim_assistant.py claim --include-inbox
+```
+
+To skip the follow-up Moltbook status check:
+
+```powershell
+python src\moltbook_claim_assistant.py claim --no-status
+```
+
+Use this before exporting Render environment values so the vault contains the latest Moltbook claim state.
+
 ## License
 
 The code is released under the MIT License. See `LICENSE`.
