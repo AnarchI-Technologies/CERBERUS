@@ -16,6 +16,7 @@ for folder in (ROOT / "src", ROOT / "data"):
 from agent_dossiers import AgentDossierStore
 from core_loop import cerberus_tick, normalize_action
 import identity_bootstrap
+import claw_contract
 import claw_identity_token
 import claw_config
 import claw_runtime
@@ -134,6 +135,33 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(action["type"], "rest")
         self.assertIn("missing regionId", action["reason"])
+
+    def test_documented_free_chat_actions_are_validated(self) -> None:
+        self.assertEqual(normalize_action({"type": "talk", "message": "hello"})["type"], "talk")
+        self.assertEqual(
+            normalize_action({"type": "whisper", "targetId": "agent-1", "message": "quiet"})["type"],
+            "whisper",
+        )
+        self.assertEqual(normalize_action({"type": "interact", "targetId": "station-1"})["type"], "interact")
+        self.assertEqual(normalize_action({"type": "whisper", "message": "missing target"})["type"], "rest")
+
+    def test_claw_v1_9_contract_captures_patch_economy(self) -> None:
+        self.assertEqual(claw_contract.SHOP_ITEMS["random_pack_ticket"]["price_smoltz"], 25000)
+        self.assertEqual(claw_contract.SHOP_ITEMS["reforge_stone_bundle"]["price_smoltz"], 3000)
+        self.assertEqual(claw_contract.SHOP_ITEMS["random_profile_ticket"]["price_smoltz"], 50000)
+        self.assertEqual(set(claw_contract.PACK_CATEGORY_DROP_RATE.values()), {0.20})
+        self.assertEqual(claw_contract.PACK_TIER_WEIGHTS, {"T1": 1, "T2": 2, "T3": 3})
+        self.assertEqual(claw_contract.REFORGE_STONE_WEIGHTS["stat_reroll"]["weight"], 1)
+        self.assertEqual(claw_contract.TOP_UP["minimum_moltz"], 1000)
+
+    def test_claw_v1_9_contract_captures_actions_and_affixes(self) -> None:
+        self.assertTrue(claw_contract.is_free_action("pickup"))
+        self.assertTrue(claw_contract.is_cooldown_action("attack"))
+        self.assertEqual(claw_contract.action_cost("move"), 1)
+        self.assertEqual(claw_contract.action_cost("move", terrain="storm"), 2)
+        self.assertEqual(claw_contract.action_cost("attack", pack_category="goliath"), 2)
+        self.assertEqual(claw_contract.AFFIX_POOL["sharp"], {"stat": "ITEM ATK", "direction": "+", "min": 5, "max": 15})
+        self.assertEqual(len(claw_contract.AFFIX_POOL), 12)
 
     def test_tick_returns_action_when_save_fails(self) -> None:
         class BadMemory(CompactMemoryStore):
@@ -792,6 +820,55 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(fake.headers["X-Version"], "7.7.7")
 
+    def test_claw_client_loadout_and_inventory_paths_match_docs(self) -> None:
+        class FakeSession:
+            def __init__(self):
+                self.calls = []
+
+            def request(self, method, url, **kwargs):  # type: ignore[no-untyped-def]
+                self.calls.append((method, url, kwargs))
+
+                class Response:
+                    status_code = 200
+                    text = '{"success":true,"data":{}}'
+
+                    def json(self):  # type: ignore[no-untyped-def]
+                        return {"success": True, "data": {}}
+
+                return Response()
+
+        client = ClawRoyaleClient(api_key="mr_test")
+        fake = FakeSession()
+        client.session = fake  # type: ignore[assignment]
+
+        client.me()
+        client.join_status()
+        client.request_whitelist("0x" + "1" * 40)
+        client.delete_identity()
+        client.loadout()
+        client.set_active_pack("pack-1", "idem-1")
+        client.clear_active_pack("idem-2")
+        client.set_relic_slot(1, "relic-1", "idem-3")
+        client.clear_relic_slot(1, "idem-4")
+        client.inventory_relics(limit=15)
+        client.inventory_packs(limit=5)
+        client.discard_relic("relic-1")
+        client.discard_pack("pack-1")
+
+        urls = [call[1] for call in fake.calls]
+        self.assertIn("https://cdn.clawroyale.ai/api/accounts/me", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/join/status", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/whitelist/request", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/identity", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/loadout", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/loadout/pack", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/loadout/slot/1", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/inventory/relics", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/inventory/packs", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/inventory/relics/relic-1", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/inventory/packs/pack-1", urls)
+        self.assertTrue(all("X-Version" in call[2]["headers"] for call in fake.calls))
+
     def test_claw_siwe_message_matches_frontend_shape(self) -> None:
         message = build_claw_siwe_message(
             address="0x" + "1" * 40,
@@ -886,6 +963,13 @@ class HardeningTests(unittest.TestCase):
                 else:
                     os.environ[key] = value
 
+    def test_claw_runtime_normalizes_paid_mode_to_offchain(self) -> None:
+        self.assertEqual(claw_runtime.normalize_game_mode("paid"), "offchain")
+        self.assertEqual(claw_runtime.normalize_game_mode("paid_offchain"), "offchain")
+        self.assertEqual(claw_runtime.normalize_game_mode("onchain"), "onchain")
+        self.assertEqual(claw_runtime.normalize_game_mode("free"), "free")
+        self.assertEqual(claw_runtime.normalize_game_mode("unknown"), "offchain")
+
     def test_claw_runtime_has_rotating_websocket_path_candidates(self) -> None:
         old_paths = os.environ.get("CLAW_ROYALE_WS_PATHS")
         old_path = os.environ.get("CLAW_ROYALE_WS_PATH")
@@ -938,6 +1022,10 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(claw_runtime.unwrap_snapshot(payload), {"gameId": "game-payload", "canAct": True})
         self.assertEqual(claw_runtime.extract_game_id(payload), "game-payload")
 
+    def test_claw_runtime_does_not_treat_cooldown_frames_as_snapshots(self) -> None:
+        self.assertIsNone(claw_runtime.unwrap_snapshot({"type": "can_act_changed", "canAct": True}))
+        self.assertIsNone(claw_runtime.unwrap_snapshot({"type": "action_result", "canAct": False, "cooldownRemainingMs": 30000}))
+
     def test_claw_runtime_action_envelope_matches_contract(self) -> None:
         envelope = claw_runtime.action_envelope(
             {"type": "move", "regionId": "r2", "reason": "death-zone pressure", "_warnings": []}
@@ -946,6 +1034,14 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(envelope["type"], "action")
         self.assertEqual(envelope["data"], {"type": "move", "regionId": "r2", "reason": "death-zone pressure"})
         self.assertEqual(envelope["thought"], "death-zone pressure")
+
+    def test_claw_runtime_hello_frame_follows_unified_join_docs(self) -> None:
+        paid = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        free = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
+
+        self.assertEqual(claw_runtime.hello_frame(paid, {"decision": "ASK_ENTRY_TYPE"}), {"type": "hello", "entryType": "paid", "mode": "offchain"})
+        self.assertEqual(claw_runtime.hello_frame(free, {"decision": "FREE_ONLY"}), {"type": "hello", "entryType": "free"})
+        self.assertIsNone(claw_runtime.hello_frame(paid, {"decision": "ALREADY_IN_GAME"}))
 
     def test_claw_runtime_does_not_act_when_can_act_false(self) -> None:
         payload = {"type": "agent_view", "data": {"gameId": "g1", "canAct": False, "view": {"canAct": False}}}
@@ -984,6 +1080,30 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(signed["type"], "signature")
         self.assertEqual(signed["requestId"], "req-1")
         self.assertTrue(str(signed["signature"]).startswith("0x"))
+
+    def test_claw_paid_join_signer_preserves_join_intent_id(self) -> None:
+        from eth_account import Account  # type: ignore
+
+        account = Account.create()
+        payload = {
+            "type": "sign_required",
+            "data": {
+                "joinIntentId": "join-1",
+                "typedData": {
+                    "types": {
+                        "EIP712Domain": [{"name": "name", "type": "string"}],
+                        "JoinGame": [{"name": "agent", "type": "address"}],
+                    },
+                    "primaryType": "JoinGame",
+                    "domain": {"name": "ClawRoyale"},
+                    "message": {"agent": account.address},
+                },
+            },
+        }
+
+        signed = claw_signing.sign_typed_data_frame(payload, private_key=account.key.hex())
+
+        self.assertEqual(signed["joinIntentId"], "join-1")
 
     def test_claw_version_single_source_uses_env_override(self) -> None:
         old = os.environ.get("CLAW_ROYALE_VERSION")

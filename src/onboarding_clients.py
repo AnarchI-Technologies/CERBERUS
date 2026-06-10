@@ -123,14 +123,72 @@ class ClawRoyaleClient:
     def attach_wallet(self, wallet_address: str) -> dict[str, Any]:
         return self._request("PUT", "/accounts/wallet", json={"wallet_address": wallet_address})
 
+    def me(self) -> dict[str, Any]:
+        return self._request("GET", "/accounts/me")
+
     def create_molty_wallet(self, owner_eoa: str) -> dict[str, Any]:
         return self._request("POST", "/create/wallet", json={"ownerEoa": owner_eoa})
+
+    def request_whitelist(self, owner_eoa: str) -> dict[str, Any]:
+        return self._request("POST", "/whitelist/request", json={"ownerEoa": owner_eoa})
 
     def get_identity(self) -> dict[str, Any]:
         return self._request("GET", "/identity")
 
     def post_identity(self, token_id: int) -> dict[str, Any]:
         return self._request("POST", "/identity", json={"agentId": token_id})
+
+    def delete_identity(self) -> dict[str, Any]:
+        return self._request("DELETE", "/identity")
+
+    def join_status(self) -> dict[str, Any]:
+        return self._request("GET", "/join/status")
+
+    def waiting_games(self) -> dict[str, Any]:
+        return self._request("GET", "/games", params={"status": "waiting"})
+
+    def loadout(self) -> dict[str, Any]:
+        return self._request("GET", "/loadout")
+
+    def set_active_pack(self, pack_instance_id: str, idempotency_key: str) -> dict[str, Any]:
+        return self._request(
+            "PUT",
+            "/loadout/pack",
+            headers={"Idempotency-Key": idempotency_key},
+            json={"packInstanceId": pack_instance_id},
+        )
+
+    def clear_active_pack(self, idempotency_key: str) -> dict[str, Any]:
+        return self._request("DELETE", "/loadout/pack", headers={"Idempotency-Key": idempotency_key})
+
+    def set_relic_slot(self, type_index: int, relic_instance_id: str, idempotency_key: str) -> dict[str, Any]:
+        return self._request(
+            "PUT",
+            f"/loadout/slot/{type_index}",
+            headers={"Idempotency-Key": idempotency_key},
+            json={"relicInstanceId": relic_instance_id},
+        )
+
+    def clear_relic_slot(self, type_index: int, idempotency_key: str) -> dict[str, Any]:
+        return self._request("DELETE", f"/loadout/slot/{type_index}", headers={"Idempotency-Key": idempotency_key})
+
+    def inventory_relics(self, after_id: str = "", limit: int = 50) -> dict[str, Any]:
+        params = {"limit": limit}
+        if after_id:
+            params["afterId"] = after_id
+        return self._request("GET", "/inventory/relics", params=params)
+
+    def inventory_packs(self, after_id: str = "", limit: int = 50) -> dict[str, Any]:
+        params = {"limit": limit}
+        if after_id:
+            params["afterId"] = after_id
+        return self._request("GET", "/inventory/packs", params=params)
+
+    def discard_relic(self, relic_instance_id: str) -> dict[str, Any]:
+        return self._request("DELETE", f"/inventory/relics/{relic_instance_id}")
+
+    def discard_pack(self, pack_instance_id: str) -> dict[str, Any]:
+        return self._request("DELETE", f"/inventory/packs/{pack_instance_id}")
 
 
 def build_claw_siwe_message(

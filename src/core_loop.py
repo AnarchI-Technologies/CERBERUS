@@ -19,6 +19,7 @@ for folder in (ROOT / "src", ROOT / "data"):
         sys.path.insert(0, path)
 
 from agent_dossiers import AgentDossierStore
+from claw_contract import KNOWN_ACTION_TYPES, REQUIRED_ACTION_FIELDS
 from combat_decider import CombatCortex
 from decision_engine import make_plan as build_plan
 from ep_economy_engine import EconomyCortex
@@ -30,26 +31,6 @@ from progression_cortex import ProgressionCortex
 from social_cortex import SocialCortex
 from threat_engine import ThreatCortex
 from turn_state_model import TurnState
-
-
-REQUIRED_ACTION_FIELDS = {
-    "attack": ("targetId",),
-    "broadcast": ("message",),
-    "equip": ("itemId",),
-    "move": ("regionId",),
-    "pickup": ("itemId",),
-    "use_item": ("itemId",),
-}
-KNOWN_ACTION_TYPES = {
-    "attack",
-    "broadcast",
-    "equip",
-    "explore",
-    "move",
-    "pickup",
-    "rest",
-    "use_item",
-}
 
 
 def _call(service: Callable[..., Any] | None, fallback: Any, *args: Any, **kwargs: Any) -> Any:
@@ -87,7 +68,7 @@ def normalize_action(action: Any) -> dict[str, Any]:
             "_rejected_action": {
                 key: value
                 for key, value in action.items()
-                if key in {"type", "targetId", "targetType", "regionId", "itemId", "reason"}
+                if key in {"type", "targetId", "targetType", "regionId", "itemId", "message", "reason"}
             },
         }
     return action

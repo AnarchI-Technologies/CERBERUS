@@ -52,8 +52,11 @@ def sign_typed_data_frame(payload: dict[str, Any], *, private_key: str = "") -> 
     if not signature.startswith("0x"):
         signature = "0x" + signature
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    request_id = data.get("requestId") or data.get("id") or data.get("nonce") or payload.get("requestId") or ""
+    request_id = data.get("requestId") or data.get("joinIntentId") or data.get("id") or data.get("nonce") or payload.get("requestId") or ""
+    join_intent_id = data.get("joinIntentId") or data.get("join_intent_id") or payload.get("joinIntentId") or ""
     out = {"type": "signature", "signature": signature}
     if request_id:
         out["requestId"] = str(request_id)
+    if join_intent_id:
+        out["joinIntentId"] = str(join_intent_id)
     return out

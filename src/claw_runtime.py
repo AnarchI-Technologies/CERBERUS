@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 import websockets
 
+from claw_contract import JOIN_DECISIONS, THOUGHT_MAX_CHARS
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
@@ -36,14 +37,18 @@ DEFAULT_MAX_RECONNECT_SECONDS = 90
 DEFAULT_ROUTE_PROBE_SECONDS = 15
 JOIN_PATH = "/ws/join"
 AGENT_PATH = "/ws/agent"
+NO_HELLO_DECISIONS = {
+    key for key, value in JOIN_DECISIONS.items() if "No hello" in value or "Do not hello" in value
+}
 DEFAULT_WS_PATHS = (
-    "/ws/agent",
     "/ws/join",
+    "/ws/agent",
     "/agent",
     "/join",
     "/game/ws/agent",
     "/games/ws/agent",
 )
+VALID_GAME_MODES = {"free", "offchain", "onchain"}
 
 
 @dataclass(frozen=True)
@@ -101,13 +106,22 @@ def extract_game_id(payload: Any) -> str:
     return next((str(item) for item in candidates if item), "")
 
 
+def frame_value(payload: dict[str, Any], key: str) -> Any:
+    if key in payload:
+        return payload.get(key)
+    data = payload.get("data")
+    if isinstance(data, dict):
+        return data.get(key)
+    return ""
+
+
 def unwrap_snapshot(payload: dict[str, Any]) -> dict[str, Any] | None:
     frame_type = str(payload.get("type") or payload.get("event") or payload.get("op") or "")
     data = next(
         (payload.get(key) for key in ("data", "payload", "state", "agentView") if isinstance(payload.get(key), dict)),
         payload,
     )
-    if frame_type in {"agent_view", "turn_advanced", "can_act_changed", "joined", "state", "snapshot"}:
+    if frame_type in {"agent_view", "turn_advanced", "joined", "state", "snapshot"}:
         return data if isinstance(data, dict) else None
     if isinstance(data, dict) and ("view" in data or "gameId" in data or "game_id" in data):
         return data
@@ -115,9 +129,31 @@ def unwrap_snapshot(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
-    thought = str(action.get("reason") or action.get("thought") or "deterministic Cerberus action")[:700]
+    thought = str(action.get("reason") or action.get("thought") or "deterministic Cerberus action")[:THOUGHT_MAX_CHARS]
     data = {key: value for key, value in action.items() if not key.startswith("_")}
     return {"type": "action", "data": data, "thought": thought}
+
+
+def hello_frame(config: ClawRuntimeConfig, welcome: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    decision = str((welcome or {}).get("decision") or "").upper()
+    if decision in NO_HELLO_DECISIONS:
+        return None
+    if decision == "FREE_ONLY":
+        return {"type": "hello", "entryType": "free"}
+    if decision == "PAID_ONLY":
+        return {"type": "hello", "entryType": "paid", "mode": config.mode}
+    if config.mode == "free":
+        return {"type": "hello", "entryType": "free"}
+    return {"type": "hello", "entryType": "paid", "mode": config.mode}
+
+
+def normalize_game_mode(value: str) -> str:
+    mode = value.strip().lower()
+    if mode in {"paid", "paid_offchain", ""}:
+        return "offchain"
+    if mode in VALID_GAME_MODES:
+        return mode
+    return "offchain"
 
 
 def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None) -> bool:
@@ -159,7 +195,7 @@ def load_config() -> ClawRuntimeConfig:
     api_key = os.getenv("CLAW_ROYALE_API_KEY", "").strip()
     enabled_raw = os.getenv("CLAW_ROYALE_RUNTIME_ENABLED", "").strip().lower()
     enabled = enabled_raw not in {"0", "false", "no", "off"}
-    mode = os.getenv("CLAW_ROYALE_GAME_MODE", "paid").strip().lower() or "paid"
+    mode = normalize_game_mode(os.getenv("CLAW_ROYALE_GAME_MODE", "offchain"))
     base = claw_api_base()
     version = discover_version(base)
     return ClawRuntimeConfig(api_key=api_key, api_base=base, version=version, mode=mode, enabled=enabled)
@@ -215,8 +251,6 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, last_error="")
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
         update_status(state="connected", endpoint=url, connected_at=int(time.time()), reconnects=read_json(claw_runtime_status_file()).get("reconnects", 0))
-        hello = {"type": "hello", "mode": config.mode, "version": config.version}
-        await ws.send(json.dumps(hello, ensure_ascii=True, separators=(",", ":")))
         async for raw in ws:
             try:
                 payload = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode("utf-8"))
@@ -229,9 +263,44 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             if frame_type in {"ping"}:
                 await ws.send(json.dumps({"type": "pong"}))
                 continue
+            if frame_type == "welcome":
+                frame = hello_frame(config, payload)
+                update_status(
+                    state="welcomed",
+                    last_frame_type=frame_type,
+                    join_decision=payload.get("decision", ""),
+                    join_readiness=payload.get("readiness", {}),
+                    last_error="" if frame else str(payload.get("instruction") or ""),
+                )
+                if frame:
+                    await ws.send(json.dumps(frame, ensure_ascii=True, separators=(",", ":")))
+                    update_status(state="hello_sent", last_hello=frame)
+                continue
+            if frame_type in {"queued", "assigned", "tx_submitted", "joined", "waiting", "not_selected"}:
+                game_id = extract_game_id(payload)
+                if game_id:
+                    remember_game_id(game_id)
+                update_status(
+                    state=frame_type,
+                    last_frame_type=frame_type,
+                    current_game_id=game_id or stored_game_id(),
+                    tx_hash=frame_value(payload, "txHash") or "",
+                    last_error=str(payload.get("message") or payload.get("error") or ""),
+                )
+                continue
+            if frame_type in {"action_result", "can_act_changed"}:
+                update_status(
+                    state=frame_type,
+                    last_frame_type=frame_type,
+                    can_act=frame_value(payload, "canAct"),
+                    cooldown_remaining_ms=frame_value(payload, "cooldownRemainingMs"),
+                    last_error=str(payload.get("message") or payload.get("error") or ""),
+                )
+                continue
             if frame_type in {"sign_required", "signature_required", "paid_join_signature_required"}:
                 try:
                     signed_frame = sign_typed_data_frame(payload)
+                    signed_frame["type"] = "sign_submit"
                     await ws.send(json.dumps(signed_frame, ensure_ascii=True, separators=(",", ":")))
                     update_status(
                         state="signed_paid_join",
