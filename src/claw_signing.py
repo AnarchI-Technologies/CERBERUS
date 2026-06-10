@@ -57,6 +57,7 @@ def sign_typed_data_frame(payload: dict[str, Any], *, private_key: str = "") -> 
         raise ClawSigningError("eth-account is required for paid-game signing.") from exc
     try:
         signable = encode_typed_data(full_message=typed_data) if typed_data else encode_defunct(text=plain_message)
+        account = Account.from_key(key)
         signed = Account.sign_message(signable, private_key=key)
     except Exception as exc:
         raise ClawSigningError(f"Could not sign paid-game frame: {str(exc)[:240]}") from exc
@@ -66,7 +67,19 @@ def sign_typed_data_frame(payload: dict[str, Any], *, private_key: str = "") -> 
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     request_id = data.get("requestId") or data.get("joinIntentId") or data.get("id") or data.get("nonce") or payload.get("requestId") or ""
     join_intent_id = data.get("joinIntentId") or data.get("join_intent_id") or payload.get("joinIntentId") or ""
-    out = {"type": "signature", "signature": signature}
+    message_hash = getattr(signed, "message_hash", None) or getattr(signed, "messageHash", None)
+    if isinstance(message_hash, bytes):
+        message_hash = "0x" + message_hash.hex()
+    out = {
+        "type": "signature",
+        "signature": signature,
+        "signingMode": "typed_data" if typed_data else "plain_message",
+        "signerAddress": account.address,
+    }
+    if message_hash:
+        out["messageHash"] = str(message_hash)
+    if plain_message:
+        out["messageLength"] = len(plain_message)
     if request_id:
         out["requestId"] = str(request_id)
     if join_intent_id:

@@ -1099,6 +1099,8 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(signed["type"], "signature")
         self.assertEqual(signed["requestId"], "req-1")
+        self.assertEqual(signed["signerAddress"], account.address)
+        self.assertEqual(signed["signingMode"], "typed_data")
         self.assertTrue(str(signed["signature"]).startswith("0x"))
 
     def test_claw_paid_join_signer_preserves_join_intent_id(self) -> None:
@@ -1141,7 +1143,23 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(signed["type"], "signature")
         self.assertEqual(signed["joinIntentId"], "join-plain-1")
+        self.assertEqual(signed["signerAddress"], account.address)
+        self.assertEqual(signed["signingMode"], "plain_message")
+        self.assertEqual(signed["messageLength"], len(payload["message"]))
         self.assertTrue(str(signed["signature"]).startswith("0x"))
+
+    def test_claw_sign_submit_frame_keeps_only_protocol_fields(self) -> None:
+        frame = claw_runtime.sign_submit_frame(
+            {
+                "signature": "0xsig",
+                "joinIntentId": "join-1",
+                "signerAddress": "0x" + "1" * 40,
+                "signingMode": "plain_message",
+                "messageHash": "0xhash",
+            }
+        )
+
+        self.assertEqual(frame, {"type": "sign_submit", "signature": "0xsig", "joinIntentId": "join-1"})
 
     def test_claw_version_single_source_uses_env_override(self) -> None:
         old = os.environ.get("CLAW_ROYALE_VERSION")

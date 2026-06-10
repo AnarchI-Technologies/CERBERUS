@@ -22,6 +22,7 @@ from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, recon
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
 from env_loader import hydrate_env
+from onboarding_clients import ClawRoyaleClient
 from runtime_state import (
     claw_runtime_status_file,
     read_json,
@@ -238,6 +239,33 @@ def reconnect_delay_seconds(config: ClawRuntimeConfig, reconnects: int, error: E
     return min(config.max_reconnect_seconds, config.min_reconnect_seconds * reconnects)
 
 
+def account_status_summary(config: ClawRuntimeConfig) -> dict[str, Any]:
+    try:
+        account = ClawRoyaleClient(api_key=config.api_key, base_url=config.base_url).me()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:240]}
+    readiness = account.get("readiness") if isinstance(account.get("readiness"), dict) else {}
+    games = account.get("currentGames") if isinstance(account.get("currentGames"), list) else []
+    return {
+        "ok": True,
+        "name": account.get("name", ""),
+        "walletAddress": account.get("walletAddress", ""),
+        "balance": account.get("balance", ""),
+        "readiness": readiness,
+        "currentGames": [
+            {
+                "gameId": game.get("gameId", ""),
+                "agentId": game.get("agentId", ""),
+                "gameStatus": game.get("gameStatus", ""),
+                "entryType": game.get("entryType", ""),
+                "isAlive": game.get("isAlive", ""),
+            }
+            for game in games
+            if isinstance(game, dict)
+        ],
+    }
+
+
 async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     version = discover_version(config.base_url)
     if version != config.version:
@@ -252,7 +280,8 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
         )
     url = websocket_url(config, path)
     extra_headers = config.headers
-    update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, last_error="")
+    account_status = account_status_summary(config)
+    update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, account=account_status, last_error="")
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
         update_status(state="connected", endpoint=url, connected_at=int(time.time()), reconnects=read_json(claw_runtime_status_file()).get("reconnects", 0))
         async for raw in ws:
@@ -312,6 +341,10 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                         last_error="",
                         last_signature_at=int(time.time()),
                         last_sign_submit_keys=sorted(sign_submit.keys()),
+                        signing_mode=signed_frame.get("signingMode", ""),
+                        signer_address=signed_frame.get("signerAddress", ""),
+                        signed_message_hash=signed_frame.get("messageHash", ""),
+                        signed_message_length=signed_frame.get("messageLength", ""),
                     )
                 except ClawSigningError as exc:
                     update_status(
