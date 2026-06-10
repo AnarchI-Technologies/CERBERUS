@@ -1202,6 +1202,35 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(signed["joinIntentId"], "join-cross-1")
         self.assertTrue(str(signed["signature"]).startswith("0x"))
 
+    def test_claw_paid_join_signer_infers_nested_message_object(self) -> None:
+        from eth_account import Account  # type: ignore
+
+        account = Account.create()
+        payload = {
+            "type": "sign_required",
+            "joinIntentId": "join-object-1",
+            "message": {
+                "domain": {
+                    "chainId": 612055,
+                    "name": "ArenaPaid",
+                    "verifyingContract": "0x8f705417C2a11446e93f94cbe84F476572EE90Ed",
+                    "version": "1",
+                },
+                "message": {
+                    "agentId": "28953448436016",
+                    "deadline": 1781123101,
+                    "player": account.address,
+                },
+            },
+        }
+
+        challenge = claw_signing.signing_challenge_from_payload(payload)
+        signed = claw_signing.sign_typed_data_frame(payload, private_key=account.key.hex())
+
+        self.assertEqual(challenge.mode, "typed_data")
+        self.assertEqual(signed["signingMode"], "typed_data")
+        self.assertEqual(signed["joinIntentId"], "join-object-1")
+
     def test_claw_sign_submit_frame_keeps_only_protocol_fields(self) -> None:
         frame = claw_runtime.sign_submit_frame(
             {

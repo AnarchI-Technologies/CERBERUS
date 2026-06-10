@@ -79,6 +79,14 @@ def _typed_data_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(typed, dict):
         return typed
     message = data.get("message")
+    if isinstance(message, dict):
+        typed = message.get("typedData") or message.get("typed_data") or message.get("eip712") or message
+        if isinstance(typed, dict) and all(key in typed for key in ("domain", "types", "message")):
+            return typed
+        if isinstance(typed, dict) and all(key in typed for key in ("domain", "message")):
+            inferred = _infer_typed_data(typed)
+            if inferred:
+                return inferred
     if isinstance(message, str) and message.strip().startswith(("{", "[")):
         try:
             parsed = _parse_json_object(message)
