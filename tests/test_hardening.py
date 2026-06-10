@@ -1105,6 +1105,24 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(signed["joinIntentId"], "join-1")
 
+    def test_claw_paid_join_signer_accepts_plain_message_frame(self) -> None:
+        from eth_account import Account  # type: ignore
+
+        account = Account.create()
+        payload = {
+            "type": "sign_required",
+            "deadline": "2026-06-10T19:39:22.454Z",
+            "gameId": "game-1",
+            "joinIntentId": "join-plain-1",
+            "message": "Join paid Claw Royale game game-1 as Hellion.",
+        }
+
+        signed = claw_signing.sign_typed_data_frame(payload, private_key=account.key.hex())
+
+        self.assertEqual(signed["type"], "signature")
+        self.assertEqual(signed["joinIntentId"], "join-plain-1")
+        self.assertTrue(str(signed["signature"]).startswith("0x"))
+
     def test_claw_version_single_source_uses_env_override(self) -> None:
         old = os.environ.get("CLAW_ROYALE_VERSION")
         try:
