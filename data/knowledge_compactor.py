@@ -21,6 +21,7 @@ from typing import Iterable
 ROOT = Path(__file__).resolve().parent
 DEFAULT_SOURCES = [
     ROOT / "claw_royale_v1_9_truths.md",
+    ROOT / "forge_token_deployer_truths.md",
     ROOT / "cerberus_mmmmm_knowledge_digest.md",
     ROOT / "legacy_brain_analysis.md",
 ]
@@ -88,6 +89,11 @@ CURATED_FACTS = [
     "F|wallets.readiness|free_requires_api_key+erc8004;paid_offchain_requires_wallet+scWallet+whitelist+500sMoltz;paid_onchain_requires_wallet+scWallet+whitelist+500Moltz",
     "F|wallets.rewards|no_wallet_no_rewards=true;past_rewards_not_retroactive=true;api_key_shown_once=true",
     "F|identity.erc8004|required_for_free=true;paid_does_not_need_identity=true;agentId_means_NFT_tokenId_not_game_uuid;gas_delegated=true",
+    "F|forge.auth|default=vendor;client_requires=CLIENT_KEY+CLIENT_SECRET;vendor_no_credentials=true",
+    "F|forge.wallet|default=tmp;user_wallet_returns_unsigned_pool_tx;tmp_wallet_deploys_and_creates_pool;tmp_owner_permissions_not_reusable=true",
+    "F|forge.agent_token|category=ai_agent;must_use_wallet=user;owner_must_equal_agent_eoa;never_tmp_for_agent_token=true",
+    "F|forge.constants|rpc=https://mainnet.crosstoken.io:22001;router=0x7aF414e4d373bb332f47769c8d28A446A0C1a1E8;tokenB=0xDdF8AaA3927b8Fd5684dc2edcc7287EcB0A2122d;trade=https://x.crosstoken.io/forge/token",
+    "F|forge.inputs|name,symbol,description,imageUrl,walletAddress,category_required;image_png_jpg_max=1MB;symbols_unique_case_insensitive=true",
     "F|security.local|agent_memory_reads_cak_not_md;memory_no_raw_dumps=true;secret_files_use_vault_with_CERBERUS_PIN=true",
     "F|memory.policy|store_compact_strings=T_turn,L_lesson,F_fact;redact_secret_like_keys;hash_raw_state_not_store_raw_state",
     "F|social.moltybook|drafts_default_not_auto_post;enable_with_CERBERUS_MOLTYBOOK_ENABLED=true;key_env=MOLTYBOOK_API_KEY",
