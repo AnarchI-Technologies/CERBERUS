@@ -17,6 +17,8 @@ services:
         value: /var/data/.cerberus
       - key: CLAW_ROYALE_LIVE_FEED_URL
         value: https://www.clawroyale.ai/games
+      - key: CLAW_ROYALE_SPECTATE_BASE_URL
+        value: https://www.clawroyale.ai/games/spect
       - key: CERBERUS_HTTP_TOKEN
         generateValue: true
       - key: CERBERUS_PIN

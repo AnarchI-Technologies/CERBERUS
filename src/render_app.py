@@ -30,6 +30,7 @@ from memory_system import DEFAULT_MEMORY_DIR  # noqa: E402
 
 MAX_BODY_BYTES = 1_000_000
 DEFAULT_FEED_URL = "https://www.clawroyale.ai/games"
+DEFAULT_SPECTATE_BASE_URL = "https://www.clawroyale.ai/games/spect"
 
 
 def readiness() -> dict[str, Any]:
@@ -129,6 +130,7 @@ def stats() -> dict[str, Any]:
 
 def dashboard_html() -> bytes:
     feed_url = os.getenv("CLAW_ROYALE_LIVE_FEED_URL", DEFAULT_FEED_URL)
+    spectate_base_url = os.getenv("CLAW_ROYALE_SPECTATE_BASE_URL", DEFAULT_SPECTATE_BASE_URL).rstrip("/")
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -163,7 +165,7 @@ def dashboard_html() -> bytes:
       <div class="metric"><div class="label">Memory DB</div><div id="memory" class="value">loading</div></div>
       <div class="metric"><div class="label">Writable</div><div id="writable" class="value">loading</div></div>
       <div class="metric"><div class="label">Configured Env</div><div id="env" class="value">loading</div></div>
-      <a class="button" href="{feed_url}" target="_blank" rel="noreferrer">Open Feed</a>
+      <a id="open-feed" class="button" href="{feed_url}" target="_blank" rel="noreferrer">Open Feed</a>
     </aside>
     <section class="frame">
       <iframe id="feed" src="{feed_url}" title="Claw Royale live game feed"></iframe>
@@ -172,9 +174,15 @@ def dashboard_html() -> bytes:
   <script>
     let lastGame = "";
     const feedUrl = {json.dumps(feed_url)};
-    function refreshFeed() {{
+    const spectateBaseUrl = {json.dumps(spectate_base_url)};
+    function targetUrl(gameId) {{
+      return gameId ? spectateBaseUrl + "/" + encodeURIComponent(gameId) : feedUrl;
+    }}
+    function refreshFeed(gameId = lastGame) {{
       const frame = document.getElementById("feed");
-      frame.src = feedUrl + (feedUrl.includes("?") ? "&" : "?") + "r=" + Date.now();
+      const url = targetUrl(gameId);
+      frame.src = url + (url.includes("?") ? "&" : "?") + "r=" + Date.now();
+      document.getElementById("open-feed").href = url;
     }}
     async function loadStats() {{
       const res = await fetch("/stats");
@@ -187,7 +195,9 @@ def dashboard_html() -> bytes:
       document.getElementById("env").textContent = Object.entries(data.env || {{}}).filter(([,v]) => v).map(([k]) => k).join(", ") || "none";
       if (data.current_game_id && data.current_game_id !== lastGame) {{
         lastGame = data.current_game_id;
-        refreshFeed();
+        refreshFeed(lastGame);
+      }} else if (!data.current_game_id && !lastGame) {{
+        document.getElementById("open-feed").href = feedUrl;
       }}
     }}
     loadStats();
