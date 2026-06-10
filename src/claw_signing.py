@@ -30,6 +30,10 @@ def _typed_data_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
             typed = parsed.get("typedData") or parsed.get("typed_data") or parsed.get("eip712") or parsed
             if isinstance(typed, dict) and all(key in typed for key in ("domain", "types", "message")):
                 return typed
+            if isinstance(typed, dict) and all(key in typed for key in ("domain", "message")):
+                inferred = _infer_typed_data(typed)
+                if inferred:
+                    return inferred
     if all(key in data for key in ("domain", "types", "message")):
         typed = {
             "domain": data["domain"],
@@ -40,6 +44,43 @@ def _typed_data_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
             typed["primaryType"] = data["primaryType"]
         return typed
     return {}
+
+
+def _infer_solidity_type(name: str, value: Any) -> str:
+    lowered = name.lower()
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "uint256"
+    if isinstance(value, str):
+        if value.startswith("0x") and len(value) == 42:
+            return "address"
+        if value.isdecimal() and (lowered.endswith("id") or lowered in {"deadline", "nonce"}):
+            return "uint256"
+    return "string"
+
+
+def _infer_typed_data(raw: dict[str, Any]) -> dict[str, Any]:
+    domain = raw.get("domain")
+    message = raw.get("message")
+    if not isinstance(domain, dict) or not isinstance(message, dict):
+        return {}
+    domain_types = []
+    for key, value in domain.items():
+        domain_types.append({"name": key, "type": _infer_solidity_type(key, value)})
+    primary_type = str(raw.get("primaryType") or raw.get("primary_type") or "JoinIntent")
+    return {
+        "types": {
+            "EIP712Domain": domain_types,
+            primary_type: [
+                {"name": key, "type": _infer_solidity_type(key, value)}
+                for key, value in message.items()
+            ],
+        },
+        "primaryType": primary_type,
+        "domain": domain,
+        "message": message,
+    }
 
 
 def _message_from_payload(payload: dict[str, Any]) -> str:
