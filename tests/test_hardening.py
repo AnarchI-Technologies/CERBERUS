@@ -861,6 +861,31 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(config.headers["X-API-Key"], "mr_test")
         self.assertEqual(config.headers["X-Version"], "1.9.0")
 
+    def test_claw_runtime_defaults_enabled_unless_explicitly_disabled(self) -> None:
+        old_enabled = os.environ.get("CLAW_ROYALE_RUNTIME_ENABLED")
+        old_key = os.environ.get("CLAW_ROYALE_API_KEY")
+        old_version = os.environ.get("CLAW_ROYALE_VERSION")
+        old_discover = claw_runtime.discover_version
+        try:
+            os.environ.pop("CLAW_ROYALE_RUNTIME_ENABLED", None)
+            os.environ["CLAW_ROYALE_API_KEY"] = "mr_test"
+            os.environ["CLAW_ROYALE_VERSION"] = "1.9.0"
+            claw_runtime.discover_version = lambda api_base=claw_runtime.CLAW_API_BASE: "1.9.0"  # type: ignore[assignment]
+            self.assertTrue(claw_runtime.load_config().enabled)
+            os.environ["CLAW_ROYALE_RUNTIME_ENABLED"] = "false"
+            self.assertFalse(claw_runtime.load_config().enabled)
+        finally:
+            claw_runtime.discover_version = old_discover  # type: ignore[assignment]
+            for key, value in (
+                ("CLAW_ROYALE_RUNTIME_ENABLED", old_enabled),
+                ("CLAW_ROYALE_API_KEY", old_key),
+                ("CLAW_ROYALE_VERSION", old_version),
+            ):
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def test_claw_runtime_extracts_nested_game_id(self) -> None:
         payload = {"type": "agent_view", "data": {"view": {"currentGame": {"id": "game-123"}}}}
 

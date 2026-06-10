@@ -142,7 +142,8 @@ def load_config() -> ClawRuntimeConfig:
         )
     )
     api_key = os.getenv("CLAW_ROYALE_API_KEY", "").strip()
-    enabled = os.getenv("CLAW_ROYALE_RUNTIME_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    enabled_raw = os.getenv("CLAW_ROYALE_RUNTIME_ENABLED", "").strip().lower()
+    enabled = enabled_raw not in {"0", "false", "no", "off"}
     mode = os.getenv("CLAW_ROYALE_GAME_MODE", "paid").strip().lower() or "paid"
     base = claw_api_base()
     version = discover_version(base)

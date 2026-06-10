@@ -43,6 +43,11 @@ DEFAULT_FEED_URL = "https://www.clawroyale.ai/games"
 DEFAULT_SPECTATE_BASE_URL = "https://www.clawroyale.ai/games/spect"
 
 
+def claw_runtime_enabled() -> bool:
+    raw = os.getenv("CLAW_ROYALE_RUNTIME_ENABLED", "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def readiness() -> dict[str, Any]:
     hydrate_env(
         (
@@ -68,8 +73,8 @@ def readiness() -> dict[str, Any]:
         "AGENTMAIL_EMAIL": bool(os.getenv("AGENTMAIL_EMAIL")),
         "CLAW_ROYALE_API_KEY": bool(os.getenv("CLAW_ROYALE_API_KEY")),
         "CLAW_ROYALE_ERC8004_ID": bool(os.getenv("CLAW_ROYALE_ERC8004_ID")),
-        "CLAW_ROYALE_RUNTIME_ENABLED": bool(os.getenv("CLAW_ROYALE_RUNTIME_ENABLED")),
-        "CLAW_ROYALE_GAME_MODE": bool(os.getenv("CLAW_ROYALE_GAME_MODE")),
+        "CLAW_ROYALE_RUNTIME_ENABLED": claw_runtime_enabled(),
+        "CLAW_ROYALE_GAME_MODE": bool(os.getenv("CLAW_ROYALE_GAME_MODE", "paid")),
         "CERBERUS_AGENT_EOA_PRIVATE_KEY": bool(os.getenv("CERBERUS_AGENT_EOA_PRIVATE_KEY")),
         "X_CLIENT_ID": bool(os.getenv("X_CLIENT_ID")),
         "X_CLIENT_SECRET": bool(os.getenv("X_CLIENT_SECRET")),
@@ -364,7 +369,7 @@ class CerberusHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     port = int(os.getenv("PORT", "10000"))
-    if os.getenv("CLAW_ROYALE_RUNTIME_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if claw_runtime_enabled():
         thread = threading.Thread(target=lambda: asyncio.run(run_claw_runtime()), daemon=True)
         thread.start()
         print("Claw Royale runtime worker started", flush=True)
