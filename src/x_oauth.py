@@ -32,6 +32,7 @@ except ImportError:
     pass
 
 from identity_vault import IdentityVault  # noqa: E402
+from env_loader import env_value, hydrate_env  # noqa: E402
 from onboarding_clients import AgentMailClient  # noqa: E402
 
 
@@ -73,10 +74,11 @@ def pkce_pair() -> tuple[str, str]:
 
 
 def env_config() -> dict[str, str]:
+    hydrate_env(("X_CLIENT_ID", "X_CLIENT_SECRET", "X_REDIRECT_URI"))
     return {
-        "client_id": os.getenv("X_CLIENT_ID", ""),
-        "client_secret": os.getenv("X_CLIENT_SECRET", ""),
-        "redirect_uri": os.getenv("X_REDIRECT_URI", "http://127.0.0.1:8765/x/callback"),
+        "client_id": env_value("X_CLIENT_ID"),
+        "client_secret": env_value("X_CLIENT_SECRET"),
+        "redirect_uri": env_value("X_REDIRECT_URI", "http://127.0.0.1:8765/x/callback"),
     }
 
 

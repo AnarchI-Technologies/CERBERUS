@@ -212,6 +212,12 @@ The inbox ID and email can be stored locally in `.env`.
 
 The X OAuth helper supports local callback, manual callback exchange, and optional email delivery of authorization URLs.
 
+The helper can read X OAuth values from the current session, `.env`, or persistent Windows User/Machine environment variables. Check without printing secrets:
+
+```powershell
+python src\env_doctor.py --x
+```
+
 ```powershell
 python src\x_oauth.py authorize
 python src\x_oauth.py authorize --manual-callback
