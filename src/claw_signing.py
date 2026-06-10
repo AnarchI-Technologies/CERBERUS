@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -15,6 +16,63 @@ def agent_private_key() -> str:
     return os.getenv("CERBERUS_AGENT_EOA_PRIVATE_KEY", "").strip()
 
 
+@dataclass(frozen=True)
+class SigningChallenge:
+    mode: str
+    typed_data: dict[str, Any]
+    plain_message: str = ""
+
+
+class HeadlessAgentWallet:
+    """Agent EOA wallet instance backed by CERBERUS_AGENT_EOA_PRIVATE_KEY."""
+
+    def __init__(self, private_key: str):
+        if not private_key:
+            raise ClawSigningError("Missing CERBERUS_AGENT_EOA_PRIVATE_KEY for paid-game signature.")
+        try:
+            from eth_account import Account  # type: ignore
+        except ImportError as exc:
+            raise ClawSigningError("eth-account is required for paid-game signing.") from exc
+        self._account_api = Account
+        self.private_key = private_key
+        self.account = Account.from_key(private_key)
+
+    @property
+    def address(self) -> str:
+        return str(self.account.address)
+
+    def sign_challenge(self, challenge: SigningChallenge) -> dict[str, Any]:
+        try:
+            from eth_account.messages import encode_defunct, encode_typed_data  # type: ignore
+        except ImportError as exc:
+            raise ClawSigningError("eth-account is required for paid-game signing.") from exc
+        try:
+            if challenge.mode == "typed_data":
+                signable = encode_typed_data(full_message=challenge.typed_data)
+            else:
+                signable = encode_defunct(text=challenge.plain_message)
+            signed = self._account_api.sign_message(signable, private_key=self.private_key)
+        except Exception as exc:
+            raise ClawSigningError(f"Could not sign paid-game frame: {str(exc)[:240]}") from exc
+        signature = signed.signature.hex()
+        if not signature.startswith("0x"):
+            signature = "0x" + signature
+        message_hash = getattr(signed, "message_hash", None) or getattr(signed, "messageHash", None)
+        if isinstance(message_hash, bytes):
+            message_hash = "0x" + message_hash.hex()
+        out = {
+            "signature": signature,
+            "signingMode": challenge.mode,
+            "signerAddress": self.address,
+        }
+        if message_hash:
+            out["messageHash"] = str(message_hash)
+        if challenge.plain_message:
+            out["messageLength"] = len(challenge.plain_message)
+            out["messagePreview"] = _message_preview(challenge.plain_message)
+        return out
+
+
 def _typed_data_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     typed = data.get("typedData") or data.get("typed_data") or data.get("eip712") or data.get("signable")
@@ -23,7 +81,7 @@ def _typed_data_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     message = data.get("message")
     if isinstance(message, str) and message.strip().startswith(("{", "[")):
         try:
-            parsed = json.loads(message)
+            parsed = _parse_json_object(message)
         except ValueError:
             parsed = {}
         if isinstance(parsed, dict):
@@ -44,6 +102,16 @@ def _typed_data_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
             typed["primaryType"] = data["primaryType"]
         return typed
     return {}
+
+
+def _parse_json_object(value: str) -> Any:
+    text = value.strip()
+    try:
+        return json.loads(text)
+    except ValueError:
+        decoder = json.JSONDecoder()
+        parsed, _end = decoder.raw_decode(text)
+        return parsed
 
 
 def _infer_solidity_type(name: str, value: Any) -> str:
@@ -97,45 +165,28 @@ def _message_preview(message: str) -> str:
     return " ".join(message.replace("\r", "\n").split())[:240]
 
 
+def signing_challenge_from_payload(payload: dict[str, Any]) -> SigningChallenge:
+    typed_data = _typed_data_from_payload(payload)
+    if typed_data:
+        return SigningChallenge(mode="typed_data", typed_data=typed_data)
+    plain_message = _message_from_payload(payload)
+    if plain_message:
+        return SigningChallenge(mode="plain_message", typed_data={}, plain_message=plain_message)
+    raise ClawSigningError("Paid-game signature frame did not include typedData/domain+types+message or message.")
+
+
 def sign_typed_data_frame(payload: dict[str, Any], *, private_key: str = "") -> dict[str, Any]:
     key = private_key or agent_private_key()
-    if not key:
-        raise ClawSigningError("Missing CERBERUS_AGENT_EOA_PRIVATE_KEY for paid-game signature.")
-    typed_data = _typed_data_from_payload(payload)
-    plain_message = "" if typed_data else _message_from_payload(payload)
-    if not typed_data and not plain_message:
-        raise ClawSigningError("Paid-game signature frame did not include typedData/domain+types+message or message.")
-    try:
-        from eth_account import Account  # type: ignore
-        from eth_account.messages import encode_defunct, encode_typed_data  # type: ignore
-    except ImportError as exc:
-        raise ClawSigningError("eth-account is required for paid-game signing.") from exc
-    try:
-        signable = encode_typed_data(full_message=typed_data) if typed_data else encode_defunct(text=plain_message)
-        account = Account.from_key(key)
-        signed = Account.sign_message(signable, private_key=key)
-    except Exception as exc:
-        raise ClawSigningError(f"Could not sign paid-game frame: {str(exc)[:240]}") from exc
-    signature = signed.signature.hex()
-    if not signature.startswith("0x"):
-        signature = "0x" + signature
+    challenge = signing_challenge_from_payload(payload)
+    wallet = HeadlessAgentWallet(key)
+    signed = wallet.sign_challenge(challenge)
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     request_id = data.get("requestId") or data.get("joinIntentId") or data.get("id") or data.get("nonce") or payload.get("requestId") or ""
     join_intent_id = data.get("joinIntentId") or data.get("join_intent_id") or payload.get("joinIntentId") or ""
-    message_hash = getattr(signed, "message_hash", None) or getattr(signed, "messageHash", None)
-    if isinstance(message_hash, bytes):
-        message_hash = "0x" + message_hash.hex()
     out = {
         "type": "signature",
-        "signature": signature,
-        "signingMode": "typed_data" if typed_data else "plain_message",
-        "signerAddress": account.address,
+        **signed,
     }
-    if message_hash:
-        out["messageHash"] = str(message_hash)
-    if plain_message:
-        out["messageLength"] = len(plain_message)
-        out["messagePreview"] = _message_preview(plain_message)
     if request_id:
         out["requestId"] = str(request_id)
     if join_intent_id:

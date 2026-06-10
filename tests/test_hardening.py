@@ -1193,8 +1193,11 @@ class HardeningTests(unittest.TestCase):
         }
         payload = {"type": "sign_required", "joinIntentId": "join-cross-1", "message": json.dumps(message)}
 
+        challenge = claw_signing.signing_challenge_from_payload(payload)
         signed = claw_signing.sign_typed_data_frame(payload, private_key=account.key.hex())
 
+        self.assertEqual(challenge.mode, "typed_data")
+        self.assertEqual(challenge.typed_data["domain"]["chainId"], 612055)
         self.assertEqual(signed["signingMode"], "typed_data")
         self.assertEqual(signed["joinIntentId"], "join-cross-1")
         self.assertTrue(str(signed["signature"]).startswith("0x"))
