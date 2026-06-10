@@ -23,6 +23,7 @@ for folder in (ROOT / "src", ROOT / "data"):
         sys.path.insert(0, path)
 
 from core_loop import cerberus_tick  # noqa: E402
+from env_loader import hydrate_env  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR  # noqa: E402
 
@@ -32,6 +33,17 @@ DEFAULT_FEED_URL = "https://www.clawroyale.com"
 
 
 def readiness() -> dict[str, Any]:
+    hydrate_env(
+        (
+            "CERBERUS_PIN",
+            "AGENTMAIL_API_KEY",
+            "AGENTMAIL_INBOX_ID",
+            "AGENTMAIL_EMAIL",
+            "X_CLIENT_ID",
+            "X_CLIENT_SECRET",
+            "X_REDIRECT_URI",
+        )
+    )
     memory_dir = Path(os.getenv("CERBERUS_MEMORY_DIR") or DEFAULT_MEMORY_DIR)
     env = {
         "CERBERUS_PIN": bool(os.getenv("CERBERUS_PIN")),
