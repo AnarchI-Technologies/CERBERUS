@@ -38,6 +38,7 @@ def render_env(identity: dict[str, Any]) -> dict[str, str]:
         "CERBERUS_MOLTY_WALLET_ADDRESS": wallets.get("molty_royale_wallet", {}).get("address", ""),
         "CLAW_ROYALE_API_KEY": claw.get("api_key", ""),
         "CLAW_ROYALE_ACCOUNT_ID": claw.get("account_id", ""),
+        "CLAW_ROYALE_ERC8004_ID": claw.get("erc8004_id", ""),
         "AGENTMAIL_API_KEY": agentmail.get("api_key", ""),
         "AGENTMAIL_INBOX_ID": agentmail.get("inbox_id", ""),
         "AGENTMAIL_EMAIL": agentmail.get("email", ""),

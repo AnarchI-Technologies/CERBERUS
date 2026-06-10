@@ -16,6 +16,7 @@ for folder in (ROOT / "src", ROOT / "data"):
 from agent_dossiers import AgentDossierStore
 from core_loop import cerberus_tick, normalize_action
 import identity_bootstrap
+import claw_identity_token
 import moltbook_claim_assistant
 import x_oauth
 from identity_bootstrap import (
@@ -764,6 +765,48 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("Sign in with Ethereum to ClawRoyale.", message)
         self.assertIn("Chain ID: 612055", message)
         self.assertIn("Nonce: abc", message)
+
+    def test_claw_identity_token_extracts_nested_agent_id(self) -> None:
+        payload = {"data": {"identity": {"erc8004Id": 12345}}}
+
+        self.assertEqual(claw_identity_token.extract_identity_id(payload), "12345")
+
+    def test_claw_identity_attach_stores_token_status(self) -> None:
+        class FakeVault:
+            def __init__(self):
+                self.data = empty_identity()
+                self.data["claw_royale"] = {"api_key": "mr_test"}
+                self.saved = False
+                self.events = []
+
+            def load(self):  # type: ignore[no-untyped-def]
+                return self
+
+            def require_pin_ready(self):  # type: ignore[no-untyped-def]
+                return None
+
+            def event(self, message, **metadata):  # type: ignore[no-untyped-def]
+                self.events.append({"message": message, **metadata})
+
+            def save(self):  # type: ignore[no-untyped-def]
+                self.saved = True
+                return Path("identity.vault.json")
+
+        class FakeClient:
+            def post_identity(self, token_id):  # type: ignore[no-untyped-def]
+                return {"erc8004Id": token_id, "ok": True}
+
+        old_load_client = claw_identity_token.load_client
+        try:
+            claw_identity_token.load_client = lambda identity: FakeClient()  # type: ignore[assignment]
+            vault = FakeVault()
+            result = claw_identity_token.attach_identity_token(98765, vault=vault)
+        finally:
+            claw_identity_token.load_client = old_load_client
+
+        self.assertTrue(vault.saved)
+        self.assertTrue(result["identity_ready"])
+        self.assertEqual(vault.data["claw_royale"]["erc8004_id"], "98765")
 
 
 if __name__ == "__main__":

@@ -35,6 +35,8 @@ services:
         sync: false
       - key: CLAW_ROYALE_API_KEY
         sync: false
+      - key: CLAW_ROYALE_ERC8004_ID
+        sync: false
       - key: CERBERUS_AGENT_EOA_PRIVATE_KEY
         sync: false
       - key: CERBERUS_OWNER_EOA_PRIVATE_KEY

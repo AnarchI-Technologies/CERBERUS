@@ -198,6 +198,25 @@ python src\identity_bootstrap.py --execute
 
 Generated wallet secrets and service credentials should live in the encrypted vault, not in Git.
 
+## Claw ERC-8004 Identity Token
+
+Claw Royale requires an ERC-8004 identity token for free games and reward identity.
+
+Check whether Hellion has one attached:
+
+```powershell
+$env:CERBERUS_PIN = "your-pin"
+python src\claw_identity_token.py status
+```
+
+If you mint the token through the Claw portal or an ERC-8004 registry UI, attach the resulting token ID:
+
+```powershell
+python src\claw_identity_token.py attach 123456
+```
+
+Then rerun `status` and export Render env values again.
+
 ## AgentMail Quickstart
 
 To create or reuse the configured AgentMail inbox:
