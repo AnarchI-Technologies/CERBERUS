@@ -1,4 +1,4 @@
-eth-account>=0.13.0
-agentmail>=0.5.3
+eth-account>=0.13.7
+agentmail>=0.5.4
 python-dotenv>=1.2.2
-requests>=2.31.0
+requests>=2.34.2
