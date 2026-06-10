@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import asyncio
 import threading
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -31,11 +32,15 @@ from env_loader import hydrate_env  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR  # noqa: E402
 from runtime_state import (
+    append_stream_chat,
     claw_runtime_status_file,
+    hellion_voice_lab,
     read_json,
     remember_game_id,
+    stream_chat_messages,
     stored_game_id as runtime_stored_game_id,
 )  # noqa: E402
+from stream_dashboard_cortex import StreamDashboardCortex, chat_message  # noqa: E402
 
 
 MAX_BODY_BYTES = 1_000_000
@@ -145,6 +150,17 @@ def stats() -> dict[str, Any]:
         "longterm_memory": ready.get("longterm_memory", {}),
         "env": ready.get("env", {}),
     }
+
+
+def stream_state() -> dict[str, Any]:
+    runtime_status = read_json(claw_runtime_status_file())
+    cortex = StreamDashboardCortex(spectate_base_url=os.getenv("CLAW_ROYALE_SPECTATE_BASE_URL", DEFAULT_SPECTATE_BASE_URL))
+    return cortex.public_state(
+        runtime=runtime_status,
+        current_game_id=runtime_stored_game_id(),
+        chat=stream_chat_messages(),
+        voice_lab=hellion_voice_lab(),
+    )
 
 
 def spectate_url(game_id: str) -> str:
@@ -293,6 +309,109 @@ def dashboard_html(query: str = "") -> bytes:
     return html.encode("utf-8")
 
 
+def stream_html() -> bytes:
+    state = stream_state()
+    initial_spectate = state.get("spectate_url", "")
+    frame_attrs = (
+        f'src="{escape(initial_spectate, quote=True)}"'
+        if initial_spectate
+        else 'src="about:blank"'
+    )
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hellion Stream</title>
+  <style>
+    :root {{ color-scheme: dark; font-family: Arial, sans-serif; }}
+    body {{ margin: 0; background: #08090c; color: #f4f7fb; overflow: hidden; }}
+    .stage {{ position: fixed; inset: 0; display: grid; grid-template-columns: 1fr 340px; background: #08090c; }}
+    iframe {{ width: 100%; height: 100%; border: 0; background: #050608; }}
+    .side {{ border-left: 1px solid rgba(255,255,255,.14); background: #11151d; display: grid; grid-template-rows: auto auto 1fr auto; min-width: 0; }}
+    .brand {{ padding: 16px; border-bottom: 1px solid rgba(255,255,255,.12); }}
+    h1 {{ margin: 0; font-size: 22px; letter-spacing: 0; }}
+    .tag {{ margin-top: 4px; color: #aab4c3; font-size: 12px; }}
+    .avatar {{ margin: 14px 16px; border: 1px solid rgba(255,255,255,.14); border-radius: 8px; min-height: 170px; background: radial-gradient(circle at 50% 25%, #4ee0b2, #1d2732 36%, #0d1016 72%); display: grid; place-items: center; }}
+    .face {{ width: 92px; height: 92px; border-radius: 50%; border: 3px solid #d7ffe8; box-shadow: 0 0 30px rgba(78,224,178,.45); position: relative; }}
+    .face:before, .face:after {{ content: ""; position: absolute; top: 34px; width: 12px; height: 12px; background: #d7ffe8; border-radius: 50%; }}
+    .face:before {{ left: 24px; }}
+    .face:after {{ right: 24px; }}
+    .mouth {{ position: absolute; left: 29px; right: 29px; bottom: 25px; height: 10px; border-bottom: 3px solid #d7ffe8; border-radius: 0 0 18px 18px; }}
+    .stats {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 16px 14px; }}
+    .metric {{ border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: 9px; background: #171c26; min-width: 0; }}
+    .label {{ color: #91a0b6; font-size: 11px; }}
+    .value {{ margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }}
+    .chat {{ border-top: 1px solid rgba(255,255,255,.12); min-height: 0; display: grid; grid-template-rows: auto 1fr; }}
+    .chat h2 {{ margin: 0; padding: 12px 16px; font-size: 14px; }}
+    #messages {{ overflow: auto; padding: 0 16px 12px; }}
+    .msg {{ margin-bottom: 10px; font-size: 13px; line-height: 1.35; }}
+    .author {{ color: #4ee0b2; font-weight: 700; }}
+    form {{ border-top: 1px solid rgba(255,255,255,.12); display: grid; grid-template-columns: 82px 1fr auto; gap: 8px; padding: 12px; }}
+    input {{ min-width: 0; border: 1px solid rgba(255,255,255,.18); border-radius: 6px; background: #0d1118; color: #f4f7fb; padding: 8px; }}
+    button {{ border: 0; border-radius: 6px; background: #e8edf7; color: #10131a; padding: 8px 10px; cursor: pointer; }}
+    .ticker {{ position: fixed; left: 0; right: 340px; bottom: 0; padding: 10px 16px; background: rgba(8,9,12,.86); border-top: 1px solid rgba(255,255,255,.16); display: flex; gap: 18px; align-items: center; white-space: nowrap; overflow: hidden; }}
+    .pill {{ border: 1px solid rgba(255,255,255,.18); border-radius: 999px; padding: 5px 10px; font-size: 12px; background: rgba(23,28,38,.86); }}
+    @media (max-width: 900px) {{ .stage {{ grid-template-columns: 1fr; grid-template-rows: 58vh 42vh; }} .side {{ border-left: 0; border-top: 1px solid rgba(255,255,255,.14); }} .avatar {{ display: none; }} .ticker {{ right: 0; }} }}
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <iframe id="spectate" {frame_attrs} title="Hellion live spectate"></iframe>
+    <aside class="side">
+      <div class="brand"><h1>Hellion</h1><div id="status" class="tag">loading</div></div>
+      <div class="avatar"><div class="face"><div class="mouth"></div></div></div>
+      <div class="stats">
+        <div class="metric"><div class="label">Mood</div><div id="mood" class="value">loading</div></div>
+        <div class="metric"><div class="label">Viewers</div><div id="viewers" class="value">0</div></div>
+        <div class="metric"><div class="label">Mode</div><div id="mode" class="value">unknown</div></div>
+        <div class="metric"><div class="label">Frame</div><div id="frame" class="value">unknown</div></div>
+      </div>
+      <section class="chat"><h2>Chat</h2><div id="messages"></div></section>
+      <form id="chat-form"><input id="author" maxlength="32" placeholder="name"><input id="message" maxlength="240" placeholder="message"><button>Send</button></form>
+    </aside>
+  </div>
+  <div class="ticker"><span class="pill">AnarchI</span><span id="ticker">loading</span><span class="pill">Tip Jar</span><span id="alerts"></span></div>
+  <script>
+    let loadedUrl = {json.dumps(initial_spectate)};
+    function esc(value) {{ return String(value || "").replace(/[&<>]/g, (c) => ({{"&":"&amp;","<":"&lt;",">":"&gt;"}}[c])); }}
+    function renderChat(items) {{
+      document.getElementById("messages").innerHTML = (items || []).map((m) => "<div class='msg'><span class='author'>" + esc(m.author) + "</span> " + esc(m.message) + "</div>").join("");
+    }}
+    async function loadStream() {{
+      const res = await fetch("/stream/stats");
+      const data = await res.json();
+      document.getElementById("status").textContent = data.status || "standing by";
+      document.getElementById("mood").textContent = data.mood || "standing by";
+      document.getElementById("viewers").textContent = (data.stream && data.stream.viewer_count) || 0;
+      document.getElementById("mode").textContent = (data.runtime && data.runtime.mode) || "unknown";
+      document.getElementById("frame").textContent = (data.runtime && data.runtime.last_frame_type) || "unknown";
+      document.getElementById("ticker").textContent = (data.blockers && data.blockers.length) ? data.blockers.join(" | ") : "front row seats are open";
+      const voice = data.voice_lab && data.voice_lab.soundbites && data.voice_lab.soundbites.length ? data.voice_lab.soundbites[data.voice_lab.soundbites.length - 1].text : "";
+      document.getElementById("alerts").textContent = voice || ((data.stream && data.stream.alerts) || []).map((a) => a.text).join(" | ");
+      renderChat(data.chat || []);
+      if (data.spectate_url && data.spectate_url !== loadedUrl) {{
+        loadedUrl = data.spectate_url;
+        document.getElementById("spectate").src = loadedUrl;
+      }}
+    }}
+    document.getElementById("chat-form").addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      const author = document.getElementById("author").value;
+      const message = document.getElementById("message").value;
+      if (!message.trim()) return;
+      document.getElementById("message").value = "";
+      await fetch("/stream/chat", {{method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{author, message}})}});
+      await loadStream();
+    }});
+    loadStream();
+    setInterval(loadStream, 5000);
+  </script>
+</body>
+</html>"""
+    return html.encode("utf-8")
+
+
 class CerberusHandler(BaseHTTPRequestHandler):
     server_version = "CerberusRender/1.0"
 
@@ -311,10 +430,27 @@ class CerberusHandler(BaseHTTPRequestHandler):
         if parsed.path == "/dashboard":
             self._send_html(dashboard_html(parsed.query))
             return
+        if parsed.path == "/stream":
+            self._send_html(stream_html())
+            return
+        if parsed.path == "/stream/stats":
+            self._send(stream_state())
+            return
         self._send({"ok": False, "error": "not_found"}, status=404)
 
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
+        if parsed.path == "/stream/chat":
+            try:
+                payload = self._read_json()
+                message = chat_message(payload.get("author", ""), payload.get("message", ""))
+                if not message["message"]:
+                    self._send({"ok": False, "error": "empty_message"}, status=400)
+                    return
+                self._send({"ok": True, "chat": append_stream_chat(message)})
+            except Exception as exc:
+                self._send({"ok": False, "error": str(exc)[:240]}, status=500)
+            return
         if parsed.path != "/tick":
             self._send({"ok": False, "error": "not_found"}, status=404)
             return

@@ -21,6 +21,7 @@ import claw_identity_token
 import claw_config
 import claw_runtime
 import claw_signing
+import stream_dashboard_cortex
 import moltbook_claim_assistant
 import x_oauth
 from identity_bootstrap import (
@@ -183,6 +184,70 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("RATE_LIMITED", claw_contract.ERROR_CODES)
         self.assertIn("ACCOUNT_ALREADY_IN_GAME", claw_contract.ERROR_CODES)
         self.assertIn("HELLO_TIMEOUT", claw_contract.JOIN_CLOSE_CODES)
+
+    def test_stream_dashboard_cortex_sanitizes_public_state(self) -> None:
+        cortex = stream_dashboard_cortex.StreamDashboardCortex(
+            spectate_base_url="https://www.clawroyale.ai/games/spect"
+        )
+        state = cortex.public_state(
+            runtime={
+                "state": "blocked",
+                "mode": "offchain",
+                "version": "1.9.0",
+                "last_frame_type": "sign_required",
+                "last_error": "private key leaked in fake text",
+            },
+            current_game_id="game-1",
+            chat=[
+                stream_dashboard_cortex.chat_message("owner", "api key should not show"),
+                {"author": "<script>", "message": "private key should not show"},
+            ],
+        )
+
+        self.assertEqual(state["host"], "Hellion")
+        self.assertEqual(state["spectate_url"], "https://www.clawroyale.ai/games/spect/game-1")
+        self.assertIn("[private]", state["runtime"]["last_error"])
+        self.assertIn("[private]", state["chat"][0]["message"])
+        self.assertIn("[private]", state["chat"][1]["message"])
+        self.assertNotIn("private key", json.dumps(state).lower())
+
+    def test_stream_dashboard_cortex_sanitizes_spectate_game_id(self) -> None:
+        cortex = stream_dashboard_cortex.StreamDashboardCortex(
+            spectate_base_url="https://www.clawroyale.ai/games/spect"
+        )
+        state = cortex.public_state(runtime={"state": "playing"}, current_game_id='game-1" onload="alert(1)')
+
+        self.assertEqual(state["current_game_id"], "game-1onloadalert1")
+        self.assertEqual(state["spectate_url"], "https://www.clawroyale.ai/games/spect/game-1onloadalert1")
+
+    def test_stream_dashboard_cortex_reports_public_blockers_without_game_id(self) -> None:
+        cortex = stream_dashboard_cortex.StreamDashboardCortex(
+            spectate_base_url="https://www.clawroyale.ai/games/spect"
+        )
+        state = cortex.public_state(runtime={"state": "reconnecting", "last_error": "INVALID_SIGNATURE"})
+
+        self.assertFalse(state["ok"])
+        self.assertIn("Waiting for a Claw Royale game ID", state["blockers"])
+        self.assertIn("INVALID_SIGNATURE", state["blockers"])
+
+    def test_stream_dashboard_cortex_exposes_voice_lab_soundbites(self) -> None:
+        cortex = stream_dashboard_cortex.StreamDashboardCortex(
+            spectate_base_url="https://www.clawroyale.ai/games/spect"
+        )
+        state = cortex.public_state(
+            runtime={"state": "playing"},
+            current_game_id="game-1",
+            voice_lab={
+                "source": "hellion voice lab",
+                "soundbites": [
+                    {"text": "Bring the thunder, keep the private key out.", "mood": "hype", "audio_url": "https://cdn.example/voice.mp3"}
+                ],
+            },
+        )
+
+        self.assertTrue(state["voice_lab"]["enabled"])
+        self.assertIn("[private]", state["voice_lab"]["soundbites"][0]["text"])
+        self.assertEqual(state["voice_lab"]["soundbites"][0]["mood"], "hype")
 
     def test_tick_returns_action_when_save_fails(self) -> None:
         class BadMemory(CompactMemoryStore):

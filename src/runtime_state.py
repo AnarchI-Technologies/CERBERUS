@@ -23,6 +23,14 @@ def claw_runtime_status_file() -> Path:
     return memory_dir() / "claw_runtime_status.json"
 
 
+def stream_chat_file() -> Path:
+    return memory_dir() / "stream_chat.json"
+
+
+def hellion_voice_lab_file() -> Path:
+    return memory_dir() / "hellion_voice_lab.json"
+
+
 def read_json(path: Path) -> dict[str, Any]:
     try:
         if path.exists():
@@ -51,3 +59,22 @@ def stored_game_id() -> str:
 def remember_game_id(game_id: str) -> None:
     if game_id:
         write_json(current_game_file(), {"game_id": game_id, "updated_at": int(time.time())})
+
+
+def stream_chat_messages(limit: int = 50) -> list[dict[str, Any]]:
+    messages = read_json(stream_chat_file()).get("messages", [])
+    if not isinstance(messages, list):
+        return []
+    return [item for item in messages if isinstance(item, dict)][-limit:]
+
+
+def append_stream_chat(message: dict[str, Any], *, limit: int = 50) -> list[dict[str, Any]]:
+    messages = stream_chat_messages(limit=limit)
+    messages.append(message)
+    messages = messages[-limit:]
+    write_json(stream_chat_file(), {"messages": messages, "updated_at": int(time.time())})
+    return messages
+
+
+def hellion_voice_lab() -> dict[str, Any]:
+    return read_json(hellion_voice_lab_file())
