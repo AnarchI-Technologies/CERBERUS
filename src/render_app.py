@@ -172,7 +172,9 @@ def dashboard_html() -> bytes:
     </section>
   </main>
   <script>
-    let lastGame = "";
+    const params = new URLSearchParams(window.location.search);
+    let lastGame = params.get("gameId") || params.get("game_id") || "";
+    let loadedFeedUrl = "";
     const feedUrl = {json.dumps(feed_url)};
     const spectateBaseUrl = {json.dumps(spectate_base_url)};
     function targetUrl(gameId) {{
@@ -181,6 +183,8 @@ def dashboard_html() -> bytes:
     function refreshFeed(gameId = lastGame) {{
       const frame = document.getElementById("feed");
       const url = targetUrl(gameId);
+      if (loadedFeedUrl === url) return;
+      loadedFeedUrl = url;
       frame.src = url + (url.includes("?") ? "&" : "?") + "r=" + Date.now();
       document.getElementById("open-feed").href = url;
     }}
@@ -188,12 +192,18 @@ def dashboard_html() -> bytes:
       const res = await fetch("/stats");
       const data = await res.json();
       document.getElementById("service").textContent = data.ok ? "ready" : "not ready";
-      document.getElementById("game").textContent = data.current_game_id || "unknown";
+      const selectedGame = lastGame || data.current_game_id || "";
+      document.getElementById("game").textContent = selectedGame || "unknown";
       const mem = data.longterm_memory || {{}};
       document.getElementById("memory").textContent = (mem.items || 0) + " items, " + (mem.bytes || 0) + " bytes";
       document.getElementById("writable").textContent = data.memory_writable ? "yes" : "no";
       document.getElementById("env").textContent = Object.entries(data.env || {{}}).filter(([,v]) => v).map(([k]) => k).join(", ") || "none";
-      if (data.current_game_id && data.current_game_id !== lastGame) {{
+      if (selectedGame && selectedGame !== lastGame) {{
+        lastGame = selectedGame;
+        refreshFeed(lastGame);
+      }} else if (lastGame) {{
+        refreshFeed(lastGame);
+      }} else if (data.current_game_id && data.current_game_id !== lastGame) {{
         lastGame = data.current_game_id;
         refreshFeed(lastGame);
       }} else if (!data.current_game_id && !lastGame) {{
