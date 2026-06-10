@@ -52,6 +52,10 @@ def _message_from_payload(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _message_preview(message: str) -> str:
+    return " ".join(message.replace("\r", "\n").split())[:240]
+
+
 def sign_typed_data_frame(payload: dict[str, Any], *, private_key: str = "") -> dict[str, Any]:
     key = private_key or agent_private_key()
     if not key:
@@ -90,6 +94,7 @@ def sign_typed_data_frame(payload: dict[str, Any], *, private_key: str = "") -> 
         out["messageHash"] = str(message_hash)
     if plain_message:
         out["messageLength"] = len(plain_message)
+        out["messagePreview"] = _message_preview(plain_message)
     if request_id:
         out["requestId"] = str(request_id)
     if join_intent_id:

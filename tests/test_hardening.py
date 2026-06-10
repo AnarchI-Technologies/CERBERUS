@@ -1146,6 +1146,7 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(signed["signerAddress"], account.address)
         self.assertEqual(signed["signingMode"], "plain_message")
         self.assertEqual(signed["messageLength"], len(payload["message"]))
+        self.assertEqual(signed["messagePreview"], payload["message"])
         self.assertTrue(str(signed["signature"]).startswith("0x"))
 
     def test_claw_paid_join_signer_parses_json_typed_data_message(self) -> None:

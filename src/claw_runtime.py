@@ -345,6 +345,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                         signer_address=signed_frame.get("signerAddress", ""),
                         signed_message_hash=signed_frame.get("messageHash", ""),
                         signed_message_length=signed_frame.get("messageLength", ""),
+                        signed_message_preview=signed_frame.get("messagePreview", ""),
                     )
                 except ClawSigningError as exc:
                     update_status(
