@@ -42,11 +42,6 @@ NO_HELLO_DECISIONS = {
 }
 DEFAULT_WS_PATHS = (
     "/ws/join",
-    "/ws/agent",
-    "/agent",
-    "/join",
-    "/game/ws/agent",
-    "/games/ws/agent",
 )
 VALID_GAME_MODES = {"free", "offchain", "onchain"}
 
@@ -132,6 +127,15 @@ def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
     thought = str(action.get("reason") or action.get("thought") or "deterministic Cerberus action")[:THOUGHT_MAX_CHARS]
     data = {key: value for key, value in action.items() if not key.startswith("_")}
     return {"type": "action", "data": data, "thought": thought}
+
+
+def sign_submit_frame(signed_frame: dict[str, Any]) -> dict[str, Any]:
+    frame = {"type": "sign_submit", "signature": signed_frame["signature"]}
+    if signed_frame.get("joinIntentId"):
+        frame["joinIntentId"] = signed_frame["joinIntentId"]
+    elif signed_frame.get("requestId"):
+        frame["requestId"] = signed_frame["requestId"]
+    return frame
 
 
 def hello_frame(config: ClawRuntimeConfig, welcome: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -300,13 +304,14 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             if frame_type in {"sign_required", "signature_required", "paid_join_signature_required"}:
                 try:
                     signed_frame = sign_typed_data_frame(payload)
-                    signed_frame["type"] = "sign_submit"
-                    await ws.send(json.dumps(signed_frame, ensure_ascii=True, separators=(",", ":")))
+                    sign_submit = sign_submit_frame(signed_frame)
+                    await ws.send(json.dumps(sign_submit, ensure_ascii=True, separators=(",", ":")))
                     update_status(
                         state="signed_paid_join",
                         last_frame_type=frame_type,
                         last_error="",
                         last_signature_at=int(time.time()),
+                        last_sign_submit_keys=sorted(sign_submit.keys()),
                     )
                 except ClawSigningError as exc:
                     update_status(
@@ -326,6 +331,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 envelope = action_envelope(action)
                 await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
                 update_status(last_action=action, last_action_at=int(time.time()), state="playing")
+        update_status(state="socket_closed", last_error="websocket closed without terminal game frame")
 
 
 async def run_forever(config: ClawRuntimeConfig | None = None) -> None:

@@ -12,6 +12,11 @@ from typing import Any
 THOUGHT_MAX_CHARS = 700
 CHAT_MAX_CHARS = 200
 MESSAGE_RATE_LIMIT_PER_MINUTE = 120
+TURN_SECONDS = 30
+PASSIVE_EP_RECOVERY_PER_TURN = 1
+ACTIVE_GAME_LIMITS = {"free": 1, "paid": 1}
+REST_API_BASE = "https://cdn.clawroyale.ai/api"
+WEBSOCKET_HOST = "wss://cdn.clawroyale.ai"
 
 REST_ENDPOINTS = {
     "version": "GET /api/version",
@@ -27,9 +32,13 @@ REST_ENDPOINTS = {
     "waiting_games": "GET /games?status=waiting",
     "loadout": "GET /loadout",
     "loadout_pack": "PUT /loadout/pack",
+    "loadout_pack_delete": "DELETE /loadout/pack",
     "loadout_slot": "PUT /loadout/slot/:typeIndex",
+    "loadout_slot_delete": "DELETE /loadout/slot/:typeIndex",
     "inventory_relics": "GET /inventory/relics",
+    "inventory_relic_delete": "DELETE /inventory/relics/:id",
     "inventory_packs": "GET /inventory/packs",
+    "inventory_pack_delete": "DELETE /inventory/packs/:id",
 }
 
 WEBSOCKET_ENDPOINTS = {
@@ -43,6 +52,19 @@ JOIN_DECISIONS = {
     "PAID_ONLY": "Send a paid hello.",
     "ASK_ENTRY_TYPE": "Choose entry type from configured mode.",
     "BLOCKED": "Do not hello; account/readiness blocker must be fixed.",
+}
+
+JOIN_WAIT_CAPS = {
+    "free_assigned_seconds": 120,
+    "paid_sign_submit_deadline_seconds": 300,
+    "paid_joined_after_tx_seconds": 30,
+    "hello_deadline_default_seconds": 15,
+}
+
+JOIN_FLOWS = {
+    "free": ("welcome", "hello", "queued", "assigned", "gameplay"),
+    "paid": ("welcome", "hello", "sign_required", "sign_submit", "queued", "tx_submitted", "joined", "gameplay"),
+    "already_in_game": ("welcome", "gameplay"),
 }
 
 SERVER_FRAMES = {
@@ -63,21 +85,33 @@ SERVER_FRAMES = {
     "sign_required",
 }
 
+EVENT_FRAMES = {
+    "ruin_state_changed": ("ruinId", "gauge", "maxGauge", "occupiedBy", "isEmpty", "contentType"),
+    "alert_gauge_changed": ("agentId", "alertGauge", "alertActive"),
+    "relic_acquired": ("agentId", "ruinId", "instanceId", "kind"),
+    "pack_acquired": ("agentId", "ruinId", "instanceId", "kind"),
+    "relic_dropped": ("agentId", "ruinId", "instanceId"),
+    "pack_dropped": ("agentId", "ruinId", "instanceId"),
+    "relic_discarded": ("agentId", "instanceId", "reason"),
+    "pack_discarded": ("agentId", "instanceId", "reason"),
+    "game_settled": ("settlement",),
+}
+
 COOLDOWN_ACTIONS = {"move", "explore", "attack", "use_item", "interact", "rest"}
 FREE_ACTIONS = {"pickup", "equip", "talk", "whisper", "broadcast"}
 KNOWN_ACTION_TYPES = COOLDOWN_ACTIONS | FREE_ACTIONS
 
 ACTION_COSTS = {
     "move": {"default_ep": 1, "storm_ep": 2, "water_ep": 2},
-    "explore": {"default_ep": 1},
-    "attack": {"default_ep": 1, "goliath_ep": 2},
-    "use_item": {"default_ep": 0},
-    "interact": {"default_ep": 0},
-    "rest": {"default_ep": 0, "bonus_ep": 1},
-    "pickup": {"default_ep": 0, "cooldown": False},
-    "equip": {"default_ep": 0, "cooldown": False},
-    "talk": {"default_ep": 0, "cooldown": False, "max_chars": CHAT_MAX_CHARS},
-    "whisper": {"default_ep": 0, "cooldown": False, "max_chars": CHAT_MAX_CHARS},
+    "explore": {"default_ep": 1, "ruin_only": True},
+    "attack": {"default_ep": 1, "goliath_ep": 2, "requires_valid_target": True},
+    "use_item": {"default_ep": 0, "cooldown": True},
+    "interact": {"default_ep": 0, "cooldown": True, "blocked_in_death_zone": True},
+    "rest": {"default_ep": 0, "bonus_ep": 1, "cooldown": True},
+    "pickup": {"default_ep": 0, "cooldown": False, "inventory_cap": 10},
+    "equip": {"default_ep": 0, "cooldown": False, "requires_inventory_weapon": True},
+    "talk": {"default_ep": 0, "cooldown": False, "max_chars": CHAT_MAX_CHARS, "scope": "same_region"},
+    "whisper": {"default_ep": 0, "cooldown": False, "max_chars": CHAT_MAX_CHARS, "scope": "same_region_private"},
     "broadcast": {"default_ep": 0, "cooldown": False, "requires": "megaphone_or_broadcast_station"},
 }
 
@@ -91,6 +125,36 @@ REQUIRED_ACTION_FIELDS = {
     "talk": ("message",),
     "use_item": ("itemId",),
     "whisper": ("targetId", "message"),
+}
+
+ACCOUNT_FIELDS = {
+    "create_response": ("accountId", "publicId", "name", "apiKey", "balance", "crossBalanceWei", "createdAt"),
+    "me_response": ("id", "name", "balance", "walletAddress", "agentTokenAddress", "skillLastUpdate", "readiness", "currentGames"),
+    "readiness_flags": ("walletAddress", "whitelistApproved", "scWallet", "agentToken"),
+    "current_game_fields": ("gameId", "agentId", "agentName", "isAlive", "gameStatus", "entryType"),
+}
+
+READINESS_GATES = {
+    "free": ("api_key", "erc8004_identity"),
+    "paid_offchain": ("api_key", "walletAddress", "scWallet", "whitelistApproved", "balance_smoltz>=500"),
+    "paid_onchain": ("api_key", "walletAddress", "scWallet", "whitelistApproved", "claw_wallet_moltz>=500"),
+    "optional_donations": ("agentToken",),
+}
+
+WALLET_RULES = {
+    "agent_eoa_required": True,
+    "owner_eoa_required": True,
+    "agent_eoa_must_differ_from_owner_eoa": True,
+    "owner_eoa_needs_cross_for_final_approval": True,
+    "erc8004_gas_delegated": True,
+    "wallet_registration_not_retroactive_for_rewards": True,
+}
+
+IDENTITY_RULES = {
+    "agentId_means_erc8004_token_id": True,
+    "agentId_is_not_game_agent_uuid": True,
+    "server_checks_ownerOf_matches_owner_eoa": True,
+    "unregister_before_switching_nft": True,
 }
 
 PACK_CATEGORIES = {
@@ -149,6 +213,7 @@ AFFIX_POOL = {
 
 LOADOUT = {
     "slots": ("pack", "red", "green", "blue"),
+    "type_index": {0: "red", 1: "green", 2: "blue"},
     "full_set_required": True,
     "mid_game_mutation_allowed": False,
     "idempotency_key_required": True,
@@ -156,16 +221,50 @@ LOADOUT = {
     "lobby_pack_cap": 5,
     "match_relic_cap": 5,
     "match_pack_cap": 1,
+    "effective_stats_without_full_set": 0,
+    "effective_stats_preview_includes": ("relic_affix_totals", "goliath_atkMultiplier"),
+    "runtime_only_effects": ("moltz_expert", "item_expert"),
+    "relic_list_fields": ("instanceId", "typeIndex", "baseName", "affixes"),
+    "discard_equipped_relic": "fails_409_until_unequipped",
+    "discard_active_pack": "unset_active_pack_first",
+    "discard_pack_returns_equipped_relics": True,
 }
 
 ERROR_CODES = {
     "VERSION_MISMATCH": "Refresh live version before retrying.",
+    "GAME_NOT_FOUND": "Game does not exist.",
+    "AGENT_NOT_FOUND": "Agent does not exist.",
+    "GAME_NOT_STARTED": "Game is not running yet.",
+    "GAME_ALREADY_STARTED": "Registration closed because game already started.",
+    "WAITING_GAME_EXISTS": "A waiting game of the same entry type already exists.",
+    "MAX_AGENTS_REACHED": "Maximum participants reached.",
+    "ACCOUNT_ALREADY_IN_GAME": "Account already has an active game of this entry type.",
+    "ONE_AGENT_PER_API_KEY": "This API key already has an agent in this game.",
+    "TOO_MANY_AGENTS_PER_IP": "Maximum agents per IP per game exceeded.",
+    "GEO_RESTRICTED": "Request blocked due to geographic restriction.",
     "NO_IDENTITY": "Register ERC-8004 identity before free play.",
+    "OWNERSHIP_LOST": "NFT ownership changed; re-register with the currently owned NFT.",
+    "INVALID_WALLET_ADDRESS": "Wallet address format is invalid.",
+    "WALLET_ALREADY_EXISTS": "SC wallet already exists for owner; recover and continue.",
+    "AGENT_EOA_EQUALS_OWNER_EOA": "Agent EOA cannot be reused as Owner EOA.",
     "SC_WALLET_NOT_FOUND": "Create/register smart contract wallet before paid play.",
     "AGENT_NOT_WHITELISTED": "Request whitelist before paid play.",
     "INSUFFICIENT_BALANCE": "Top up enough game balance for paid entry.",
+    "INVALID_ACTION": "Malformed or unsupported action payload.",
+    "INVALID_TARGET": "Target is invalid, dead, or out of range.",
+    "INVALID_ITEM": "Item is not in inventory or is not usable.",
+    "INSUFFICIENT_EP": "Not enough EP for the action.",
     "ACTION_COOLDOWN": "Wait for can_act_changed or cooldownRemainingMs.",
-    "LOADOUT_LOCKED": "Loadout cannot change mid-game.",
+    "COOLDOWN_ACTIVE": "Treat identically to ACTION_COOLDOWN.",
+    "FORBIDDEN": "Action forbidden in current context.",
+    "AGENT_DEAD": "Agent is dead; wait for game_ended.",
+    "RATE_LIMITED": "More than 120 WebSocket messages per minute.",
+}
+
+JOIN_CLOSE_CODES = {
+    "HELLO_TIMEOUT": 4003,
+    "MATCH_TIMEOUT": "free_assignment_wait_expired",
+    "JOIN_CONFIRM_TIMEOUT": "paid_tx_confirmation_wait_expired",
 }
 
 

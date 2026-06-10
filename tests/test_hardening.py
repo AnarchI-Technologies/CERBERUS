@@ -163,6 +163,27 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(claw_contract.AFFIX_POOL["sharp"], {"stat": "ITEM ATK", "direction": "+", "min": 5, "max": 15})
         self.assertEqual(len(claw_contract.AFFIX_POOL), 12)
 
+    def test_claw_v1_9_contract_captures_readiness_and_runtime_skeleton(self) -> None:
+        self.assertEqual(claw_contract.REST_API_BASE, "https://cdn.clawroyale.ai/api")
+        self.assertEqual(claw_contract.WEBSOCKET_HOST, "wss://cdn.clawroyale.ai")
+        self.assertEqual(claw_contract.ACTIVE_GAME_LIMITS, {"free": 1, "paid": 1})
+        self.assertIn("balance_smoltz>=500", claw_contract.READINESS_GATES["paid_offchain"])
+        self.assertIn("claw_wallet_moltz>=500", claw_contract.READINESS_GATES["paid_onchain"])
+        self.assertTrue(claw_contract.WALLET_RULES["agent_eoa_must_differ_from_owner_eoa"])
+        self.assertTrue(claw_contract.IDENTITY_RULES["agentId_is_not_game_agent_uuid"])
+        self.assertEqual(claw_contract.JOIN_WAIT_CAPS["free_assigned_seconds"], 120)
+        self.assertEqual(claw_contract.JOIN_WAIT_CAPS["paid_joined_after_tx_seconds"], 30)
+
+    def test_claw_v1_9_contract_captures_events_errors_and_loadout_semantics(self) -> None:
+        self.assertIn("game_settled", claw_contract.EVENT_FRAMES)
+        self.assertIn("ruin_state_changed", claw_contract.EVENT_FRAMES)
+        self.assertEqual(claw_contract.LOADOUT["type_index"], {0: "red", 1: "green", 2: "blue"})
+        self.assertEqual(claw_contract.LOADOUT["effective_stats_without_full_set"], 0)
+        self.assertEqual(claw_contract.LOADOUT["discard_equipped_relic"], "fails_409_until_unequipped")
+        self.assertIn("RATE_LIMITED", claw_contract.ERROR_CODES)
+        self.assertIn("ACCOUNT_ALREADY_IN_GAME", claw_contract.ERROR_CODES)
+        self.assertIn("HELLO_TIMEOUT", claw_contract.JOIN_CLOSE_CODES)
+
     def test_tick_returns_action_when_save_fails(self) -> None:
         class BadMemory(CompactMemoryStore):
             def save(self, *args, **kwargs):  # type: ignore[no-untyped-def]
@@ -977,8 +998,7 @@ class HardeningTests(unittest.TestCase):
             os.environ.pop("CLAW_ROYALE_WS_PATHS", None)
             os.environ.pop("CLAW_ROYALE_WS_PATH", None)
             defaults = claw_runtime.websocket_paths()
-            self.assertIn("/ws/agent", defaults)
-            self.assertIn("/ws/join", defaults)
+            self.assertEqual(defaults, ["/ws/join"])
 
             os.environ["CLAW_ROYALE_WS_PATHS"] = "agent-live,/custom,wss://example.test/ws"
             self.assertEqual(claw_runtime.websocket_paths(), ["/agent-live", "/custom", "wss://example.test/ws"])
