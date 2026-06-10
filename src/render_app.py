@@ -14,6 +14,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +41,7 @@ def readiness() -> dict[str, Any]:
             "AGENTMAIL_API_KEY",
             "AGENTMAIL_INBOX_ID",
             "AGENTMAIL_EMAIL",
+            "CLAW_ROYALE_API_KEY",
             "CLAW_ROYALE_ERC8004_ID",
             "X_CLIENT_ID",
             "X_CLIENT_SECRET",
@@ -52,6 +54,7 @@ def readiness() -> dict[str, Any]:
         "AGENTMAIL_API_KEY": bool(os.getenv("AGENTMAIL_API_KEY")),
         "AGENTMAIL_INBOX_ID": bool(os.getenv("AGENTMAIL_INBOX_ID")),
         "AGENTMAIL_EMAIL": bool(os.getenv("AGENTMAIL_EMAIL")),
+        "CLAW_ROYALE_API_KEY": bool(os.getenv("CLAW_ROYALE_API_KEY")),
         "CLAW_ROYALE_ERC8004_ID": bool(os.getenv("CLAW_ROYALE_ERC8004_ID")),
         "X_CLIENT_ID": bool(os.getenv("X_CLIENT_ID")),
         "X_CLIENT_SECRET": bool(os.getenv("X_CLIENT_SECRET")),
@@ -89,10 +92,16 @@ def current_game_file() -> Path:
 def extract_game_id(state: dict[str, Any]) -> str:
     view = state.get("view", {}) if isinstance(state, dict) else {}
     current_game = view.get("currentGame", {}) if isinstance(view, dict) else {}
+    game = state.get("game", {}) if isinstance(state, dict) else {}
     candidates = [
         state.get("gameId") if isinstance(state, dict) else "",
         state.get("game_id") if isinstance(state, dict) else "",
         current_game.get("id") if isinstance(current_game, dict) else "",
+        current_game.get("gameId") if isinstance(current_game, dict) else "",
+        current_game.get("game_id") if isinstance(current_game, dict) else "",
+        game.get("id") if isinstance(game, dict) else "",
+        game.get("gameId") if isinstance(game, dict) else "",
+        game.get("game_id") if isinstance(game, dict) else "",
         view.get("gameId") if isinstance(view, dict) else "",
         view.get("game_id") if isinstance(view, dict) else "",
     ]
@@ -121,16 +130,50 @@ def stats() -> dict[str, Any]:
         "ok": ready.get("ok", False),
         "service": "cerberus",
         "current_game_id": game_id,
+        "spectate_url": spectate_url(game_id) if game_id else "",
         "memory_dir": ready.get("memory_dir", ""),
         "memory_writable": ready.get("memory_writable", False),
+        "memory_error": ready.get("memory_error", ""),
+        "longterm_memory_error": ready.get("longterm_memory_error", ""),
         "longterm_memory": ready.get("longterm_memory", {}),
         "env": ready.get("env", {}),
     }
 
 
-def dashboard_html() -> bytes:
+def spectate_url(game_id: str) -> str:
+    spectate_base_url = os.getenv("CLAW_ROYALE_SPECTATE_BASE_URL", DEFAULT_SPECTATE_BASE_URL).rstrip("/")
+    return f"{spectate_base_url}/{game_id}" if game_id else ""
+
+
+def query_game_id(query: str) -> str:
+    params = parse_qs(query, keep_blank_values=False)
+    for key in ("gameId", "game_id"):
+        values = params.get(key, [])
+        if values and values[0]:
+            return values[0]
+    return ""
+
+
+def stored_game_id() -> str:
+    try:
+        path = current_game_file()
+        if path.exists():
+            return str(json.loads(path.read_text(encoding="utf-8")).get("game_id", ""))
+    except Exception:
+        return ""
+    return ""
+
+
+def dashboard_html(query: str = "") -> bytes:
     feed_url = os.getenv("CLAW_ROYALE_LIVE_FEED_URL", DEFAULT_FEED_URL)
     spectate_base_url = os.getenv("CLAW_ROYALE_SPECTATE_BASE_URL", DEFAULT_SPECTATE_BASE_URL).rstrip("/")
+    initial_game_id = query_game_id(query) or os.getenv("CLAW_ROYALE_CURRENT_GAME_ID", "") or stored_game_id()
+    initial_feed_url = spectate_url(initial_game_id)
+    initial_frame_attrs = (
+        f'src="{initial_feed_url}"'
+        if initial_feed_url
+        else 'src="about:blank" srcdoc="<body style=&quot;margin:0;background:#080a0d;color:#98a2b3;font:14px Arial,sans-serif;display:grid;place-items:center;height:100vh;text-align:center;padding:24px;box-sizing:border-box&quot;><div><strong style=&quot;color:#f4f7fb&quot;>No active spectate game ID</strong><br>Loading runtime diagnostics...</div></body>"'
+    )
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -162,27 +205,48 @@ def dashboard_html() -> bytes:
     <aside>
       <div class="metric"><div class="label">Service</div><div id="service" class="value">loading</div></div>
       <div class="metric"><div class="label">Current Game</div><div id="game" class="value">unknown</div></div>
+      <div class="metric"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
       <div class="metric"><div class="label">Memory DB</div><div id="memory" class="value">loading</div></div>
       <div class="metric"><div class="label">Writable</div><div id="writable" class="value">loading</div></div>
       <div class="metric"><div class="label">Configured Env</div><div id="env" class="value">loading</div></div>
-      <a id="open-feed" class="button" href="{feed_url}" target="_blank" rel="noreferrer">Open Feed</a>
+      <a id="open-feed" class="button" href="{initial_feed_url or spectate_base_url}" target="_blank" rel="noreferrer">Open Spectate</a>
     </aside>
     <section class="frame">
-      <iframe id="feed" src="{feed_url}" title="Claw Royale live game feed"></iframe>
+      <iframe id="feed" {initial_frame_attrs} title="Claw Royale live game feed"></iframe>
     </section>
   </main>
   <script>
     const params = new URLSearchParams(window.location.search);
-    let lastGame = params.get("gameId") || params.get("game_id") || "";
+    let lastGame = params.get("gameId") || params.get("game_id") || {json.dumps(initial_game_id)};
     let loadedFeedUrl = "";
     const feedUrl = {json.dumps(feed_url)};
     const spectateBaseUrl = {json.dumps(spectate_base_url)};
     function targetUrl(gameId) {{
-      return gameId ? spectateBaseUrl + "/" + encodeURIComponent(gameId) : feedUrl;
+      return gameId ? spectateBaseUrl + "/" + encodeURIComponent(gameId) : "";
+    }}
+    function runtimeBlockers(data) {{
+      const blockers = [];
+      if (!data.ok) blockers.push("service readiness failed");
+      if (!data.current_game_id && !lastGame) blockers.push("no rotated game ID received from /tick yet");
+      if (data.memory_writable === false) blockers.push("memory directory is not writable: " + (data.memory_error || data.memory_dir || "unknown"));
+      if (data.longterm_memory_error) blockers.push("long-term memory error: " + data.longterm_memory_error);
+      const env = data.env || {{}};
+      ["CERBERUS_PIN", "CLAW_ROYALE_API_KEY", "CLAW_ROYALE_ERC8004_ID"].forEach((key) => {{
+        if (env[key] === false) blockers.push("missing " + key);
+      }});
+      return blockers;
+    }}
+    function showRuntimeFallback(blockers) {{
+      const frame = document.getElementById("feed");
+      const details = blockers.length ? blockers : ["no active spectate game ID available"];
+      const list = details.map((item) => "<li>" + item.replace(/[&<>]/g, (c) => ({{"&":"&amp;","<":"&lt;",">":"&gt;"}}[c])) + "</li>").join("");
+      frame.src = "about:blank";
+      frame.srcdoc = "<body style=\\"margin:0;background:#080a0d;color:#cbd5e1;font:14px Arial,sans-serif;padding:24px;box-sizing:border-box\\"><h2 style=\\"color:#f4f7fb;margin:0 0 12px;font-size:18px\\">Runtime not live</h2><p style=\\"margin:0 0 12px\\">The spectate iframe needs a rotated Claw Royale game ID at <code>/games/spect/{{gameId}}</code>.</p><ul style=\\"margin:0;padding-left:20px;line-height:1.6\\">" + list + "</ul></body>";
     }}
     function refreshFeed(gameId = lastGame) {{
       const frame = document.getElementById("feed");
       const url = targetUrl(gameId);
+      if (!url) return;
       if (loadedFeedUrl === url) return;
       loadedFeedUrl = url;
       frame.src = url + (url.includes("?") ? "&" : "?") + "r=" + Date.now();
@@ -194,6 +258,8 @@ def dashboard_html() -> bytes:
       document.getElementById("service").textContent = data.ok ? "ready" : "not ready";
       const selectedGame = lastGame || data.current_game_id || "";
       document.getElementById("game").textContent = selectedGame || "unknown";
+      const blockers = runtimeBlockers(data);
+      document.getElementById("blockers").textContent = blockers.length ? blockers.join("; ") : "none";
       const mem = data.longterm_memory || {{}};
       document.getElementById("memory").textContent = (mem.items || 0) + " items, " + (mem.bytes || 0) + " bytes";
       document.getElementById("writable").textContent = data.memory_writable ? "yes" : "no";
@@ -207,7 +273,8 @@ def dashboard_html() -> bytes:
         lastGame = data.current_game_id;
         refreshFeed(lastGame);
       }} else if (!data.current_game_id && !lastGame) {{
-        document.getElementById("open-feed").href = feedUrl;
+        document.getElementById("open-feed").href = spectateBaseUrl;
+        showRuntimeFallback(blockers);
       }}
     }}
     loadStats();
@@ -222,23 +289,25 @@ class CerberusHandler(BaseHTTPRequestHandler):
     server_version = "CerberusRender/1.0"
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path in {"/", "/healthz"}:
+        parsed = urlparse(self.path)
+        if parsed.path in {"/", "/healthz"}:
             self._send({"ok": True, "service": "cerberus"})
             return
-        if self.path == "/ready":
+        if parsed.path == "/ready":
             body = readiness()
             self._send(body, status=200 if body.get("ok") else 503)
             return
-        if self.path == "/stats":
+        if parsed.path == "/stats":
             self._send(stats())
             return
-        if self.path == "/dashboard":
-            self._send_html(dashboard_html())
+        if parsed.path == "/dashboard":
+            self._send_html(dashboard_html(parsed.query))
             return
         self._send({"ok": False, "error": "not_found"}, status=404)
 
     def do_POST(self) -> None:  # noqa: N802
-        if self.path != "/tick":
+        parsed = urlparse(self.path)
+        if parsed.path != "/tick":
             self._send({"ok": False, "error": "not_found"}, status=404)
             return
         if not self._authorized():
