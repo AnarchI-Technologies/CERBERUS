@@ -33,8 +33,17 @@ from runtime_state import (
 
 DEFAULT_MIN_RECONNECT_SECONDS = 5
 DEFAULT_MAX_RECONNECT_SECONDS = 90
+DEFAULT_ROUTE_PROBE_SECONDS = 15
 JOIN_PATH = "/ws/join"
 AGENT_PATH = "/ws/agent"
+DEFAULT_WS_PATHS = (
+    "/ws/agent",
+    "/ws/join",
+    "/agent",
+    "/join",
+    "/game/ws/agent",
+    "/games/ws/agent",
+)
 
 
 @dataclass(frozen=True)
@@ -72,7 +81,10 @@ def update_status(**updates: Any) -> None:
 def extract_game_id(payload: Any) -> str:
     if not isinstance(payload, dict):
         return ""
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    data = next(
+        (payload.get(key) for key in ("data", "payload", "state", "agentView") if isinstance(payload.get(key), dict)),
+        payload,
+    )
     view = data.get("view", {}) if isinstance(data, dict) else {}
     current_game = view.get("currentGame", {}) if isinstance(view, dict) else {}
     game = data.get("game", {}) if isinstance(data, dict) else {}
@@ -91,7 +103,10 @@ def extract_game_id(payload: Any) -> str:
 
 def unwrap_snapshot(payload: dict[str, Any]) -> dict[str, Any] | None:
     frame_type = str(payload.get("type") or payload.get("event") or payload.get("op") or "")
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    data = next(
+        (payload.get(key) for key in ("data", "payload", "state", "agentView") if isinstance(payload.get(key), dict)),
+        payload,
+    )
     if frame_type in {"agent_view", "turn_advanced", "can_act_changed", "joined", "state", "snapshot"}:
         return data if isinstance(data, dict) else None
     if isinstance(data, dict) and ("view" in data or "gameId" in data or "game_id" in data):
@@ -150,6 +165,39 @@ def load_config() -> ClawRuntimeConfig:
     return ClawRuntimeConfig(api_key=api_key, api_base=base, version=version, mode=mode, enabled=enabled)
 
 
+def websocket_paths() -> list[str]:
+    raw = os.getenv("CLAW_ROYALE_WS_PATHS", "").strip()
+    if not raw:
+        single = os.getenv("CLAW_ROYALE_WS_PATH", "").strip()
+        if single:
+            raw = single
+    paths = [item.strip() for item in raw.split(",") if item.strip()] if raw else list(DEFAULT_WS_PATHS)
+    normalized = []
+    for path in paths:
+        if path.startswith(("ws://", "wss://")):
+            normalized.append(path)
+        else:
+            normalized.append(path if path.startswith("/") else f"/{path}")
+    return list(dict.fromkeys(normalized))
+
+
+def websocket_url(config: ClawRuntimeConfig, path: str) -> str:
+    if path.startswith(("ws://", "wss://")):
+        return path
+    return f"{config.ws_base_url}{path}"
+
+
+def reconnect_delay_seconds(config: ClawRuntimeConfig, reconnects: int, error: Exception) -> int:
+    message = str(error).lower()
+    if "http 404" in message or "not found" in message:
+        raw = os.getenv("CLAW_ROYALE_ROUTE_PROBE_SECONDS", str(DEFAULT_ROUTE_PROBE_SECONDS))
+        try:
+            return max(3, min(config.max_reconnect_seconds, int(raw)))
+        except ValueError:
+            return DEFAULT_ROUTE_PROBE_SECONDS
+    return min(config.max_reconnect_seconds, config.min_reconnect_seconds * reconnects)
+
+
 async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     version = discover_version(config.base_url)
     if version != config.version:
@@ -162,7 +210,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             min_reconnect_seconds=config.min_reconnect_seconds,
             max_reconnect_seconds=config.max_reconnect_seconds,
         )
-    url = f"{config.ws_base_url}{path}"
+    url = websocket_url(config, path)
     extra_headers = config.headers
     update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, last_error="")
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
@@ -220,18 +268,24 @@ async def run_forever(config: ClawRuntimeConfig | None = None) -> None:
         update_status(state="blocked", last_error="Missing CLAW_ROYALE_API_KEY.")
         return
     reconnects = 0
-    path = os.getenv("CLAW_ROYALE_WS_PATH", AGENT_PATH).strip() or AGENT_PATH
+    paths = websocket_paths()
+    path_index = 0
     while True:
+        path = paths[path_index % len(paths)]
         try:
             await connect_and_play(config, path)
         except Exception as exc:
             reconnects += 1
-            delay = min(config.max_reconnect_seconds, config.min_reconnect_seconds * reconnects)
+            path_index += 1
+            delay = reconnect_delay_seconds(config, reconnects, exc)
             status = read_json(claw_runtime_status_file())
             status["reconnects"] = reconnects
             status["state"] = "reconnecting"
             status["last_error"] = str(exc)[:500]
             status["next_retry_seconds"] = delay
+            status["last_failed_path"] = path
+            status["next_path"] = paths[path_index % len(paths)]
+            status["candidate_paths"] = paths
             status["updated_at"] = int(time.time())
             write_json(claw_runtime_status_file(), status)
             await asyncio.sleep(delay)

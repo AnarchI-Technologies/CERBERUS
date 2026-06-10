@@ -886,11 +886,57 @@ class HardeningTests(unittest.TestCase):
                 else:
                     os.environ[key] = value
 
+    def test_claw_runtime_has_rotating_websocket_path_candidates(self) -> None:
+        old_paths = os.environ.get("CLAW_ROYALE_WS_PATHS")
+        old_path = os.environ.get("CLAW_ROYALE_WS_PATH")
+        try:
+            os.environ.pop("CLAW_ROYALE_WS_PATHS", None)
+            os.environ.pop("CLAW_ROYALE_WS_PATH", None)
+            defaults = claw_runtime.websocket_paths()
+            self.assertIn("/ws/agent", defaults)
+            self.assertIn("/ws/join", defaults)
+
+            os.environ["CLAW_ROYALE_WS_PATHS"] = "agent-live,/custom,wss://example.test/ws"
+            self.assertEqual(claw_runtime.websocket_paths(), ["/agent-live", "/custom", "wss://example.test/ws"])
+        finally:
+            for key, value in (("CLAW_ROYALE_WS_PATHS", old_paths), ("CLAW_ROYALE_WS_PATH", old_path)):
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+    def test_claw_runtime_accepts_full_websocket_urls(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", api_base="https://cdn.clawroyale.ai/api")
+
+        self.assertEqual(
+            claw_runtime.websocket_url(config, "wss://example.test/live"),
+            "wss://example.test/live",
+        )
+        self.assertEqual(
+            claw_runtime.websocket_url(config, "/ws/agent"),
+            "wss://cdn.clawroyale.ai/api/ws/agent",
+        )
+
+    def test_claw_runtime_uses_fast_probe_delay_for_404_routes(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", max_reconnect_seconds=90)
+
+        self.assertEqual(
+            claw_runtime.reconnect_delay_seconds(config, 12, RuntimeError("server rejected WebSocket connection: HTTP 404")),
+            15,
+        )
+        self.assertEqual(claw_runtime.reconnect_delay_seconds(config, 2, RuntimeError("timeout")), 10)
+
     def test_claw_runtime_extracts_nested_game_id(self) -> None:
         payload = {"type": "agent_view", "data": {"view": {"currentGame": {"id": "game-123"}}}}
 
         self.assertEqual(claw_runtime.extract_game_id(payload), "game-123")
         self.assertEqual(claw_runtime.extract_game_id(claw_runtime.unwrap_snapshot(payload)), "game-123")
+
+    def test_claw_runtime_unwraps_payload_state_aliases(self) -> None:
+        payload = {"type": "agent_view", "payload": {"gameId": "game-payload", "canAct": True}}
+
+        self.assertEqual(claw_runtime.unwrap_snapshot(payload), {"gameId": "game-payload", "canAct": True})
+        self.assertEqual(claw_runtime.extract_game_id(payload), "game-payload")
 
     def test_claw_runtime_action_envelope_matches_contract(self) -> None:
         envelope = claw_runtime.action_envelope(

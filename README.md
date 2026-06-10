@@ -155,6 +155,7 @@ CLAW_ROYALE_ERC8004_ID
 CLAW_ROYALE_VERSION=1.9.0
 CLAW_ROYALE_RUNTIME_ENABLED=true
 CLAW_ROYALE_GAME_MODE=paid
+CLAW_ROYALE_WS_PATHS=/ws/agent,/ws/join
 AGENTMAIL_API_KEY
 AGENTMAIL_INBOX_ID
 AGENTMAIL_EMAIL
@@ -192,6 +193,10 @@ The dashboard reads `claw_runtime` from `/stats`. If no game is embedded yet,
 check the Runtime Blockers panel first; it reports whether the worker is
 disabled, reconnecting, blocked on a paid-join signature frame, or waiting for
 Claw Royale to send the next active game snapshot.
+
+If Claw publishes a new WebSocket URL, set `CLAW_ROYALE_WS_PATHS` to a
+comma-separated list of paths or full `wss://` URLs. The runtime rotates through
+the candidates and reports the last failed path plus the next path in `/stats`.
 
 ## Identity Bootstrap
 
