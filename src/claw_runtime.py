@@ -124,6 +124,43 @@ def unwrap_snapshot(payload: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def game_status(payload: dict[str, Any], snapshot: dict[str, Any] | None = None) -> str:
+    candidates: list[Any] = []
+    for item in (payload, snapshot or {}):
+        if not isinstance(item, dict):
+            continue
+        data = next(
+            (item.get(key) for key in ("data", "payload", "state", "agentView") if isinstance(item.get(key), dict)),
+            item,
+        )
+        view = data.get("view", {}) if isinstance(data, dict) else {}
+        game = data.get("game", {}) if isinstance(data, dict) else {}
+        current_game = view.get("currentGame", {}) if isinstance(view, dict) else {}
+        candidates.extend(
+            [
+                item.get("status"),
+                item.get("gameStatus"),
+                data.get("status") if isinstance(data, dict) else "",
+                data.get("gameStatus") if isinstance(data, dict) else "",
+                game.get("status") if isinstance(game, dict) else "",
+                game.get("gameStatus") if isinstance(game, dict) else "",
+                view.get("status") if isinstance(view, dict) else "",
+                view.get("gameStatus") if isinstance(view, dict) else "",
+                current_game.get("status") if isinstance(current_game, dict) else "",
+                current_game.get("gameStatus") if isinstance(current_game, dict) else "",
+            ]
+        )
+    return next((str(item).strip().lower() for item in candidates if item), "")
+
+
+def is_running_game_status(status: str) -> bool:
+    return status.lower() in {"running", "active", "started", "in_progress"}
+
+
+def is_non_running_game_status(status: str) -> bool:
+    return status.lower() in {"waiting", "queued", "assigned", "joined", "created", "pending", "not_started", "lobby"}
+
+
 def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
     thought = str(action.get("reason") or action.get("thought") or "deterministic Cerberus action")[:THOUGHT_MAX_CHARS]
     data = {key: value for key, value in action.items() if not key.startswith("_")}
@@ -161,8 +198,13 @@ def normalize_game_mode(value: str) -> str:
     return "offchain"
 
 
-def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None) -> bool:
+def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None, *, gameplay_ready: bool = False) -> bool:
     frame_type = str(payload.get("type") or payload.get("event") or payload.get("op") or "")
+    status = game_status(payload, snapshot)
+    if is_non_running_game_status(status):
+        return False
+    if not gameplay_ready and not is_running_game_status(status):
+        return False
     if snapshot:
         if snapshot.get("canAct") is False:
             return False
@@ -283,6 +325,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     account_status = account_status_summary(config)
     update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, account=account_status, last_error="")
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
+        gameplay_ready = False
         update_status(state="connected", endpoint=url, connected_at=int(time.time()), reconnects=read_json(claw_runtime_status_file()).get("reconnects", 0))
         async for raw in ws:
             try:
@@ -310,6 +353,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                     update_status(state="hello_sent", last_hello=frame)
                 continue
             if frame_type in {"queued", "assigned", "tx_submitted", "joined", "waiting", "not_selected"}:
+                gameplay_ready = False
                 game_id = extract_game_id(payload)
                 if game_id:
                     remember_game_id(game_id)
@@ -322,12 +366,15 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 )
                 continue
             if frame_type in {"action_result", "can_act_changed"}:
+                error_text = str(payload.get("message") or payload.get("error") or "")
+                if "not running" in error_text.lower():
+                    gameplay_ready = False
                 update_status(
                     state=frame_type,
                     last_frame_type=frame_type,
                     can_act=frame_value(payload, "canAct"),
                     cooldown_remaining_ms=frame_value(payload, "cooldownRemainingMs"),
-                    last_error=str(payload.get("message") or payload.get("error") or ""),
+                    last_error=error_text,
                 )
                 continue
             if frame_type in {"sign_required", "signature_required", "paid_join_signature_required"}:
@@ -359,12 +406,24 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             game_id = extract_game_id(payload) or extract_game_id(snapshot or {})
             if game_id:
                 remember_game_id(game_id)
-            update_status(last_frame_type=frame_type, current_game_id=game_id or stored_game_id())
-            if snapshot and wants_action(payload, snapshot):
+            status = game_status(payload, snapshot)
+            if is_running_game_status(status):
+                gameplay_ready = True
+            elif is_non_running_game_status(status):
+                gameplay_ready = False
+            update_status(
+                last_frame_type=frame_type,
+                current_game_id=game_id or stored_game_id(),
+                game_status=status,
+                gameplay_ready=gameplay_ready,
+            )
+            if snapshot and wants_action(payload, snapshot, gameplay_ready=gameplay_ready):
                 action = cerberus_tick(snapshot)
                 envelope = action_envelope(action)
                 await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
                 update_status(last_action=action, last_action_at=int(time.time()), state="playing")
+            elif snapshot and not gameplay_ready:
+                update_status(state="waiting_for_running_game", last_error="joined but waiting for running game frame")
         update_status(state="socket_closed", last_error="websocket closed without terminal game frame")
 
 
