@@ -19,12 +19,16 @@ from secret_vault import SecretVaultError, read_vault, write_vault
 
 
 MEMORY_VERSION = 1
-DEFAULT_MEMORY_DIR = Path.home() / ".cerberus"
+_DEFAULT_MEMORY_ROOT = os.getenv("CERBERUS_MEMORY_DIR") or os.getenv("CERBERUS_HOME")
+DEFAULT_MEMORY_DIR = Path(_DEFAULT_MEMORY_ROOT) if _DEFAULT_MEMORY_ROOT else Path.home() / ".cerberus"
 DEFAULT_MEMORY_FILE = DEFAULT_MEMORY_DIR / "memory.compact.json"
 DEFAULT_ENCRYPTED_FILE = DEFAULT_MEMORY_DIR / "memory.compact.vault.json"
 DEFAULT_MAX_TURNS = 240
+DEFAULT_MAX_SHORT_TURNS = 48
+DEFAULT_MAX_SUMMARIES = 96
 DEFAULT_MAX_LESSONS = 96
 DEFAULT_MAX_FACTS = 128
+DEFAULT_CONTEXT_BYTES = 6000
 SECRET_KEYS = {
     "api_key",
     "apikey",
@@ -86,6 +90,88 @@ def kv_string(prefix: str, pairs: Iterable[tuple[str, Any]]) -> str:
         if text != "":
             body.append(f"{key}={text}")
     return prefix + "|" + ";".join(body)
+
+
+def parse_kv_body(body: str) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for part in body.split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        if key:
+            parsed[key] = value
+    return parsed
+
+
+def parse_compact_segments(line: str) -> dict[str, dict[str, str]]:
+    segments: dict[str, dict[str, str]] = {}
+    parts = str(line).split("|")
+    for index in range(0, len(parts) - 1, 2):
+        prefix = parts[index]
+        body = parts[index + 1]
+        if prefix not in {"T", "A", "O", "L", "S", "F"}:
+            continue
+        segments[prefix] = parse_kv_body(body)
+    return segments
+
+
+def clipped_join(values: Iterable[str], *, limit: int = 5) -> str:
+    cleaned = []
+    for value in values:
+        text = scrub_scalar(value, limit=32)
+        if text and text not in cleaned:
+            cleaned.append(text)
+        if len(cleaned) >= limit:
+            break
+    return ",".join(cleaned)
+
+
+def count_values(values: Iterable[str], *, limit: int = 6) -> str:
+    counts: dict[str, int] = {}
+    for value in values:
+        text = scrub_scalar(value, limit=32) or "unknown"
+        counts[text] = counts.get(text, 0) + 1
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]
+    return ",".join(f"{key}:{count}" for key, count in ranked)
+
+
+def numeric_range(values: Iterable[str]) -> str:
+    numbers = []
+    for value in values:
+        try:
+            numbers.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    if not numbers:
+        return ""
+    low = min(numbers)
+    high = max(numbers)
+    if low.is_integer() and high.is_integer():
+        return f"{int(low)}-{int(high)}"
+    return f"{low:.2f}-{high:.2f}"
+
+
+def summarize_turn_window(turns: list[str]) -> str:
+    parsed = [parse_compact_segments(turn) for turn in turns]
+    turn_segments = [item.get("T", {}) for item in parsed]
+    action_segments = [item.get("A", {}) for item in parsed]
+    outcome_segments = [item.get("O", {}) for item in parsed]
+    return kv_string(
+        "S",
+        [
+            ("ts", utc_now()),
+            ("n", len(turns)),
+            ("range", numeric_range(item.get("turn", "") for item in turn_segments)),
+            ("regions", clipped_join(item.get("region", "") for item in turn_segments)),
+            ("actions", count_values(item.get("type", "") for item in action_segments)),
+            ("hp", numeric_range(item.get("hp", "") for item in turn_segments)),
+            ("ep", numeric_range(item.get("ep", "") for item in turn_segments)),
+            ("alert", numeric_range(item.get("alert", "") for item in turn_segments)),
+            ("death", count_values(item.get("death", "") for item in turn_segments if item.get("death", ""))),
+            ("ok", count_values(item.get("ok", "") for item in outcome_segments if item.get("ok", ""))),
+            ("raw", stable_hash(turns, length=24)),
+        ],
+    )
 
 
 def compact_turn_state(state: dict[str, Any]) -> str:
@@ -150,14 +236,20 @@ class CompactMemoryStore:
         path: str | Path = DEFAULT_MEMORY_FILE,
         encrypted_path: str | Path = DEFAULT_ENCRYPTED_FILE,
         max_turns: int = DEFAULT_MAX_TURNS,
+        max_short_turns: int | None = None,
+        max_summaries: int = DEFAULT_MAX_SUMMARIES,
         max_lessons: int = DEFAULT_MAX_LESSONS,
         max_facts: int = DEFAULT_MAX_FACTS,
+        context_bytes: int = DEFAULT_CONTEXT_BYTES,
     ):
         self.path = Path(path)
         self.encrypted_path = Path(encrypted_path)
         self.max_turns = max_turns
+        self.max_short_turns = min(max_short_turns or DEFAULT_MAX_SHORT_TURNS, max_turns)
+        self.max_summaries = max_summaries
         self.max_lessons = max_lessons
         self.max_facts = max_facts
+        self.context_bytes = context_bytes
         self.data: dict[str, Any] = self._empty()
 
     def _empty(self) -> dict[str, Any]:
@@ -168,6 +260,7 @@ class CompactMemoryStore:
             "updated_at": utc_now(),
             "profile": {},
             "facts": [],
+            "summaries": [],
             "turns": [],
             "lessons": [],
             "source_hashes": {},
@@ -239,7 +332,7 @@ class CompactMemoryStore:
                 ],
             )
         self.data.setdefault("turns", []).append(turn)
-        self.data["turns"] = self.data["turns"][-self.max_turns :]
+        self.compact()
         return turn
 
     def remember_lesson(
@@ -277,17 +370,29 @@ class CompactMemoryStore:
         return digest
 
     def agent_context(self) -> str:
-        parts = []
-        for key in ("facts", "lessons", "turns"):
+        sections: list[tuple[str, list[str]]] = []
+        profile = self.data.get("profile", {})
+        if isinstance(profile, dict) and profile:
+            sections.append(("[profile]", [kv_string("P", sorted(profile.items()))]))
+        for key in ("facts", "lessons", "summaries", "turns"):
             values = self.data.get(key, [])
             if values:
-                parts.append(f"[{key}]" + "\n".join(values))
-        return "\n".join(parts)
+                sections.append((f"[{key}]", [str(item) for item in values]))
+        return self._bounded_context(sections)
 
     def compact(self) -> None:
+        self.data.setdefault("facts", [])
+        self.data.setdefault("lessons", [])
+        self.data.setdefault("summaries", [])
+        self.data.setdefault("turns", [])
+        self._rollup_old_turns()
         self.data["facts"] = self._dedupe_tail(self.data.get("facts", []), self.max_facts)
         self.data["lessons"] = self._dedupe_tail(self.data.get("lessons", []), self.max_lessons)
-        self.data["turns"] = self._dedupe_tail(self.data.get("turns", []), self.max_turns)
+        self.data["summaries"] = self._dedupe_tail(
+            self.data.get("summaries", []),
+            self.max_summaries,
+        )
+        self.data["turns"] = self._dedupe_tail(self.data.get("turns", []), self.max_short_turns)
 
     def rewrite(self, *, encrypt: bool | None = None) -> Path:
         self.compact()
@@ -305,6 +410,7 @@ class CompactMemoryStore:
                 "facts": len(self.data.get("facts", [])),
                 "turns": len(self.data.get("turns", [])),
                 "lessons": len(self.data.get("lessons", [])),
+                "summaries": len(self.data.get("summaries", [])),
             },
         }
 
@@ -315,6 +421,47 @@ class CompactMemoryStore:
             self.data.setdefault("integrity", {})["warning"] = "integrity_changed"
         self.compact()
         self.data["integrity"] = self._integrity()
+
+    def _rollup_old_turns(self) -> None:
+        turns = self.data.get("turns", [])
+        if not isinstance(turns, list):
+            self.data["turns"] = []
+            return
+        if len(turns) <= self.max_short_turns:
+            return
+        overflow = [str(item) for item in turns[: -self.max_short_turns]]
+        recent = turns[-self.max_short_turns :]
+        summaries = self.data.setdefault("summaries", [])
+        for index in range(0, len(overflow), self.max_short_turns):
+            window = overflow[index : index + self.max_short_turns]
+            if window:
+                summaries.append(summarize_turn_window(window))
+        self.data["turns"] = recent
+
+    def _bounded_context(self, sections: list[tuple[str, list[str]]]) -> str:
+        if self.context_bytes <= 0:
+            return ""
+        output: list[str] = []
+        used = 0
+        for header, values in sections:
+            ordered = values if header in {"[profile]", "[facts]"} else list(reversed(values))
+            block: list[str] = []
+            for value in ordered:
+                line = scrub_scalar(value, limit=420)
+                if not line:
+                    continue
+                cost = len(line.encode("utf-8")) + 1
+                if used + len(header) + 1 + cost > self.context_bytes:
+                    break
+                block.append(line)
+                used += cost
+            if block:
+                output.append(header)
+                output.extend(reversed(block) if header not in {"[profile]", "[facts]"} else block)
+                used += len(header) + 1
+            if used >= self.context_bytes:
+                break
+        return "\n".join(output)
 
     @staticmethod
     def _dedupe_tail(values: Any, limit: int) -> list[Any]:

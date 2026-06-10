@@ -1,0 +1,47 @@
+services:
+  - type: web
+    name: cerberus-hellion
+    runtime: python
+    plan: starter
+    region: ohio
+    buildCommand: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+    startCommand: python src/render_app.py
+    healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: PORT
+        value: 10000
+      - key: CERBERUS_MEMORY_DIR
+        value: /var/data/.cerberus
+      - key: CLAW_ROYALE_LIVE_FEED_URL
+        value: https://www.clawroyale.com
+      - key: CERBERUS_HTTP_TOKEN
+        generateValue: true
+      - key: CERBERUS_PIN
+        sync: false
+      - key: AGENTMAIL_API_KEY
+        sync: false
+      - key: AGENTMAIL_INBOX_ID
+        sync: false
+      - key: AGENTMAIL_EMAIL
+        sync: false
+      - key: X_CLIENT_ID
+        sync: false
+      - key: X_CLIENT_SECRET
+        sync: false
+      - key: X_REDIRECT_URI
+        sync: false
+      - key: CLAW_ROYALE_API_KEY
+        sync: false
+      - key: CERBERUS_AGENT_EOA_PRIVATE_KEY
+        sync: false
+      - key: CERBERUS_OWNER_EOA_PRIVATE_KEY
+        sync: false
+      - key: MOLTBOOK_API_KEY
+        sync: false
+    disk:
+      name: cerberus-data
+      mountPath: /var/data
+      sizeGB: 1

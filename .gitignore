@@ -18,6 +18,11 @@ htmlcov/
 x_auth_url.txt
 x_oauth_session.json
 
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.render-test-memory/
+
 parts.bin/
 
 # Local agent memory and generated knowledge artifacts stay off GitHub.
