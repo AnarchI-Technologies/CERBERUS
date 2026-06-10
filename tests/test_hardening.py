@@ -1148,6 +1148,31 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(signed["messageLength"], len(payload["message"]))
         self.assertTrue(str(signed["signature"]).startswith("0x"))
 
+    def test_claw_paid_join_signer_parses_json_typed_data_message(self) -> None:
+        from eth_account import Account  # type: ignore
+
+        account = Account.create()
+        typed_data = {
+            "types": {
+                "EIP712Domain": [{"name": "name", "type": "string"}],
+                "JoinGame": [{"name": "agent", "type": "address"}],
+            },
+            "primaryType": "JoinGame",
+            "domain": {"name": "ClawRoyale"},
+            "message": {"agent": account.address},
+        }
+        payload = {
+            "type": "sign_required",
+            "joinIntentId": "join-json-1",
+            "message": json.dumps(typed_data, separators=(",", ":")),
+        }
+
+        signed = claw_signing.sign_typed_data_frame(payload, private_key=account.key.hex())
+
+        self.assertEqual(signed["signingMode"], "typed_data")
+        self.assertEqual(signed["joinIntentId"], "join-json-1")
+        self.assertTrue(str(signed["signature"]).startswith("0x"))
+
     def test_claw_sign_submit_frame_keeps_only_protocol_fields(self) -> None:
         frame = claw_runtime.sign_submit_frame(
             {

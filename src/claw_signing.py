@@ -20,6 +20,16 @@ def _typed_data_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     typed = data.get("typedData") or data.get("typed_data") or data.get("eip712") or data.get("signable")
     if isinstance(typed, dict):
         return typed
+    message = data.get("message")
+    if isinstance(message, str) and message.strip().startswith(("{", "[")):
+        try:
+            parsed = json.loads(message)
+        except ValueError:
+            parsed = {}
+        if isinstance(parsed, dict):
+            typed = parsed.get("typedData") or parsed.get("typed_data") or parsed.get("eip712") or parsed
+            if isinstance(typed, dict) and all(key in typed for key in ("domain", "types", "message")):
+                return typed
     if all(key in data for key in ("domain", "types", "message")):
         typed = {
             "domain": data["domain"],
