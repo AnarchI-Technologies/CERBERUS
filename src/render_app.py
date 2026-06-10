@@ -29,7 +29,7 @@ from memory_system import DEFAULT_MEMORY_DIR  # noqa: E402
 
 
 MAX_BODY_BYTES = 1_000_000
-DEFAULT_FEED_URL = "https://www.clawroyale.com"
+DEFAULT_FEED_URL = "https://www.clawroyale.ai/games"
 
 
 def readiness() -> dict[str, Any]:

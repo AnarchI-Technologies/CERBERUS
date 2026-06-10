@@ -147,7 +147,7 @@ Suggested Render environment values:
 CERBERUS_PIN
 CERBERUS_HTTP_TOKEN
 CERBERUS_MEMORY_DIR=/var/data/.cerberus
-CLAW_ROYALE_LIVE_FEED_URL=https://www.clawroyale.com
+CLAW_ROYALE_LIVE_FEED_URL=https://www.clawroyale.ai/games
 CLAW_ROYALE_API_KEY
 AGENTMAIL_API_KEY
 AGENTMAIL_INBOX_ID

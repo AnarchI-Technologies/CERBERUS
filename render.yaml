@@ -16,7 +16,7 @@ services:
       - key: CERBERUS_MEMORY_DIR
         value: /var/data/.cerberus
       - key: CLAW_ROYALE_LIVE_FEED_URL
-        value: https://www.clawroyale.com
+        value: https://www.clawroyale.ai/games
       - key: CERBERUS_HTTP_TOKEN
         generateValue: true
       - key: CERBERUS_PIN
