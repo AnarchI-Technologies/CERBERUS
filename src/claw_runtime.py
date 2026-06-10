@@ -12,17 +12,23 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-import requests
 import websockets
 
+from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
+from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
 from env_loader import hydrate_env
-from memory_system import DEFAULT_MEMORY_DIR
-from onboarding_clients import CLAW_API_BASE
+from runtime_state import (
+    claw_runtime_status_file,
+    read_json,
+    remember_game_id,
+    stored_game_id,
+    update_claw_runtime_status,
+    write_json,
+)
 
 
 DEFAULT_MIN_RECONNECT_SECONDS = 5
@@ -59,43 +65,8 @@ class ClawRuntimeConfig:
         return headers
 
 
-def memory_dir() -> Path:
-    return Path(os.getenv("CERBERUS_MEMORY_DIR") or DEFAULT_MEMORY_DIR)
-
-
-def runtime_status_file() -> Path:
-    return memory_dir() / "claw_runtime_status.json"
-
-
-def current_game_file() -> Path:
-    return memory_dir() / "current_game.json"
-
-
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=True, separators=(",", ":")), encoding="utf-8")
-
-
-def read_json(path: Path) -> dict[str, Any]:
-    try:
-        if path.exists():
-            value = json.loads(path.read_text(encoding="utf-8"))
-            return value if isinstance(value, dict) else {}
-    except Exception:
-        return {}
-    return {}
-
-
 def update_status(**updates: Any) -> None:
-    now = int(time.time())
-    status = read_json(runtime_status_file())
-    status.update({"updated_at": now, **updates})
-    write_json(runtime_status_file(), status)
-
-
-def remember_game_id(game_id: str) -> None:
-    if game_id:
-        write_json(current_game_file(), {"game_id": game_id, "updated_at": int(time.time())})
+    update_claw_runtime_status(**updates)
 
 
 def extract_game_id(payload: Any) -> str:
@@ -136,6 +107,12 @@ def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
 
 def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None) -> bool:
     frame_type = str(payload.get("type") or payload.get("event") or payload.get("op") or "")
+    if snapshot:
+        if snapshot.get("canAct") is False:
+            return False
+        view = snapshot.get("view", {}) if isinstance(snapshot.get("view"), dict) else {}
+        if view.get("canAct") is False:
+            return False
     if frame_type in {"agent_view", "turn_advanced"}:
         return True
     if snapshot and snapshot.get("canAct") is True:
@@ -145,19 +122,14 @@ def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None) -> bo
 
 
 def discover_version(api_base: str = CLAW_API_BASE) -> str:
-    configured = os.getenv("CLAW_ROYALE_VERSION", "").strip()
-    if configured:
-        return configured
+    configured = active_claw_version()
     try:
-        response = requests.get(f"{api_base.rstrip('/')}/version", timeout=15)
-        if response.ok:
-            payload = response.json()
-            version = str(payload.get("version") or "").strip()
-            if version:
-                return version
+        version = reconcile_claw_version(api_base)
+        update_status(configured_version=configured, live_version=version, version_reconciled=version != configured)
+        return version
     except Exception as exc:
         update_status(last_error=f"version discovery failed: {str(exc)[:180]}")
-    return "1.9.0"
+        return os.getenv("CLAW_ROYALE_VERSION", "1.9.0").strip() or "1.9.0"
 
 
 def load_config() -> ClawRuntimeConfig:
@@ -172,17 +144,28 @@ def load_config() -> ClawRuntimeConfig:
     api_key = os.getenv("CLAW_ROYALE_API_KEY", "").strip()
     enabled = os.getenv("CLAW_ROYALE_RUNTIME_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
     mode = os.getenv("CLAW_ROYALE_GAME_MODE", "paid").strip().lower() or "paid"
-    base = os.getenv("CLAW_ROYALE_API_BASE", CLAW_API_BASE).strip() or CLAW_API_BASE
+    base = claw_api_base()
     version = discover_version(base)
     return ClawRuntimeConfig(api_key=api_key, api_base=base, version=version, mode=mode, enabled=enabled)
 
 
 async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
+    version = discover_version(config.base_url)
+    if version != config.version:
+        config = ClawRuntimeConfig(
+            api_key=config.api_key,
+            api_base=config.api_base,
+            version=version,
+            mode=config.mode,
+            enabled=config.enabled,
+            min_reconnect_seconds=config.min_reconnect_seconds,
+            max_reconnect_seconds=config.max_reconnect_seconds,
+        )
     url = f"{config.ws_base_url}{path}"
     extra_headers = config.headers
     update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, last_error="")
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
-        update_status(state="connected", endpoint=url, connected_at=int(time.time()), reconnects=read_json(runtime_status_file()).get("reconnects", 0))
+        update_status(state="connected", endpoint=url, connected_at=int(time.time()), reconnects=read_json(claw_runtime_status_file()).get("reconnects", 0))
         hello = {"type": "hello", "mode": config.mode, "version": config.version}
         await ws.send(json.dumps(hello, ensure_ascii=True, separators=(",", ":")))
         async for raw in ws:
@@ -198,18 +181,28 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 await ws.send(json.dumps({"type": "pong"}))
                 continue
             if frame_type in {"sign_required", "signature_required", "paid_join_signature_required"}:
-                update_status(
-                    state="blocked",
-                    last_frame_type=frame_type,
-                    last_error="Claw requested a paid-join signature; EIP-712 signing flow is not implemented yet.",
-                    last_payload_keys=sorted(payload.keys()),
-                )
+                try:
+                    signed_frame = sign_typed_data_frame(payload)
+                    await ws.send(json.dumps(signed_frame, ensure_ascii=True, separators=(",", ":")))
+                    update_status(
+                        state="signed_paid_join",
+                        last_frame_type=frame_type,
+                        last_error="",
+                        last_signature_at=int(time.time()),
+                    )
+                except ClawSigningError as exc:
+                    update_status(
+                        state="blocked",
+                        last_frame_type=frame_type,
+                        last_error=str(exc)[:500],
+                        last_payload_keys=sorted(payload.keys()),
+                    )
                 continue
             snapshot = unwrap_snapshot(payload)
             game_id = extract_game_id(payload) or extract_game_id(snapshot or {})
             if game_id:
                 remember_game_id(game_id)
-            update_status(last_frame_type=frame_type, current_game_id=game_id or read_json(current_game_file()).get("game_id", ""))
+            update_status(last_frame_type=frame_type, current_game_id=game_id or stored_game_id())
             if snapshot and wants_action(payload, snapshot):
                 action = cerberus_tick(snapshot)
                 envelope = action_envelope(action)
@@ -233,13 +226,13 @@ async def run_forever(config: ClawRuntimeConfig | None = None) -> None:
         except Exception as exc:
             reconnects += 1
             delay = min(config.max_reconnect_seconds, config.min_reconnect_seconds * reconnects)
-            status = read_json(runtime_status_file())
+            status = read_json(claw_runtime_status_file())
             status["reconnects"] = reconnects
             status["state"] = "reconnecting"
             status["last_error"] = str(exc)[:500]
             status["next_retry_seconds"] = delay
             status["updated_at"] = int(time.time())
-            write_json(runtime_status_file(), status)
+            write_json(claw_runtime_status_file(), status)
             await asyncio.sleep(delay)
 
 

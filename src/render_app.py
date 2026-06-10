@@ -11,6 +11,7 @@ import json
 import os
 import sqlite3
 import sys
+import asyncio
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,12 +26,16 @@ for folder in (ROOT / "src", ROOT / "data"):
         sys.path.insert(0, path)
 
 from core_loop import cerberus_tick  # noqa: E402
-from claw_runtime import read_json as read_runtime_json  # noqa: E402
 from claw_runtime import run_forever as run_claw_runtime  # noqa: E402
-from claw_runtime import runtime_status_file  # noqa: E402
 from env_loader import hydrate_env  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR  # noqa: E402
+from runtime_state import (
+    claw_runtime_status_file,
+    read_json,
+    remember_game_id,
+    stored_game_id as runtime_stored_game_id,
+)  # noqa: E402
 
 
 MAX_BODY_BYTES = 1_000_000
@@ -49,6 +54,7 @@ def readiness() -> dict[str, Any]:
             "CLAW_ROYALE_ERC8004_ID",
             "CLAW_ROYALE_RUNTIME_ENABLED",
             "CLAW_ROYALE_GAME_MODE",
+            "CERBERUS_AGENT_EOA_PRIVATE_KEY",
             "X_CLIENT_ID",
             "X_CLIENT_SECRET",
             "X_REDIRECT_URI",
@@ -64,6 +70,7 @@ def readiness() -> dict[str, Any]:
         "CLAW_ROYALE_ERC8004_ID": bool(os.getenv("CLAW_ROYALE_ERC8004_ID")),
         "CLAW_ROYALE_RUNTIME_ENABLED": bool(os.getenv("CLAW_ROYALE_RUNTIME_ENABLED")),
         "CLAW_ROYALE_GAME_MODE": bool(os.getenv("CLAW_ROYALE_GAME_MODE")),
+        "CERBERUS_AGENT_EOA_PRIVATE_KEY": bool(os.getenv("CERBERUS_AGENT_EOA_PRIVATE_KEY")),
         "X_CLIENT_ID": bool(os.getenv("X_CLIENT_ID")),
         "X_CLIENT_SECRET": bool(os.getenv("X_CLIENT_SECRET")),
         "X_REDIRECT_URI": bool(os.getenv("X_REDIRECT_URI")),
@@ -92,11 +99,6 @@ def readiness() -> dict[str, Any]:
     return checks
 
 
-def current_game_file() -> Path:
-    memory_dir = Path(os.getenv("CERBERUS_MEMORY_DIR") or DEFAULT_MEMORY_DIR)
-    return memory_dir / "current_game.json"
-
-
 def extract_game_id(state: dict[str, Any]) -> str:
     view = state.get("view", {}) if isinstance(state, dict) else {}
     current_game = view.get("currentGame", {}) if isinstance(view, dict) else {}
@@ -118,23 +120,13 @@ def extract_game_id(state: dict[str, Any]) -> str:
 
 def remember_current_game(state: dict[str, Any]) -> None:
     game_id = extract_game_id(state)
-    if not game_id:
-        return
-    path = current_game_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"game_id": game_id}, ensure_ascii=True), encoding="utf-8")
+    remember_game_id(game_id)
 
 
 def stats() -> dict[str, Any]:
     ready = readiness()
-    game_id = ""
-    try:
-        path = current_game_file()
-        if path.exists():
-            game_id = json.loads(path.read_text(encoding="utf-8")).get("game_id", "")
-    except Exception:
-        game_id = ""
-    runtime_status = read_runtime_json(runtime_status_file())
+    game_id = runtime_stored_game_id()
+    runtime_status = read_json(claw_runtime_status_file())
     return {
         "ok": ready.get("ok", False),
         "service": "cerberus",
@@ -165,13 +157,7 @@ def query_game_id(query: str) -> str:
 
 
 def stored_game_id() -> str:
-    try:
-        path = current_game_file()
-        if path.exists():
-            return str(json.loads(path.read_text(encoding="utf-8")).get("game_id", ""))
-    except Exception:
-        return ""
-    return ""
+    return runtime_stored_game_id()
 
 
 def dashboard_html(query: str = "") -> bytes:
@@ -244,8 +230,10 @@ def dashboard_html(query: str = "") -> bytes:
       ["CERBERUS_PIN", "CLAW_ROYALE_API_KEY", "CLAW_ROYALE_ERC8004_ID"].forEach((key) => {{
         if (env[key] === false) blockers.push("missing " + key);
       }});
+      if (env.CERBERUS_AGENT_EOA_PRIVATE_KEY === false) blockers.push("missing CERBERUS_AGENT_EOA_PRIVATE_KEY for paid-game signing");
       const runtime = data.claw_runtime || {{}};
       if (env.CLAW_ROYALE_RUNTIME_ENABLED === false) blockers.push("missing CLAW_ROYALE_RUNTIME_ENABLED=true");
+      if (runtime.version_reconciled) blockers.push("claw version updated from " + runtime.configured_version + " to " + runtime.live_version);
       if (runtime.state && !["connected", "playing"].includes(runtime.state)) {{
         blockers.push("claw runtime " + runtime.state + ": " + (runtime.last_error || "no live game yet"));
       }}
@@ -377,7 +365,7 @@ class CerberusHandler(BaseHTTPRequestHandler):
 def main() -> int:
     port = int(os.getenv("PORT", "10000"))
     if os.getenv("CLAW_ROYALE_RUNTIME_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
-        thread = threading.Thread(target=lambda: __import__("asyncio").run(run_claw_runtime()), daemon=True)
+        thread = threading.Thread(target=lambda: asyncio.run(run_claw_runtime()), daemon=True)
         thread.start()
         print("Claw Royale runtime worker started", flush=True)
     server = ThreadingHTTPServer(("0.0.0.0", port), CerberusHandler)

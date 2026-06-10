@@ -8,9 +8,9 @@ from typing import Any
 
 import requests
 
+from claw_config import CLAW_API_BASE, active_claw_version
 
-CLAW_API_BASE = "https://cdn.clawroyale.ai/api"
-CLAW_SKILL_VERSION = "1.8.0"
+
 AGENTMAIL_API_BASE = "https://api.agentmail.to/v0"
 MOLTBOOK_API_BASE = "https://www.moltbook.com/api/v1"
 
@@ -53,7 +53,7 @@ class ClawRoyaleClient:
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         headers = kwargs.pop("headers", {})
         headers.setdefault("Content-Type", "application/json")
-        headers.setdefault("X-Version", CLAW_SKILL_VERSION)
+        headers.setdefault("X-Version", active_claw_version())
         if self.api_key:
             headers["X-API-Key"] = self.api_key
         bearer = self.onboarding_token or self.access_token

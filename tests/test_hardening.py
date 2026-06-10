@@ -17,7 +17,9 @@ from agent_dossiers import AgentDossierStore
 from core_loop import cerberus_tick, normalize_action
 import identity_bootstrap
 import claw_identity_token
+import claw_config
 import claw_runtime
+import claw_signing
 import moltbook_claim_assistant
 import x_oauth
 from identity_bootstrap import (
@@ -728,6 +730,12 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(parsed["state"], "s123")
         self.assertEqual(parsed["code"], "c456")
 
+    def test_x_manual_callback_parser_accepts_fragment_params(self) -> None:
+        parsed = parse_callback_url("http://127.0.0.1:8765/x/callback#state=s123&code=c456")
+
+        self.assertEqual(parsed["state"], "s123")
+        self.assertEqual(parsed["code"], "c456")
+
     def test_claw_bearer_token_is_sent_for_account_creation(self) -> None:
         class FakeSession:
             def __init__(self):
@@ -751,6 +759,38 @@ class HardeningTests(unittest.TestCase):
         client.create_account(DEFAULT_PUBLIC_NAME, "0x" + "1" * 40)
 
         self.assertEqual(fake.headers["Authorization"], "Bearer claw_test")
+
+    def test_claw_client_version_header_uses_single_source(self) -> None:
+        class FakeSession:
+            def __init__(self):
+                self.headers = {}
+
+            def request(self, method, url, **kwargs):  # type: ignore[no-untyped-def]
+                self.headers = kwargs["headers"]
+
+                class Response:
+                    status_code = 200
+                    text = '{"erc8004Id":"1"}'
+
+                    def json(self):  # type: ignore[no-untyped-def]
+                        return {"erc8004Id": "1"}
+
+                return Response()
+
+        old = os.environ.get("CLAW_ROYALE_VERSION")
+        try:
+            os.environ["CLAW_ROYALE_VERSION"] = "7.7.7"
+            client = ClawRoyaleClient(api_key="mr_test")
+            fake = FakeSession()
+            client.session = fake  # type: ignore[assignment]
+            client.get_identity()
+        finally:
+            if old is None:
+                os.environ.pop("CLAW_ROYALE_VERSION", None)
+            else:
+                os.environ["CLAW_ROYALE_VERSION"] = old
+
+        self.assertEqual(fake.headers["X-Version"], "7.7.7")
 
     def test_claw_siwe_message_matches_frontend_shape(self) -> None:
         message = build_claw_siwe_message(
@@ -835,6 +875,71 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(envelope["type"], "action")
         self.assertEqual(envelope["data"], {"type": "move", "regionId": "r2", "reason": "death-zone pressure"})
         self.assertEqual(envelope["thought"], "death-zone pressure")
+
+    def test_claw_runtime_does_not_act_when_can_act_false(self) -> None:
+        payload = {"type": "agent_view", "data": {"gameId": "g1", "canAct": False, "view": {"canAct": False}}}
+
+        self.assertFalse(claw_runtime.wants_action(payload, claw_runtime.unwrap_snapshot(payload)))
+
+    def test_claw_paid_join_typed_data_signer_returns_signature(self) -> None:
+        from eth_account import Account  # type: ignore
+
+        account = Account.create()
+        payload = {
+            "type": "sign_required",
+            "data": {
+                "requestId": "req-1",
+                "typedData": {
+                    "types": {
+                        "EIP712Domain": [
+                            {"name": "name", "type": "string"},
+                            {"name": "version", "type": "string"},
+                            {"name": "chainId", "type": "uint256"},
+                        ],
+                        "JoinGame": [
+                            {"name": "agent", "type": "address"},
+                            {"name": "gameId", "type": "string"},
+                        ],
+                    },
+                    "primaryType": "JoinGame",
+                    "domain": {"name": "ClawRoyale", "version": "1", "chainId": 612055},
+                    "message": {"agent": account.address, "gameId": "game-1"},
+                },
+            },
+        }
+
+        signed = claw_signing.sign_typed_data_frame(payload, private_key=account.key.hex())
+
+        self.assertEqual(signed["type"], "signature")
+        self.assertEqual(signed["requestId"], "req-1")
+        self.assertTrue(str(signed["signature"]).startswith("0x"))
+
+    def test_claw_version_single_source_uses_env_override(self) -> None:
+        old = os.environ.get("CLAW_ROYALE_VERSION")
+        try:
+            os.environ["CLAW_ROYALE_VERSION"] = "9.9.9"
+            self.assertEqual(claw_config.active_claw_version(), "9.9.9")
+        finally:
+            if old is None:
+                os.environ.pop("CLAW_ROYALE_VERSION", None)
+            else:
+                os.environ["CLAW_ROYALE_VERSION"] = old
+
+    def test_claw_version_reconcile_updates_process_env_on_drift(self) -> None:
+        old_fetch = claw_config.fetch_live_claw_version
+        old = os.environ.get("CLAW_ROYALE_VERSION")
+        try:
+            os.environ["CLAW_ROYALE_VERSION"] = "1.9.0"
+            claw_config.fetch_live_claw_version = lambda api_base=None: "1.9.1"  # type: ignore[assignment]
+
+            self.assertEqual(claw_config.reconcile_claw_version(), "1.9.1")
+            self.assertEqual(os.environ["CLAW_ROYALE_VERSION"], "1.9.1")
+        finally:
+            claw_config.fetch_live_claw_version = old_fetch  # type: ignore[assignment]
+            if old is None:
+                os.environ.pop("CLAW_ROYALE_VERSION", None)
+            else:
+                os.environ["CLAW_ROYALE_VERSION"] = old
 
 
 if __name__ == "__main__":

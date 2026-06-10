@@ -36,7 +36,7 @@ SOURCE_LINE_TERMS = re.compile(
 CURATED_FACTS = [
     "F|meta.brand|current=Claw Royale;legacy=Molty Royale;moltyroyale.com redirects to clawroyale.ai",
     "F|meta.source_precedence|1=live_claw_docs_api;2=project_bootstrap;3=legacy_brain.py;4=rss220426v152;5=rss200426v151",
-    "F|meta.version|api_version=1.8.0;api_last_update=2026-06-01T10:26:45.734Z;ticker_has_v1.9_notice=2026-06-08;v1.9_release=2026-06-10UTC",
+    "F|meta.version|source=src/claw_config.py+GET_/api/version;runtime_reconciles_before_game=true;last_known_major=1.9",
     "F|runtime.api|base=https://cdn.clawroyale.ai/api;auth=X-API-Key;version_header=X-Version;version_endpoint=GET /api/version",
     "F|runtime.rest.account|POST /accounts returns apiKey once;PUT /accounts/wallet attaches Agent EOA;GET /accounts/me has readiness,currentGames,balance",
     "F|runtime.join|preferred=GET /ws/join;single entry for free+paid;send hello before helloDeadlineSec;legacy /join and /join-paid deprecated",

@@ -125,7 +125,8 @@ def wait_for_callback(
 
 def parse_callback_url(callback_url: str) -> dict[str, str]:
     parsed = urllib.parse.urlparse(callback_url.strip())
-    params = urllib.parse.parse_qs(parsed.query)
+    raw_params = parsed.query or parsed.fragment
+    params = urllib.parse.parse_qs(raw_params)
     return {key: values[0] for key, values in params.items() if values}
 
 
@@ -150,7 +151,13 @@ def exchange_code(*, code: str, verifier: str, config: dict[str, str]) -> dict[s
         timeout=45,
     )
     if not 200 <= response.status_code < 300:
-        raise RuntimeError(f"X token exchange failed {response.status_code}: {response.text[:500]}")
+        detail = response.text[:500]
+        if response.status_code == 400 and "authorization code was invalid" in detail:
+            detail += (
+                " | Use the newest x_auth_url.txt link only once; X authorization codes are single-use "
+                "and must be exchanged with the same saved PKCE session that generated the URL."
+            )
+        raise RuntimeError(f"X token exchange failed {response.status_code}: {detail}")
     return response.json()
 
 
@@ -224,6 +231,13 @@ def load_oauth_session() -> dict[str, Any]:
     return json.loads(LATEST_OAUTH_SESSION_FILE.read_text(encoding="utf-8"))
 
 
+def oauth_session_age_seconds(session: dict[str, Any]) -> int:
+    try:
+        return max(0, int(time.time()) - int(session.get("created_at") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def send_authorization_email(url: str, *, to_email: str = "") -> None:
     recipient = to_email or os.getenv("X_AUTH_EMAIL_TO", "") or os.getenv("AGENTMAIL_TEST_TO", "")
     if not recipient:
@@ -270,6 +284,7 @@ def authorize_with_optional_email(
     email_url: bool = False,
     to_email: str = "",
     manual_callback: bool = False,
+    open_browser: bool = True,
 ) -> dict[str, Any]:
     config = env_config()
     if not config["client_id"]:
@@ -290,7 +305,8 @@ def authorize_with_optional_email(
         except Exception as exc:
             print(f"Warning: could not email X authorization URL: {exc}")
             print("Continuing with browser/local callback. Use the printed URL or x_auth_url.txt.")
-    webbrowser.open(url)
+    if open_browser:
+        webbrowser.open(url)
     if manual_callback:
         print()
         print("Manual callback mode:")
@@ -312,6 +328,11 @@ def authorize_with_optional_email(
 def exchange_callback_url(callback_url: str) -> dict[str, Any]:
     config = env_config()
     session = load_oauth_session()
+    age = oauth_session_age_seconds(session)
+    if age > 900:
+        raise RuntimeError(
+            f"Saved X OAuth session is {age} seconds old. Generate a fresh auth URL before exchanging a callback."
+        )
     params = parse_callback_url(callback_url)
     if params.get("error"):
         raise RuntimeError(f"X OAuth error in callback URL: {params}")
@@ -354,6 +375,7 @@ def _cli() -> int:
     auth.add_argument("--email-url", action="store_true", help="Email the generated X auth URL via AgentMail")
     auth.add_argument("--to", default="", help="Recipient for --email-url")
     auth.add_argument("--manual-callback", action="store_true", help="Paste the final redirected callback URL manually")
+    auth.add_argument("--no-open", action="store_true", help="Print/save the auth URL without opening a local browser")
     post = sub.add_parser("post")
     post.add_argument("text")
     exchange = sub.add_parser("exchange-url")
@@ -365,6 +387,7 @@ def _cli() -> int:
                 email_url=args.email_url,
                 to_email=args.to,
                 manual_callback=args.manual_callback,
+                open_browser=not args.no_open,
             )
         )
         return 0
