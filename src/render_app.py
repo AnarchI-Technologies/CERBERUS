@@ -541,9 +541,13 @@ class CerberusHandler(BaseHTTPRequestHandler):
             if not self._authorized():
                 self._send({"ok": False, "error": "unauthorized"}, status=401)
                 return
-            payload = self._read_json()
-            if not self._pin_authorized(str(payload.get("pin") or "")):
-                self._send({"ok": False, "error": "invalid_pin"}, status=401)
+            try:
+                payload = self._read_json()
+            except Exception as exc:
+                payload = {"_body_error": str(exc)[:240]}
+            pin = self.headers.get("X-Cerberus-Pin", "") or str(payload.get("pin") or "")
+            if not self._pin_authorized(pin):
+                self._send({"ok": False, "error": "invalid_pin", "body_error": payload.get("_body_error", "")}, status=401)
                 return
             try:
                 result = leave_current_game(str(payload.get("gameId") or ""))
