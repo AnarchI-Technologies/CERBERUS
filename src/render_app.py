@@ -68,6 +68,9 @@ def readiness() -> dict[str, Any]:
             "X_CLIENT_ID",
             "X_CLIENT_SECRET",
             "X_REDIRECT_URI",
+            "TWITCH_USERNAME",
+            "HELLION_TWITCH_USERNAME",
+            "TWITCH_ACCOUNT_CREATED",
         )
     )
     memory_dir = Path(os.getenv("CERBERUS_MEMORY_DIR") or DEFAULT_MEMORY_DIR)
@@ -84,6 +87,8 @@ def readiness() -> dict[str, Any]:
         "X_CLIENT_ID": bool(os.getenv("X_CLIENT_ID")),
         "X_CLIENT_SECRET": bool(os.getenv("X_CLIENT_SECRET")),
         "X_REDIRECT_URI": bool(os.getenv("X_REDIRECT_URI")),
+        "TWITCH_USERNAME": bool(os.getenv("TWITCH_USERNAME") or os.getenv("HELLION_TWITCH_USERNAME")),
+        "TWITCH_ACCOUNT_CREATED": os.getenv("TWITCH_ACCOUNT_CREATED", "").strip().lower() in {"1", "true", "yes", "created", "linked"},
     }
     checks: dict[str, Any] = {
         "ok": True,

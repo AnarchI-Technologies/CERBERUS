@@ -18,6 +18,7 @@ from env_loader import env_report, hydrate_env  # noqa: E402
 
 
 X_VARS = ("X_CLIENT_ID", "X_CLIENT_SECRET", "X_REDIRECT_URI")
+TWITCH_VARS = ("TWITCH_USERNAME", "HELLION_TWITCH_USERNAME", "TWITCH_ACCOUNT_CREATED")
 LAUNCH_VARS = (
     "CERBERUS_PIN",
     "AGENTMAIL_API_KEY",
@@ -26,6 +27,7 @@ LAUNCH_VARS = (
     "MOLTBOOK_API_KEY",
     "CLAW_ROYALE_API_KEY",
     *X_VARS,
+    *TWITCH_VARS,
 )
 
 

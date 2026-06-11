@@ -28,6 +28,7 @@ def empty_identity(public_name: str = DEFAULT_PUBLIC_NAME) -> dict[str, Any]:
         "claw_royale": {},
         "agentmail": {},
         "moltbook": {},
+        "twitch_account": {},
         "x_account": {},
         "purpose_map": {
             "claw_account_wallet": "agent_eoa",
@@ -40,6 +41,7 @@ def empty_identity(public_name: str = DEFAULT_PUBLIC_NAME) -> dict[str, Any]:
             "paid_room_funding": "molty_royale_wallet",
             "agent_email": "agentmail_inbox",
             "moltbook_public_identity": "moltbook_agent",
+            "twitch_public_identity": "twitch_account",
         },
         "blockers": [],
         "events": [],
@@ -65,6 +67,7 @@ class IdentityVault:
         self.data.setdefault("claw_royale", {})
         self.data.setdefault("agentmail", {})
         self.data.setdefault("moltbook", {})
+        self.data.setdefault("twitch_account", {})
         self.data.setdefault("x_account", {})
         self.data.setdefault("purpose_map", empty_identity()["purpose_map"])
         self.data.setdefault("blockers", [])
@@ -83,7 +86,7 @@ class IdentityVault:
         data = deepcopy(self.data)
         for wallet in data.get("wallets", {}).values():
             wallet.pop("private_key", None)
-        for section in ("claw_royale", "agentmail", "moltbook", "x_account"):
+        for section in ("claw_royale", "agentmail", "moltbook", "twitch_account", "x_account"):
             for key in ("api_key", "access_token", "refresh_token", "password", "private_key", "client_secret"):
                 data.get(section, {}).pop(key, None)
         return data

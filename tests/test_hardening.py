@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
 import tempfile
 import unittest
@@ -23,12 +24,17 @@ import claw_runtime
 import claw_signing
 import stream_dashboard_cortex
 import moltbook_claim_assistant
+import render_app
 import x_oauth
+import runtime_state
+import render_env_export
+import env_doctor
 from identity_bootstrap import (
     ensure_agentmail,
     ensure_claw_account,
     ensure_moltbook,
     ensure_molty_wallet,
+    ensure_twitch_account,
     ensure_wallets,
     BootstrapResult,
 )
@@ -312,6 +318,26 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(str(path).endswith(".vault.json"))
         self.assertEqual(len(reloaded.memory.data["turns"]), 1)
 
+    def test_memory_wrong_pin_loads_empty_with_warning(self) -> None:
+        old_pin = os.environ.get("CERBERUS_PIN")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_PIN"] = "2468"
+                isolated = self._isolated(tmp)
+                isolated.tick({"turn": 1, "view": {"self": {"id": "me", "hp": 90, "ep": 5}, "currentRegion": {"id": "r1"}}})
+                isolated.memory.rewrite()
+
+                os.environ["CERBERUS_PIN"] = "1357"
+                reloaded = isolated.reload()
+        finally:
+            if old_pin is None:
+                os.environ.pop("CERBERUS_PIN", None)
+            else:
+                os.environ["CERBERUS_PIN"] = old_pin
+
+        self.assertEqual(reloaded.memory.data["turns"], [])
+        self.assertIn("load_warning", reloaded.memory.data)
+
     def test_cannot_act_blocks_main_actions_but_free_equip_still_works(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             isolated = self._isolated(tmp)
@@ -338,6 +364,32 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["type"], "equip")
         self.assertEqual(action["itemId"], "kat-1")
 
+    def test_free_action_equips_highest_dps_weapon_upgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": False,
+                    "cooldownRemainingMs": 9000,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 85,
+                            "ep": 0,
+                            "equippedWeapon": {"typeId": "dagger"},
+                            "inventory": [
+                                {"id": "blade-1", "typeId": "sword"},
+                                {"id": "blade-2", "typeId": "sniper"},
+                            ],
+                        },
+                        "currentRegion": {"id": "r1"},
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "equip")
+        self.assertEqual(action["itemId"], "blade-2")
+
     def test_low_hp_heals_when_main_action_is_available(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             isolated = self._isolated(tmp)
@@ -358,6 +410,46 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(action["type"], "use_item")
         self.assertEqual(action["itemId"], "med-1")
+
+    def test_favorable_fight_attacks_when_main_action_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 96,
+                            "ep": 4,
+                            "atk": 24,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1", "name": "Arena Edge"},
+                        "visibleAgents": [{"id": "enemy-1", "name": "Rival", "hp": 12, "atk": 9, "def": 2}],
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "attack")
+        self.assertEqual(action["targetId"], "enemy-1")
+
+    def test_moltz_pickup_is_preferred_when_area_is_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 100, "ep": 3, "inventory": []},
+                        "currentRegion": {"id": "r1", "items": [{"id": "cash-1", "typeId": "smoltz_bundle"}]},
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "pickup")
+        self.assertEqual(action["itemId"], "cash-1")
 
     def test_progression_value_at_risk_discourages_ruin_push_with_cargo(self) -> None:
         state = TurnState.from_snapshot(
@@ -415,6 +507,109 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(any(effect.get("type") == "game_free_action" for effect in effects))
         self.assertTrue(any(item["reason"] == "moltybook post failed" for item in results))
         self.assertTrue(any(item["reason"] == "moltybook follow failed" for item in results))
+
+    def test_social_broadcast_side_effect_survives_full_tick(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 88,
+                            "ep": 4,
+                            "inventory": [{"id": "meg", "typeId": "megaphone"}],
+                        },
+                        "currentRegion": {"id": "r1", "interactables": [{"type": "broadcast_station"}]},
+                    },
+                    "events": [{"type": "agent_kill", "data": {"killerId": "me", "victimId": "enemy-1", "victimName": "Rival"}}],
+                }
+            )
+
+        self.assertIn("_side_effects", action)
+        self.assertTrue(any(effect.get("type") == "moltybook_draft" for effect in action["_side_effects"]))
+        self.assertTrue(any(effect.get("type") == "game_free_action" for effect in action["_side_effects"]))
+
+    def test_isolated_instance_survives_randomized_high_intensity_churn(self) -> None:
+        old_pin = os.environ.get("CERBERUS_PIN")
+        os.environ["CERBERUS_PIN"] = "8642"
+        rng = random.Random(1337)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                isolated = self._isolated(tmp)
+                observed_actions = set()
+                for index in range(160):
+                    hp = rng.randint(8, 100)
+                    ep = rng.randint(0, 6)
+                    alert = rng.randint(0, 12)
+                    can_act = rng.choice([True, True, False])
+                    snapshot = {
+                        "turn": index,
+                        "canAct": can_act,
+                        "cooldownRemainingMs": 0 if can_act else rng.choice([5000, 15000, 30000]),
+                        "status": rng.choice(["running", "active", "in_progress"]),
+                        "view": {
+                            "self": {
+                                "id": "me",
+                                "hp": hp,
+                                "ep": ep,
+                                "atk": rng.randint(20, 36),
+                                "inventory": [
+                                    {"id": f"kat-{index}", "typeId": "katana"},
+                                    {"id": f"snip-{index}", "typeId": "sniper"} if index % 5 == 0 else {"id": f"sw-{index}", "typeId": "sword"},
+                                    {"id": f"med-{index}", "typeId": "medkit"} if index % 3 == 0 else {"id": f"band-{index}", "typeId": "bandage"},
+                                    {"id": f"mega-{index}", "typeId": "megaphone"} if index % 7 == 0 else {"id": f"scrap-{index}", "typeId": "junk"},
+                                    {"id": f"pack-{index}", "typeId": "goliath_pack"} if index % 11 == 0 else {"id": f"loot-{index}", "typeId": "relic_red"},
+                                ],
+                                "equippedWeapon": {"typeId": "dagger" if index % 4 == 0 else "fist"},
+                            },
+                            "alertGauge": alert,
+                            "currentRegion": {
+                                "id": f"r{index}",
+                                "name": "Broadcast Ruin" if index % 6 == 0 else "Field",
+                                "terrain": "Ruin" if index % 6 == 0 else ("Storm" if index % 4 == 0 else "Plain"),
+                                "isDeathZone": index % 29 == 0,
+                                "items": [{"id": f"sm-{index}", "typeId": "smoltz_bundle"}] if index % 4 == 0 else [],
+                                "interactables": [{"type": "broadcast_station"}] if index % 6 == 0 else [],
+                                "connections": [{"id": f"safe-{index}-a"}, {"id": f"safe-{index}-b", "connections": [1, 2, 3]}],
+                            },
+                            "visibleAgents": [
+                                {
+                                    "id": f"enemy-{index}",
+                                    "name": "Rival",
+                                    "hp": rng.randint(6, 40),
+                                    "atk": rng.randint(8, 22),
+                                    "def": rng.randint(1, 8),
+                                    "moltybookHandle": "@rival",
+                                }
+                            ] if index % 5 == 0 else [],
+                            "visibleMonsters": [{"id": f"mob-{index}", "hp": rng.randint(8, 30), "atk": rng.randint(5, 16)}] if index % 5 == 1 else [],
+                            "visibleItems": [{"id": f"relic-{index}", "typeId": "relic_red"}] if index % 5 == 2 else [],
+                            "pendingDeathzones": [{"id": f"r{index}"}] if index % 9 == 0 else [],
+                            "recentMessages": [{"agentId": "ally", "message": "how do we win ruin strategy without leaking the formula?"}] if index % 8 == 0 else [],
+                        },
+                        "events": [
+                            {"type": "alert_gauge_changed", "data": {"agentId": "me", "alertGauge": alert}},
+                            {"type": "ruin_state_changed", "data": {"ruinId": f"ru-{index % 4}", "gauge": index % 3, "contentType": "relic"}},
+                            {"type": "agent_kill", "data": {"killerId": "me", "victimId": f"enemy-{index}", "victimName": "Rival"}} if index % 10 == 0 else {"type": "noop"},
+                        ],
+                    }
+                    action = isolated.tick(snapshot)
+                    observed_actions.add(action["type"])
+                    self.assertIn(
+                        action["type"],
+                        {"equip", "move", "rest", "pickup", "use_item", "attack", "explore"},
+                    )
+                    if index % 12 == 0:
+                        isolated.memory.rewrite()
+                        isolated = isolated.reload()
+                self.assertTrue({"equip", "rest", "use_item"}.issubset(observed_actions))
+        finally:
+            if old_pin is None:
+                os.environ.pop("CERBERUS_PIN", None)
+            else:
+                os.environ["CERBERUS_PIN"] = old_pin
 
     def test_isolated_instance_survives_repeated_break_fix_cycles(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")
@@ -568,6 +763,91 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(identity["moltbook"]["api_key"], "moltbook_test")
         self.assertIn("molty_royale_wallet", identity["wallets"])
         self.assertTrue(any("claim URL" in blocker for blocker in result.blockers))
+
+    def test_twitch_onboarding_tracks_manual_signup_with_agentmail_email(self) -> None:
+        old_username = os.environ.get("TWITCH_USERNAME")
+        old_hellion_username = os.environ.get("HELLION_TWITCH_USERNAME")
+        old_created = os.environ.get("TWITCH_ACCOUNT_CREATED")
+        try:
+            os.environ.pop("TWITCH_USERNAME", None)
+            os.environ.pop("HELLION_TWITCH_USERNAME", None)
+            os.environ.pop("TWITCH_ACCOUNT_CREATED", None)
+            identity = empty_identity()
+            identity["agentmail"] = {"email": "hellion-meet-your-molty-maker@agentmail.to"}
+            result = BootstrapResult()
+
+            ensure_twitch_account(identity, result)
+        finally:
+            for key, value in {
+                "TWITCH_USERNAME": old_username,
+                "HELLION_TWITCH_USERNAME": old_hellion_username,
+                "TWITCH_ACCOUNT_CREATED": old_created,
+            }.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(identity["twitch_account"]["provider"], "twitch")
+        self.assertEqual(identity["twitch_account"]["email"], "hellion-meet-your-molty-maker@agentmail.to")
+        self.assertEqual(identity["twitch_account"]["signup_status"], "external_verification_required")
+        self.assertIn("twitch_account", identity["wallets"])
+        self.assertTrue(any("Complete Hellion's Twitch signup" in blocker for blocker in result.blockers))
+
+    def test_twitch_onboarding_marks_created_when_env_confirms_signup(self) -> None:
+        old_username = os.environ.get("TWITCH_USERNAME")
+        old_created = os.environ.get("TWITCH_ACCOUNT_CREATED")
+        try:
+            os.environ["TWITCH_USERNAME"] = "hellionmoltymaker"
+            os.environ["TWITCH_ACCOUNT_CREATED"] = "true"
+            identity = empty_identity()
+            identity["agentmail"] = {"email": "hellion-meet-your-molty-maker@agentmail.to"}
+            result = BootstrapResult()
+
+            ensure_twitch_account(identity, result)
+        finally:
+            if old_username is None:
+                os.environ.pop("TWITCH_USERNAME", None)
+            else:
+                os.environ["TWITCH_USERNAME"] = old_username
+            if old_created is None:
+                os.environ.pop("TWITCH_ACCOUNT_CREATED", None)
+            else:
+                os.environ["TWITCH_ACCOUNT_CREATED"] = old_created
+
+        self.assertEqual(identity["twitch_account"]["signup_status"], "created")
+        self.assertTrue(any("Tracked Twitch account" in item for item in result.completed))
+
+    def test_identity_vault_public_summary_keeps_twitch_section_but_redacts_secret_fields(self) -> None:
+        vault = empty_identity()
+        vault["twitch_account"] = {
+            "username": "hellionmoltymaker",
+            "access_token": "secret-token",
+            "client_secret": "secret-client",
+        }
+
+        store = identity_bootstrap.IdentityVault.__new__(identity_bootstrap.IdentityVault)  # type: ignore[misc]
+        store.path = Path("identity.vault.json")
+        store.data = vault
+        summary = store.public_summary()
+
+        self.assertEqual(summary["twitch_account"]["username"], "hellionmoltymaker")
+        self.assertNotIn("access_token", summary["twitch_account"])
+        self.assertNotIn("client_secret", summary["twitch_account"])
+
+    def test_render_env_export_includes_twitch_state_when_tracked(self) -> None:
+        identity = empty_identity()
+        identity["twitch_account"] = {"username": "hellionmoltymaker", "signup_status": "verified"}
+
+        exported = render_env_export.render_env(identity)
+
+        self.assertEqual(exported["TWITCH_USERNAME"], "hellionmoltymaker")
+        self.assertEqual(exported["TWITCH_ACCOUNT_CREATED"], "true")
+
+    def test_env_doctor_launch_vars_include_twitch_signals(self) -> None:
+        self.assertIn("TWITCH_USERNAME", env_doctor.LAUNCH_VARS)
+        self.assertIn("HELLION_TWITCH_USERNAME", env_doctor.LAUNCH_VARS)
+        self.assertIn("TWITCH_ACCOUNT_CREATED", env_doctor.LAUNCH_VARS)
 
     def test_existing_agentmail_inbox_imports_without_network(self) -> None:
         old_inbox = os.environ.get("AGENTMAIL_INBOX_ID")
@@ -1095,6 +1375,62 @@ class HardeningTests(unittest.TestCase):
         )
         self.assertEqual(claw_runtime.reconnect_delay_seconds(config, 2, RuntimeError("timeout")), 10)
 
+    def test_claw_runtime_route_probe_delay_respects_env_override(self) -> None:
+        old_probe = os.environ.get("CLAW_ROYALE_ROUTE_PROBE_SECONDS")
+        try:
+            os.environ["CLAW_ROYALE_ROUTE_PROBE_SECONDS"] = "7"
+            config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", max_reconnect_seconds=90)
+            delay = claw_runtime.reconnect_delay_seconds(config, 20, RuntimeError("HTTP 404"))
+        finally:
+            if old_probe is None:
+                os.environ.pop("CLAW_ROYALE_ROUTE_PROBE_SECONDS", None)
+            else:
+                os.environ["CLAW_ROYALE_ROUTE_PROBE_SECONDS"] = old_probe
+
+        self.assertEqual(delay, 7)
+
+    def test_claw_runtime_discover_version_falls_back_after_update_conflict(self) -> None:
+        old_reconcile = claw_runtime.reconcile_claw_version
+        old_status = claw_runtime.update_status
+        old_env = os.environ.get("CLAW_ROYALE_VERSION")
+        updates = []
+        try:
+            os.environ["CLAW_ROYALE_VERSION"] = "9.9.9"
+            claw_runtime.reconcile_claw_version = lambda api_base: (_ for _ in ()).throw(RuntimeError("schema mismatch"))  # type: ignore[assignment]
+            claw_runtime.update_status = lambda **kwargs: updates.append(kwargs)  # type: ignore[assignment]
+            version = claw_runtime.discover_version("https://cdn.clawroyale.ai/api")
+        finally:
+            claw_runtime.reconcile_claw_version = old_reconcile  # type: ignore[assignment]
+            claw_runtime.update_status = old_status  # type: ignore[assignment]
+            if old_env is None:
+                os.environ.pop("CLAW_ROYALE_VERSION", None)
+            else:
+                os.environ["CLAW_ROYALE_VERSION"] = old_env
+
+        self.assertEqual(version, "9.9.9")
+        self.assertTrue(any("version discovery failed" in item.get("last_error", "") for item in updates))
+
+    def test_claw_runtime_account_status_summary_handles_dependency_failure(self) -> None:
+        old_client = claw_runtime.ClawRoyaleClient
+        try:
+            class FailingClient:
+                def __init__(self, api_key, base_url):  # type: ignore[no-untyped-def]
+                    self.api_key = api_key
+                    self.base_url = base_url
+
+                def me(self):  # type: ignore[no-untyped-def]
+                    raise RuntimeError("dependency mismatch: unexpected response shape")
+
+            claw_runtime.ClawRoyaleClient = FailingClient  # type: ignore[assignment]
+            summary = claw_runtime.account_status_summary(
+                claw_runtime.ClawRuntimeConfig(api_key="mr_test", api_base="https://cdn.clawroyale.ai/api")
+            )
+        finally:
+            claw_runtime.ClawRoyaleClient = old_client  # type: ignore[assignment]
+
+        self.assertFalse(summary["ok"])
+        self.assertIn("dependency mismatch", summary["error"])
+
     def test_claw_runtime_extracts_nested_game_id(self) -> None:
         payload = {"type": "agent_view", "data": {"view": {"currentGame": {"id": "game-123"}}}}
 
@@ -1128,10 +1464,121 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(claw_runtime.hello_frame(free, {"decision": "FREE_ONLY"}), {"type": "hello", "entryType": "free"})
         self.assertIsNone(claw_runtime.hello_frame(paid, {"decision": "ALREADY_IN_GAME"}))
 
+    def test_claw_runtime_prefers_occupied_free_room_over_empty_paid_rooms(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        welcome = {
+            "decision": "ASK_ENTRY_TYPE",
+            "rooms": [
+                {"entryType": "paid", "players": []},
+                {"entryType": "premium", "agentCount": 0},
+                {"entryType": "free", "players": [{"id": "viewer-agent"}]},
+            ],
+        }
+
+        old_fallback = os.environ.get("CLAW_ROYALE_FREE_FALLBACK_ENABLED")
+        try:
+            os.environ.pop("CLAW_ROYALE_FREE_FALLBACK_ENABLED", None)
+            self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "paid", "mode": "offchain"})
+            os.environ["CLAW_ROYALE_FREE_FALLBACK_ENABLED"] = "true"
+            self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
+        finally:
+            if old_fallback is None:
+                os.environ.pop("CLAW_ROYALE_FREE_FALLBACK_ENABLED", None)
+            else:
+                os.environ["CLAW_ROYALE_FREE_FALLBACK_ENABLED"] = old_fallback
+        self.assertEqual(
+            claw_runtime.room_choice_summary(welcome),
+            {"paid_rooms": 2, "paid_occupied": 0, "free_rooms": 1, "free_occupied": 1, "unknown_rooms": 0},
+        )
+
+    def test_claw_runtime_keeps_paid_when_paid_room_is_occupied(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        welcome = {
+            "decision": "ASK_ENTRY_TYPE",
+            "availableGames": [
+                {"entryType": "paid", "playerCount": 1},
+                {"entryType": "free", "playerCount": 3},
+            ],
+        }
+
+        self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "paid", "mode": "offchain"})
+
+    def test_claw_runtime_does_not_choose_free_when_identity_is_blocked(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        welcome = {
+            "decision": "ASK_ENTRY_TYPE",
+            "readiness": {"erc8004_identity": False, "freeRoom": {"ok": False, "missing": ["erc8004_identity"]}},
+            "rooms": [
+                {"entryType": "paid", "playerCount": 0},
+                {"entryType": "free", "playerCount": 4},
+            ],
+        }
+
+        old_fallback = os.environ.get("CLAW_ROYALE_FREE_FALLBACK_ENABLED")
+        try:
+            os.environ["CLAW_ROYALE_FREE_FALLBACK_ENABLED"] = "true"
+            self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "paid", "mode": "offchain"})
+        finally:
+            if old_fallback is None:
+                os.environ.pop("CLAW_ROYALE_FREE_FALLBACK_ENABLED", None)
+            else:
+                os.environ["CLAW_ROYALE_FREE_FALLBACK_ENABLED"] = old_fallback
+
     def test_claw_runtime_does_not_act_when_can_act_false(self) -> None:
         payload = {"type": "agent_view", "data": {"gameId": "g1", "canAct": False, "view": {"canAct": False}}}
 
         self.assertFalse(claw_runtime.wants_action(payload, claw_runtime.unwrap_snapshot(payload)))
+
+    def test_runtime_state_cache_write_failures_do_not_crash_callers(self) -> None:
+        old_write_json = runtime_state.write_json
+        try:
+            def failing_write_json(path, payload):  # type: ignore[no-untyped-def]
+                raise OSError("disk full")
+
+            runtime_state.write_json = failing_write_json  # type: ignore[assignment]
+
+            runtime_state.update_claw_runtime_status(state="reconnecting")
+            runtime_state.remember_game_id("game-1")
+            messages = runtime_state.append_stream_chat({"author": "Hellion", "message": "still alive"})
+        finally:
+            runtime_state.write_json = old_write_json  # type: ignore[assignment]
+
+        self.assertEqual(messages[-1]["message"], "still alive")
+
+    def test_render_readiness_reports_memory_write_failure_without_crashing(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        old_store = render_app.LongTermMemoryStore
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                blocked = Path(tmp) / "blocked"
+                os.environ["CERBERUS_MEMORY_DIR"] = str(blocked)
+
+                class FailingStore:
+                    def stats(self):  # type: ignore[no-untyped-def]
+                        return {"items": 0, "bytes": 0}
+
+                render_app.LongTermMemoryStore = FailingStore  # type: ignore[assignment]
+                old_mkdir = Path.mkdir
+                def failing_mkdir(self, parents=False, exist_ok=False):  # type: ignore[no-untyped-def]
+                    if self == blocked:
+                        raise OSError("write blocked")
+                    return old_mkdir(self, parents=parents, exist_ok=exist_ok)
+
+                Path.mkdir = failing_mkdir  # type: ignore[assignment]
+                try:
+                    status = render_app.readiness()
+                finally:
+                    Path.mkdir = old_mkdir  # type: ignore[assignment]
+        finally:
+            render_app.LongTermMemoryStore = old_store  # type: ignore[assignment]
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertFalse(status["ok"])
+        self.assertFalse(status["memory_writable"])
+        self.assertIn("write blocked", status["memory_error"])
 
     def test_claw_paid_join_typed_data_signer_returns_signature(self) -> None:
         from eth_account import Account  # type: ignore

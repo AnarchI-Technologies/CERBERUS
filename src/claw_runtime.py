@@ -45,6 +45,29 @@ DEFAULT_WS_PATHS = (
     "/ws/join",
 )
 VALID_GAME_MODES = {"free", "offchain", "onchain"}
+ROOM_LIST_KEYS = (
+    "rooms",
+    "games",
+    "availableRooms",
+    "availableGames",
+    "waitingRooms",
+    "waitingGames",
+    "lobbies",
+    "matches",
+)
+ROOM_COUNT_KEYS = (
+    "agentCount",
+    "agentsCount",
+    "playerCount",
+    "playersCount",
+    "participantCount",
+    "participantsCount",
+    "currentAgents",
+    "currentPlayers",
+    "occupancy",
+    "population",
+)
+ROOM_LIST_COUNT_KEYS = ("agents", "players", "participants", "joinedAgents", "activeAgents")
 
 
 @dataclass(frozen=True)
@@ -176,11 +199,129 @@ def sign_submit_frame(signed_frame: dict[str, Any]) -> dict[str, Any]:
     return frame
 
 
+def room_entries(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    entries: list[dict[str, Any]] = []
+    containers = [payload]
+    for key in ("data", "payload", "state", "join", "lobby"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            containers.append(value)
+    for container in containers:
+        for key in ROOM_LIST_KEYS:
+            value = container.get(key)
+            if isinstance(value, list):
+                entries.extend(item for item in value if isinstance(item, dict))
+            elif isinstance(value, dict):
+                for nested in value.values():
+                    if isinstance(nested, list):
+                        entries.extend(item for item in nested if isinstance(item, dict))
+                    elif isinstance(nested, dict):
+                        entries.append(nested)
+    return entries
+
+
+def room_entry_type(room: dict[str, Any]) -> str:
+    for key in ("entryType", "entry_type", "entry", "type", "roomType", "gameType", "tier", "mode"):
+        value = str(room.get(key) or "").strip().lower()
+        if value in {"free", "public"}:
+            return "free"
+        if value in {"paid", "premium", "offchain", "onchain"}:
+            return "paid"
+    for key in ("isPremium", "premium", "paid", "isPaid"):
+        value = room.get(key)
+        if isinstance(value, bool):
+            return "paid" if value else "free"
+    return ""
+
+
+def room_population(room: dict[str, Any]) -> int | None:
+    for key in ROOM_LIST_COUNT_KEYS:
+        value = room.get(key)
+        if isinstance(value, list):
+            return len(value)
+    for key in ROOM_COUNT_KEYS:
+        value = room.get(key)
+        if isinstance(value, dict):
+            nested = room_population(value)
+            if nested is not None:
+                return nested
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return max(0, value)
+        if isinstance(value, float):
+            return max(0, int(value))
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+    return None
+
+
+def room_choice_summary(welcome: dict[str, Any] | None) -> dict[str, Any]:
+    paid_populations: list[int] = []
+    free_populations: list[int] = []
+    unknown_rooms = 0
+    for room in room_entries(welcome):
+        entry_type = room_entry_type(room)
+        population = room_population(room)
+        if entry_type == "paid" and population is not None:
+            paid_populations.append(population)
+        elif entry_type == "free" and population is not None:
+            free_populations.append(population)
+        elif entry_type:
+            unknown_rooms += 1
+    return {
+        "paid_rooms": len(paid_populations),
+        "paid_occupied": sum(1 for count in paid_populations if count > 0),
+        "free_rooms": len(free_populations),
+        "free_occupied": sum(1 for count in free_populations if count > 0),
+        "unknown_rooms": unknown_rooms,
+    }
+
+
+def readiness_blocks_free(welcome: dict[str, Any] | None) -> bool:
+    readiness = (welcome or {}).get("readiness", {})
+    if not isinstance(readiness, dict):
+        return False
+    for key in ("free", "freeReady", "free_ready", "erc8004_identity", "erc8004Identity", "identityReady"):
+        if readiness.get(key) is False:
+            return True
+    free_room = readiness.get("freeRoom") or readiness.get("free_room")
+    if isinstance(free_room, dict):
+        if free_room.get("ok") is False:
+            return True
+        missing = free_room.get("missing") or free_room.get("blockers") or free_room.get("errors")
+        if isinstance(missing, list):
+            return any("identity" in str(item).lower() or "no_identity" in str(item).lower() for item in missing)
+    errors = readiness.get("errors") or readiness.get("blockers") or readiness.get("missing")
+    if isinstance(errors, list):
+        return any("identity" in str(item).lower() or "no_identity" in str(item).lower() for item in errors)
+    return False
+
+
+def free_fallback_enabled() -> bool:
+    return os.getenv("CLAW_ROYALE_FREE_FALLBACK_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def should_prefer_free_room(config: ClawRuntimeConfig, welcome: dict[str, Any] | None) -> bool:
+    if not free_fallback_enabled() or config.mode == "free" or readiness_blocks_free(welcome):
+        return False
+    summary = room_choice_summary(welcome)
+    if summary["free_occupied"] <= 0:
+        return False
+    if summary["paid_rooms"] == 0 and summary["unknown_rooms"] == 0:
+        return True
+    return summary["paid_rooms"] > 0 and summary["paid_occupied"] == 0
+
+
 def hello_frame(config: ClawRuntimeConfig, welcome: dict[str, Any] | None = None) -> dict[str, Any] | None:
     decision = str((welcome or {}).get("decision") or "").upper()
     if decision in NO_HELLO_DECISIONS:
         return None
     if decision == "FREE_ONLY":
+        return {"type": "hello", "entryType": "free"}
+    if decision in {"", "ASK_ENTRY_TYPE"} and should_prefer_free_room(config, welcome):
         return {"type": "hello", "entryType": "free"}
     if decision == "PAID_ONLY":
         return {"type": "hello", "entryType": "paid", "mode": config.mode}
@@ -341,11 +482,19 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 continue
             if frame_type == "welcome":
                 frame = hello_frame(config, payload)
+                room_summary = room_choice_summary(payload)
                 update_status(
                     state="welcomed",
                     last_frame_type=frame_type,
                     join_decision=payload.get("decision", ""),
                     join_readiness=payload.get("readiness", {}),
+                    join_room_choice=frame.get("entryType", "") if frame else "",
+                    join_room_choice_reason=(
+                        "occupied_free_room_over_empty_paid_rooms"
+                        if frame and frame.get("entryType") == "free" and should_prefer_free_room(config, payload)
+                        else "server_or_config_default"
+                    ),
+                    join_room_summary=room_summary,
                     last_error="" if frame else str(payload.get("instruction") or ""),
                 )
                 if frame:

@@ -41,15 +41,22 @@ def read_json(path: Path) -> dict[str, Any]:
     return {}
 
 
-def write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=True, separators=(",", ":")), encoding="utf-8")
+def write_json(path: Path, payload: dict[str, Any]) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=True, separators=(",", ":")), encoding="utf-8")
+    except OSError:
+        return False
+    return True
 
 
 def update_claw_runtime_status(**updates: Any) -> None:
     status = read_json(claw_runtime_status_file())
     status.update({"updated_at": int(time.time()), **updates})
-    write_json(claw_runtime_status_file(), status)
+    try:
+        write_json(claw_runtime_status_file(), status)
+    except Exception:
+        return
 
 
 def stored_game_id() -> str:
@@ -58,7 +65,10 @@ def stored_game_id() -> str:
 
 def remember_game_id(game_id: str) -> None:
     if game_id:
-        write_json(current_game_file(), {"game_id": game_id, "updated_at": int(time.time())})
+        try:
+            write_json(current_game_file(), {"game_id": game_id, "updated_at": int(time.time())})
+        except Exception:
+            return
 
 
 def stream_chat_messages(limit: int = 50) -> list[dict[str, Any]]:
@@ -72,7 +82,10 @@ def append_stream_chat(message: dict[str, Any], *, limit: int = 50) -> list[dict
     messages = stream_chat_messages(limit=limit)
     messages.append(message)
     messages = messages[-limit:]
-    write_json(stream_chat_file(), {"messages": messages, "updated_at": int(time.time())})
+    try:
+        write_json(stream_chat_file(), {"messages": messages, "updated_at": int(time.time())})
+    except Exception:
+        return messages
     return messages
 
 

@@ -27,6 +27,7 @@ def render_env(identity: dict[str, Any]) -> dict[str, str]:
     claw = identity.get("claw_royale", {})
     agentmail = identity.get("agentmail", {})
     moltbook = identity.get("moltbook", {})
+    twitch = identity.get("twitch_account", {})
     x_account = identity.get("x_account", {})
 
     values = {
@@ -45,6 +46,8 @@ def render_env(identity: dict[str, Any]) -> dict[str, str]:
         "MOLTBOOK_API_KEY": moltbook.get("api_key", ""),
         "MOLTBOOK_AGENT_ID": moltbook.get("agent_id", ""),
         "MOLTBOOK_CLAIM_URL": moltbook.get("claim_url", ""),
+        "TWITCH_USERNAME": twitch.get("username", ""),
+        "TWITCH_ACCOUNT_CREATED": "true" if twitch.get("signup_status") in {"created", "linked", "verified"} else "",
         "X_ACCESS_TOKEN": x_account.get("access_token", ""),
         "X_REFRESH_TOKEN": x_account.get("refresh_token", ""),
     }

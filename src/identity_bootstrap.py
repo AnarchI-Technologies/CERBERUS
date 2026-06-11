@@ -43,6 +43,8 @@ HELLION_DESCRIPTION = (
     "Hellion-Meet-Your-Molty-Maker is a Cerberus-backed Claw Royale agent: "
     "tactical, survivable, and careful with secrets."
 )
+DEFAULT_TWITCH_USERNAME = "hellionmoltymaker"
+TWITCH_SIGNUP_URL = "https://www.twitch.tv/signup"
 
 
 @dataclass(slots=True)
@@ -247,8 +249,47 @@ def ensure_moltbook(
     result.add_done(f"Registered {DEFAULT_PUBLIC_NAME} on Moltbook and stored API key")
     if moltbook.get("claim_url"):
         result.add_blocker(
-            "Moltbook returned a claim URL; human/email verification may still be required"
+            "Moltbook returned a claim URL; external claim verification may still be required"
         )
+
+
+def ensure_twitch_account(identity: dict[str, Any], result: BootstrapResult) -> None:
+    twitch = identity.setdefault("twitch_account", {})
+    if str(twitch.get("signup_status") or "").lower() in {"created", "linked", "verified"}:
+        result.add_done(f"Twitch account already tracked: {twitch.get('username', DEFAULT_TWITCH_USERNAME)}")
+        return
+
+    agentmail = identity.get("agentmail", {})
+    email = str(twitch.get("email") or agentmail.get("email") or os.getenv("AGENTMAIL_EMAIL", "")).strip()
+    username = str(
+        os.getenv("TWITCH_USERNAME")
+        or os.getenv("HELLION_TWITCH_USERNAME")
+        or twitch.get("username")
+        or DEFAULT_TWITCH_USERNAME
+    ).strip()
+    created = os.getenv("TWITCH_ACCOUNT_CREATED", "").strip().lower() in {"1", "true", "yes", "created", "linked"}
+    twitch.update(
+        {
+            "provider": "twitch",
+            "username": username,
+            "display_name": "Hellion",
+            "email": email,
+            "signup_url": TWITCH_SIGNUP_URL,
+            "signup_status": "created" if created else "external_verification_required",
+            "source": "agentmail_email",
+        }
+    )
+    identity.setdefault("wallets", {})["twitch_account"] = {
+        "address": username,
+        "role": "twitch_account",
+        "purpose": "Public Twitch channel identity for Hellion streams.",
+    }
+    if not email:
+        result.add_blocker("Create or import Hellion's AgentMail email before Twitch signup")
+    elif created:
+        result.add_done(f"Tracked Twitch account {username} using {email}")
+    else:
+        result.add_blocker(f"Complete Hellion's Twitch signup and verification at {TWITCH_SIGNUP_URL} using {email}")
 
 
 def bootstrap_identity(*, execute_external: bool = False, vault: IdentityVault | None = None) -> BootstrapResult:
@@ -263,7 +304,7 @@ def bootstrap_identity(*, execute_external: bool = False, vault: IdentityVault |
         result.add_blocker(str(exc))
 
     if execute_external and not result.blockers:
-        for step in (ensure_claw_account, ensure_molty_wallet, ensure_agentmail, ensure_moltbook):
+        for step in (ensure_claw_account, ensure_molty_wallet, ensure_agentmail, ensure_twitch_account, ensure_moltbook):
             try:
                 step(store.data, result)
             except (OnboardingAPIError, SecretVaultError) as exc:
