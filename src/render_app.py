@@ -14,6 +14,7 @@ import sys
 import asyncio
 import threading
 import requests
+import websockets
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -230,12 +231,73 @@ def leave_current_game(game_id: str = "") -> dict[str, Any]:
                 return {"ok": True, "game_id": game_id, "method": method, "path": path, "attempts": attempts}
         except Exception as exc:
             attempts.append({"method": method, "path": path, "error": str(exc)[:240]})
+    ws_result = websocket_leave_current_game(game_id, headers)
+    attempts.extend(ws_result.get("attempts", []))
+    if ws_result.get("ok"):
+        return ws_result
     update_claw_runtime_status(
         state="stale_game_leave_failed",
         last_error=f"no leave route accepted stale game {game_id}",
         stale_game_leave={"ok": False, "game_id": game_id, "attempts": attempts},
     )
     return {"ok": False, "game_id": game_id, "error": "no_leave_route_accepted", "attempts": attempts}
+
+
+def websocket_join_url() -> str:
+    raw = os.getenv("CLAW_ROYALE_WS_BASE_URL", "").strip().rstrip("/")
+    if raw:
+        return f"{raw}/ws/join"
+    return "wss://cdn.clawroyale.ai/ws/join"
+
+
+async def _websocket_leave_current_game(game_id: str, headers: dict[str, str]) -> dict[str, Any]:
+    frames = [
+        {"type": "leave", "gameId": game_id},
+        {"type": "leave_game", "gameId": game_id},
+        {"type": "cancel", "gameId": game_id},
+        {"type": "cancel_join", "gameId": game_id},
+        {"type": "forfeit", "gameId": game_id},
+        {"type": "surrender", "gameId": game_id},
+        {"type": "action", "data": {"type": "leave", "gameId": game_id}},
+        {"type": "action", "data": {"type": "forfeit", "gameId": game_id}},
+    ]
+    attempts: list[dict[str, Any]] = []
+    url = websocket_join_url()
+    for frame in frames:
+        try:
+            async with websockets.connect(url, additional_headers=headers, open_timeout=20, ping_interval=None) as ws:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=8)
+                    attempts.append({"method": "WS", "path": url, "sent": "", "received": str(raw)[:240]})
+                except Exception as exc:
+                    attempts.append({"method": "WS", "path": url, "sent": "", "error": f"welcome timeout: {str(exc)[:120]}"})
+                await ws.send(json.dumps(frame, ensure_ascii=True, separators=(",", ":")))
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=8)
+                    text = str(raw)[:240]
+                    attempts.append({"method": "WS", "path": url, "sent": frame.get("type", ""), "received": text})
+                    lowered = text.lower()
+                    if any(token in lowered for token in ("left", "forfeit", "cancel", "removed", "not_in_game")):
+                        remember_game_id("")
+                        update_claw_runtime_status(
+                            state="left_stale_game",
+                            current_game_id="",
+                            last_error=f"left stale game {game_id} via websocket {frame.get('type')}",
+                            stale_game_leave={"ok": True, "game_id": game_id, "method": "WS", "frame": frame.get("type", "")},
+                        )
+                        return {"ok": True, "game_id": game_id, "method": "WS", "frame": frame.get("type", ""), "attempts": attempts}
+                except Exception as exc:
+                    attempts.append({"method": "WS", "path": url, "sent": frame.get("type", ""), "error": str(exc)[:240]})
+        except Exception as exc:
+            attempts.append({"method": "WS", "path": url, "sent": frame.get("type", ""), "error": str(exc)[:240]})
+    return {"ok": False, "game_id": game_id, "attempts": attempts}
+
+
+def websocket_leave_current_game(game_id: str, headers: dict[str, str]) -> dict[str, Any]:
+    try:
+        return asyncio.run(_websocket_leave_current_game(game_id, headers))
+    except Exception as exc:
+        return {"ok": False, "game_id": game_id, "attempts": [{"method": "WS", "path": websocket_join_url(), "error": str(exc)[:240]}]}
 
 
 def stream_state() -> dict[str, Any]:

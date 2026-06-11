@@ -1621,6 +1621,7 @@ class HardeningTests(unittest.TestCase):
     def test_render_leave_current_game_reports_failed_candidates(self) -> None:
         old_key = os.environ.get("CLAW_ROYALE_API_KEY")
         old_request = render_app.requests.request
+        old_ws_leave = render_app.websocket_leave_current_game
 
         class Response:
             status_code = 404
@@ -1629,10 +1630,12 @@ class HardeningTests(unittest.TestCase):
         try:
             os.environ["CLAW_ROYALE_API_KEY"] = "mr_test"
             render_app.requests.request = lambda *args, **kwargs: Response()  # type: ignore[assignment]
+            render_app.websocket_leave_current_game = lambda game_id, headers: {"ok": False, "attempts": [{"method": "WS", "error": "closed"}]}  # type: ignore[assignment]
 
             result = render_app.leave_current_game("game-1<script>")
         finally:
             render_app.requests.request = old_request  # type: ignore[assignment]
+            render_app.websocket_leave_current_game = old_ws_leave  # type: ignore[assignment]
             if old_key is None:
                 os.environ.pop("CLAW_ROYALE_API_KEY", None)
             else:
