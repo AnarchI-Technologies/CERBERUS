@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import asyncio
 import threading
+import requests
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -27,6 +28,7 @@ for folder in (ROOT / "src", ROOT / "data"):
         sys.path.insert(0, path)
 
 from core_loop import cerberus_tick  # noqa: E402
+from claw_config import active_claw_version, claw_api_base  # noqa: E402
 from claw_runtime import run_forever as run_claw_runtime  # noqa: E402
 from env_loader import hydrate_env  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
@@ -39,6 +41,7 @@ from runtime_state import (
     remember_game_id,
     stream_chat_messages,
     stored_game_id as runtime_stored_game_id,
+    update_claw_runtime_status,
 )  # noqa: E402
 from stream_dashboard_cortex import StreamDashboardCortex, chat_message  # noqa: E402
 
@@ -155,6 +158,84 @@ def stats() -> dict[str, Any]:
         "longterm_memory": ready.get("longterm_memory", {}),
         "env": ready.get("env", {}),
     }
+
+
+def safe_game_id(value: str) -> str:
+    return "".join(ch for ch in str(value or "") if ch.isalnum() or ch in {"-", "_"})
+
+
+def current_runtime_game_id() -> str:
+    runtime_status = read_json(claw_runtime_status_file())
+    game_id = safe_game_id(str(runtime_status.get("current_game_id") or ""))
+    if game_id:
+        return game_id
+    game_id = safe_game_id(runtime_stored_game_id())
+    if game_id:
+        return game_id
+    readiness_payload = runtime_status.get("join_readiness", {})
+    current_games = readiness_payload.get("currentGames", []) if isinstance(readiness_payload, dict) else []
+    if isinstance(current_games, list):
+        for game in current_games:
+            if isinstance(game, dict):
+                game_id = safe_game_id(str(game.get("gameId") or game.get("id") or ""))
+                if game_id:
+                    return game_id
+    return ""
+
+
+def leave_current_game(game_id: str = "") -> dict[str, Any]:
+    game_id = safe_game_id(game_id) or current_runtime_game_id()
+    if not game_id:
+        return {"ok": False, "error": "no_current_game_id"}
+    api_key = os.getenv("CLAW_ROYALE_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "game_id": game_id, "error": "CLAW_ROYALE_API_KEY not set"}
+    base = claw_api_base().rstrip("/")
+    headers = {
+        "Content-Type": "application/json",
+        "X-Version": active_claw_version(),
+        "X-API-Key": api_key,
+    }
+    candidates = [
+        ("POST", f"/games/{game_id}/leave", {}),
+        ("POST", f"/games/{game_id}/cancel", {}),
+        ("POST", f"/games/{game_id}/forfeit", {}),
+        ("POST", f"/games/{game_id}/surrender", {}),
+        ("DELETE", f"/games/{game_id}", None),
+        ("POST", "/games/leave", {"gameId": game_id}),
+        ("POST", "/join/leave", {"gameId": game_id}),
+        ("POST", "/join/cancel", {"gameId": game_id}),
+        ("POST", "/leave", {"gameId": game_id}),
+    ]
+    attempts: list[dict[str, Any]] = []
+    for method, path, body in candidates:
+        try:
+            response = requests.request(
+                method,
+                f"{base}{path}",
+                headers=headers,
+                json=body if body is not None else None,
+                timeout=20,
+            )
+            attempt = {"method": method, "path": path, "status": response.status_code, "body": response.text[:240]}
+            attempts.append(attempt)
+            if 200 <= response.status_code < 300:
+                remember_game_id("")
+                update_claw_runtime_status(
+                    state="left_stale_game",
+                    current_game_id="",
+                    last_error=f"left stale game {game_id} via {method} {path}",
+                    stale_game_leave={"ok": True, "game_id": game_id, "method": method, "path": path},
+                )
+                return {"ok": True, "game_id": game_id, "method": method, "path": path, "attempts": attempts}
+        except Exception as exc:
+            attempts.append({"method": method, "path": path, "error": str(exc)[:240]})
+    update_claw_runtime_status(
+        state="stale_game_leave_failed",
+        last_error=f"no leave route accepted stale game {game_id}",
+        stale_game_leave={"ok": False, "game_id": game_id, "attempts": attempts},
+    )
+    return {"ok": False, "game_id": game_id, "error": "no_leave_route_accepted", "attempts": attempts}
 
 
 def stream_state() -> dict[str, Any]:
@@ -456,6 +537,20 @@ class CerberusHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._send({"ok": False, "error": str(exc)[:240]}, status=500)
             return
+        if parsed.path == "/admin/leave-current-game":
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            payload = self._read_json()
+            if not self._pin_authorized(str(payload.get("pin") or "")):
+                self._send({"ok": False, "error": "invalid_pin"}, status=401)
+                return
+            try:
+                result = leave_current_game(str(payload.get("gameId") or ""))
+                self._send(result, status=200 if result.get("ok") else 502)
+            except Exception as exc:
+                self._send({"ok": False, "error": str(exc)[:500]}, status=500)
+            return
         if parsed.path != "/tick":
             self._send({"ok": False, "error": "not_found"}, status=404)
             return
@@ -479,6 +574,10 @@ class CerberusHandler(BaseHTTPRequestHandler):
         if not token:
             return True
         return self.headers.get("Authorization") == f"Bearer {token}"
+
+    def _pin_authorized(self, pin: str) -> bool:
+        expected = os.getenv("CERBERUS_PIN", "").strip()
+        return bool(expected and pin and pin == expected)
 
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0") or "0")

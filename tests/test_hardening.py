@@ -1580,6 +1580,69 @@ class HardeningTests(unittest.TestCase):
         self.assertFalse(status["memory_writable"])
         self.assertIn("write blocked", status["memory_error"])
 
+    def test_render_leave_current_game_uses_first_successful_candidate(self) -> None:
+        old_key = os.environ.get("CLAW_ROYALE_API_KEY")
+        old_version = os.environ.get("CLAW_ROYALE_VERSION")
+        old_request = render_app.requests.request
+        calls = []
+
+        class Response:
+            def __init__(self, status_code, text):  # type: ignore[no-untyped-def]
+                self.status_code = status_code
+                self.text = text
+
+        def fake_request(method, url, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append((method, url, kwargs))
+            if url.endswith("/games/game-1/cancel"):
+                return Response(200, '{"ok":true}')
+            return Response(404, "not found")
+
+        try:
+            os.environ["CLAW_ROYALE_API_KEY"] = "mr_test"
+            os.environ["CLAW_ROYALE_VERSION"] = "1.9.0"
+            render_app.requests.request = fake_request  # type: ignore[assignment]
+
+            result = render_app.leave_current_game("game-1")
+        finally:
+            render_app.requests.request = old_request  # type: ignore[assignment]
+            if old_key is None:
+                os.environ.pop("CLAW_ROYALE_API_KEY", None)
+            else:
+                os.environ["CLAW_ROYALE_API_KEY"] = old_key
+            if old_version is None:
+                os.environ.pop("CLAW_ROYALE_VERSION", None)
+            else:
+                os.environ["CLAW_ROYALE_VERSION"] = old_version
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["path"], "/games/game-1/cancel")
+        self.assertEqual(calls[1][2]["headers"]["X-API-Key"], "mr_test")
+
+    def test_render_leave_current_game_reports_failed_candidates(self) -> None:
+        old_key = os.environ.get("CLAW_ROYALE_API_KEY")
+        old_request = render_app.requests.request
+
+        class Response:
+            status_code = 404
+            text = "not found"
+
+        try:
+            os.environ["CLAW_ROYALE_API_KEY"] = "mr_test"
+            render_app.requests.request = lambda *args, **kwargs: Response()  # type: ignore[assignment]
+
+            result = render_app.leave_current_game("game-1<script>")
+        finally:
+            render_app.requests.request = old_request  # type: ignore[assignment]
+            if old_key is None:
+                os.environ.pop("CLAW_ROYALE_API_KEY", None)
+            else:
+                os.environ["CLAW_ROYALE_API_KEY"] = old_key
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["game_id"], "game-1script")
+        self.assertEqual(result["error"], "no_leave_route_accepted")
+        self.assertGreaterEqual(len(result["attempts"]), 3)
+
     def test_claw_paid_join_typed_data_signer_returns_signature(self) -> None:
         from eth_account import Account  # type: ignore
 
