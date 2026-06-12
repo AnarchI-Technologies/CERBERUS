@@ -71,6 +71,13 @@ def remember_game_id(game_id: str) -> None:
             return
 
 
+def clear_game_id() -> None:
+    try:
+        current_game_file().unlink(missing_ok=True)
+    except Exception:
+        return
+
+
 def stream_chat_messages(limit: int = 50) -> list[dict[str, Any]]:
     messages = read_json(stream_chat_file()).get("messages", [])
     if not isinstance(messages, list):

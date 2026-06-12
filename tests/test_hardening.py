@@ -1672,6 +1672,30 @@ class HardeningTests(unittest.TestCase):
 
         self.assertFalse(claw_runtime.wants_action(payload, claw_runtime.unwrap_snapshot(payload)))
 
+    def test_claw_runtime_treats_game_already_over_as_terminal(self) -> None:
+        self.assertTrue(
+            claw_runtime.is_terminal_game_error(
+                "engine dispatch: game already ended"
+            )
+        )
+        self.assertTrue(claw_runtime.is_terminal_game_error("GAME_ALREADY_OVER"))
+        self.assertFalse(claw_runtime.is_terminal_game_error("ACTION_COOLDOWN"))
+
+    def test_runtime_state_can_clear_stale_game_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+            try:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.remember_game_id("stale-game")
+                self.assertEqual(runtime_state.stored_game_id(), "stale-game")
+                runtime_state.clear_game_id()
+                self.assertEqual(runtime_state.stored_game_id(), "")
+            finally:
+                if old_memory_dir is None:
+                    os.environ.pop("CERBERUS_MEMORY_DIR", None)
+                else:
+                    os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
     def test_runtime_state_cache_write_failures_do_not_crash_callers(self) -> None:
         old_write_json = runtime_state.write_json
         try:

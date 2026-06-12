@@ -25,6 +25,7 @@ from env_loader import hydrate_env
 from onboarding_clients import ClawRoyaleClient
 from runtime_state import (
     claw_runtime_status_file,
+    clear_game_id,
     read_json,
     remember_game_id,
     stored_game_id,
@@ -182,6 +183,20 @@ def is_running_game_status(status: str) -> bool:
 
 def is_non_running_game_status(status: str) -> bool:
     return status.lower() in {"waiting", "queued", "assigned", "joined", "created", "pending", "not_started", "lobby"}
+
+
+def is_terminal_game_error(message: str) -> bool:
+    lowered = message.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "game_already_over",
+            "already ended",
+            "game ended",
+            "game is over",
+            "game_over",
+        )
+    )
 
 
 def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
@@ -556,6 +571,20 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 error_text = str(payload.get("message") or payload.get("error") or "")
                 if "not running" in error_text.lower():
                     gameplay_ready = False
+                if is_terminal_game_error(error_text):
+                    clear_game_id()
+                    update_status(
+                        state="game_ended",
+                        last_frame_type=frame_type,
+                        current_game_id="",
+                        game_status="ended",
+                        gameplay_ready=False,
+                        can_act=False,
+                        cooldown_remaining_ms=0,
+                        last_error=error_text,
+                    )
+                    await ws.close(code=1000, reason="terminal game error")
+                    return
                 update_status(
                     state=frame_type,
                     last_frame_type=frame_type,
@@ -598,6 +627,19 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 gameplay_ready = True
             elif is_non_running_game_status(status):
                 gameplay_ready = False
+            elif is_terminal_game_error(str(payload.get("message") or payload.get("error") or status)):
+                clear_game_id()
+                update_status(
+                    state="game_ended",
+                    last_frame_type=frame_type,
+                    current_game_id="",
+                    game_status="ended",
+                    gameplay_ready=False,
+                    can_act=False,
+                    last_error=str(payload.get("message") or payload.get("error") or status),
+                )
+                await ws.close(code=1000, reason="terminal game error")
+                return
             update_status(
                 last_frame_type=frame_type,
                 current_game_id=game_id or stored_game_id(),
