@@ -13,6 +13,7 @@ from secret_vault import SecretVaultError, read_vault, write_vault
 
 IDENTITY_VERSION = 1
 DEFAULT_PUBLIC_NAME = "Hellion-Meet-Your-Molty-Maker"
+DEFAULT_V2_PUBLIC_NAME = f"{DEFAULT_PUBLIC_NAME}-v2"
 DEFAULT_IDENTITY_VAULT = DEFAULT_MEMORY_DIR / "identity.vault.json"
 
 

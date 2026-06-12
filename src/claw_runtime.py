@@ -315,6 +315,43 @@ def should_prefer_free_room(config: ClawRuntimeConfig, welcome: dict[str, Any] |
     return summary["paid_rooms"] > 0 and summary["paid_occupied"] == 0
 
 
+def account_paid_ready(account: dict[str, Any], *, minimum_smoltz: float = 500.0) -> bool:
+    if not account.get("ok"):
+        return False
+    readiness = account.get("readiness") if isinstance(account.get("readiness"), dict) else {}
+    if readiness.get("paidReady") is True:
+        return True
+    try:
+        balance = float(account.get("balance") or 0)
+    except (TypeError, ValueError):
+        balance = 0.0
+    return (
+        bool(readiness.get("walletAddress"))
+        and bool(readiness.get("scWallet"))
+        and bool(readiness.get("whitelistApproved"))
+        and balance >= minimum_smoltz
+    )
+
+
+def account_identity_ready(account: dict[str, Any]) -> bool:
+    readiness = account.get("readiness") if isinstance(account.get("readiness"), dict) else {}
+    return bool(readiness.get("identity") or readiness.get("erc8004_identity") or readiness.get("identityReady"))
+
+
+def join_blocker_for_account(config: ClawRuntimeConfig, account: dict[str, Any]) -> str:
+    if not account.get("ok"):
+        return str(account.get("error") or "account status unavailable")
+    paid_ready = account_paid_ready(account)
+    identity_ready = account_identity_ready(account)
+    if config.mode != "free" and not paid_ready and not identity_ready:
+        return "paused before join: v2 needs ERC-8004 identity or at least 500 sMoltz paid balance"
+    if config.mode == "free" and not identity_ready:
+        return "paused before free join: v2 needs ERC-8004 identity"
+    if config.mode != "free" and not paid_ready:
+        return "paid join blocked: v2 needs at least 500 sMoltz balance or on-chain paid readiness"
+    return ""
+
+
 def hello_frame(config: ClawRuntimeConfig, welcome: dict[str, Any] | None = None) -> dict[str, Any] | None:
     decision = str((welcome or {}).get("decision") or "").upper()
     if decision in NO_HELLO_DECISIONS:
@@ -464,6 +501,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     url = websocket_url(config, path)
     extra_headers = config.headers
     account_status = account_status_summary(config)
+    join_blocker = join_blocker_for_account(config, account_status)
     update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, account=account_status, last_error="")
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
         gameplay_ready = False
@@ -481,7 +519,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 await ws.send(json.dumps({"type": "pong"}))
                 continue
             if frame_type == "welcome":
-                frame = hello_frame(config, payload)
+                frame = None if join_blocker else hello_frame(config, payload)
                 room_summary = room_choice_summary(payload)
                 update_status(
                     state="welcomed",
@@ -495,7 +533,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                         else "server_or_config_default"
                     ),
                     join_room_summary=room_summary,
-                    last_error="" if frame else str(payload.get("instruction") or ""),
+                    last_error=join_blocker or ("" if frame else str(payload.get("instruction") or "")),
                 )
                 if frame:
                     await ws.send(json.dumps(frame, ensure_ascii=True, separators=(",", ":")))

@@ -8,9 +8,12 @@ wallet libraries are available.
 from __future__ import annotations
 
 import argparse
+import shutil
 import os
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +23,8 @@ for folder in (ROOT / "src", ROOT / "data"):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from identity_vault import DEFAULT_PUBLIC_NAME, IdentityVault  # noqa: E402
+from env_loader import hydrate_env  # noqa: E402
+from identity_vault import DEFAULT_PUBLIC_NAME, DEFAULT_V2_PUBLIC_NAME, IdentityVault, empty_identity  # noqa: E402
 from onboarding_clients import (  # noqa: E402
     AgentMailClient,
     ClawRoyaleClient,
@@ -39,12 +43,22 @@ except ImportError:
     pass
 
 
-HELLION_DESCRIPTION = (
-    "Hellion-Meet-Your-Molty-Maker is a Cerberus-backed Claw Royale agent: "
-    "tactical, survivable, and careful with secrets."
-)
 DEFAULT_TWITCH_USERNAME = "hellionmoltymaker"
 TWITCH_SIGNUP_URL = "https://www.twitch.tv/signup"
+BOOTSTRAP_ENV_NAMES = (
+    "CERBERUS_PIN",
+    "CERBERUS_PUBLIC_NAME",
+    "CERBERUS_OWNER_EOA",
+    "CERBERUS_OWNER_PRIVATE_KEY",
+    "CLAW_ONBOARDING_TOKEN",
+    "AGENTMAIL_API_KEY",
+    "AGENTMAIL_INBOX_ID",
+    "AGENTMAIL_EMAIL",
+    "TWITCH_USERNAME",
+    "HELLION_TWITCH_USERNAME",
+    "TWITCH_ACCOUNT_CREATED",
+    "MOLTBOOK_API_KEY",
+)
 
 
 @dataclass(slots=True)
@@ -62,8 +76,44 @@ class BootstrapResult:
 
 
 def ensure_wallets(identity: dict[str, Any], result: BootstrapResult) -> None:
+    ensure_wallet_roles(identity, result)
+
+
+def identity_public_name(identity: dict[str, Any], override: str = "") -> str:
+    return str(override or identity.get("public_name") or os.getenv("CERBERUS_PUBLIC_NAME") or DEFAULT_PUBLIC_NAME).strip()
+
+
+def hellion_description(public_name: str) -> str:
+    return (
+        f"{public_name} is a Cerberus-backed Claw Royale agent: "
+        "tactical, survivable, and careful with secrets."
+    )
+
+
+def _slug(value: str) -> str:
+    return "-".join("".join(ch.lower() if ch.isalnum() else "-" for ch in value).split("-"))
+
+
+def moltbook_name(public_name: str) -> str:
+    configured = os.getenv("MOLTBOOK_PUBLIC_NAME", "").strip()
+    if configured:
+        return configured[:30]
+    if len(public_name) <= 30:
+        return public_name
+    if public_name == DEFAULT_V2_PUBLIC_NAME:
+        return "Hellion-Molty-Maker-v2"
+    return _slug(public_name)[:30].strip("-_") or "Hellion"
+
+
+def ensure_wallet_roles(
+    identity: dict[str, Any],
+    result: BootstrapResult,
+    *,
+    force_generate: bool = False,
+    allow_env_owner: bool = True,
+) -> None:
     wallets = identity.setdefault("wallets", {})
-    if "agent_eoa" not in wallets:
+    if force_generate or "agent_eoa" not in wallets:
         wallet = generate_evm_wallet(
             "agent_eoa",
             "Claw account wallet, EIP-712 paid joins, and reward identity.",
@@ -71,10 +121,10 @@ def ensure_wallets(identity: dict[str, Any], result: BootstrapResult) -> None:
         wallets["agent_eoa"] = wallet.as_secret()
         result.add_done(f"Generated Agent EOA {wallet.address}")
 
-    if "owner_eoa" not in wallets:
+    if force_generate or "owner_eoa" not in wallets:
         existing_owner = os.getenv("CERBERUS_OWNER_EOA", "")
         existing_owner_pk = os.getenv("CERBERUS_OWNER_PRIVATE_KEY", "")
-        if existing_owner and existing_owner_pk and validate_evm_address(existing_owner):
+        if allow_env_owner and existing_owner and existing_owner_pk and validate_evm_address(existing_owner):
             wallets["owner_eoa"] = {
                 "address": existing_owner,
                 "private_key": existing_owner_pk,
@@ -98,7 +148,8 @@ def ensure_claw_account(
     client: ClawRoyaleClient | None = None,
 ) -> None:
     claw = identity.setdefault("claw_royale", {})
-    claw["public_name"] = DEFAULT_PUBLIC_NAME
+    public_name = identity_public_name(identity)
+    claw["public_name"] = public_name
     if claw.get("api_key"):
         result.add_done("Claw Royale API key already stored")
         return
@@ -115,7 +166,7 @@ def ensure_claw_account(
         else:
             result.add_blocker("Claw onboarding requires owner_eoa private key or CLAW_ONBOARDING_TOKEN")
             return
-    response = api.create_account(DEFAULT_PUBLIC_NAME, agent_wallet["address"])
+    response = api.create_account(public_name, agent_wallet["address"])
     api_key = response.get("apiKey") or response.get("api_key")
     if not api_key:
         raise OnboardingAPIError("claw_royale", 0, "POST /accounts returned no apiKey", response)
@@ -127,7 +178,7 @@ def ensure_claw_account(
             "agent_wallet_address": agent_wallet["address"],
         }
     )
-    result.add_done(f"Registered {DEFAULT_PUBLIC_NAME} on Claw Royale and stored API key")
+    result.add_done(f"Registered {public_name} on Claw Royale and stored API key")
 
 
 def ensure_molty_wallet(
@@ -164,6 +215,7 @@ def ensure_agentmail(
     client: AgentMailClient | None = None,
 ) -> None:
     mail = identity.setdefault("agentmail", {})
+    public_name = identity_public_name(identity)
     if mail.get("email"):
         result.add_done(f"AgentMail inbox already stored: {mail['email']}")
         return
@@ -178,7 +230,7 @@ def ensure_agentmail(
                 "api_key": os.getenv("AGENTMAIL_API_KEY", ""),
                 "inbox_id": inbox_id,
                 "email": email,
-                "display_name": DEFAULT_PUBLIC_NAME,
+                "display_name": public_name,
                 "source": "env_import",
             }
         )
@@ -191,13 +243,13 @@ def ensure_agentmail(
         return
     api_key = os.getenv("AGENTMAIL_API_KEY", "")
     if not api_key and not (client and getattr(client, "api_key", "")):
-        result.add_blocker(f"Set AGENTMAIL_API_KEY so {DEFAULT_PUBLIC_NAME} can create her AgentMail inbox")
+        result.add_blocker(f"Set AGENTMAIL_API_KEY so {public_name} can create her AgentMail inbox")
         return
     api = client or AgentMailClient(api_key=api_key)
     inbox = api.create_inbox(
-        username="hellion-meet-your-molty-maker",
-        display_name=DEFAULT_PUBLIC_NAME,
-        client_id="cerberus-hellion-primary-inbox-v1",
+        username=_slug(public_name),
+        display_name=public_name,
+        client_id=f"cerberus-{_slug(public_name)}-primary-inbox-v1",
     )
     mail.update(
         {
@@ -205,7 +257,7 @@ def ensure_agentmail(
             "api_key": api.api_key,
             "inbox_id": inbox.get("inbox_id") or inbox.get("inboxId") or inbox.get("email", ""),
             "email": inbox.get("email") or inbox.get("inbox_id") or "",
-            "display_name": DEFAULT_PUBLIC_NAME,
+            "display_name": public_name,
         }
     )
     identity.setdefault("wallets", {})["agentmail_inbox"] = {
@@ -222,12 +274,15 @@ def ensure_moltbook(
     client: MoltbookClient | None = None,
 ) -> None:
     moltbook = identity.setdefault("moltbook", {})
-    moltbook["public_name"] = DEFAULT_PUBLIC_NAME
+    public_name = identity_public_name(identity)
+    service_name = moltbook_name(public_name)
+    moltbook["public_name"] = service_name
+    moltbook["canonical_public_name"] = public_name
     if moltbook.get("api_key"):
         result.add_done("Moltbook API key already stored")
         return
     api = client or MoltbookClient()
-    response = api.register_agent(DEFAULT_PUBLIC_NAME, HELLION_DESCRIPTION)
+    response = api.register_agent(service_name, hellion_description(public_name))
     api_key = response.get("api_key") or response.get("apiKey")
     if not api_key:
         raise OnboardingAPIError("moltbook", 0, "registration returned no api_key", response)
@@ -242,11 +297,11 @@ def ensure_moltbook(
         }
     )
     identity.setdefault("wallets", {})["moltbook_agent"] = {
-        "address": moltbook.get("agent_id", DEFAULT_PUBLIC_NAME),
+        "address": moltbook.get("agent_id", service_name),
         "role": "moltbook_agent",
         "purpose": "Moltbook public identity and social API key.",
     }
-    result.add_done(f"Registered {DEFAULT_PUBLIC_NAME} on Moltbook and stored API key")
+    result.add_done(f"Registered {service_name} on Moltbook and stored API key")
     if moltbook.get("claim_url"):
         result.add_blocker(
             "Moltbook returned a claim URL; external claim verification may still be required"
@@ -292,11 +347,88 @@ def ensure_twitch_account(identity: dict[str, Any], result: BootstrapResult) -> 
         result.add_blocker(f"Complete Hellion's Twitch signup and verification at {TWITCH_SIGNUP_URL} using {email}")
 
 
-def bootstrap_identity(*, execute_external: bool = False, vault: IdentityVault | None = None) -> BootstrapResult:
+def backup_vault_file(path: Path) -> Path | None:
+    if not path.exists():
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup = path.with_name(f"{path.stem}.{stamp}.backup{path.suffix}")
+    shutil.copy2(path, backup)
+    return backup
+
+
+def rotate_identity_v2(
+    *,
+    execute_external: bool = False,
+    vault: IdentityVault | None = None,
+    public_name: str = DEFAULT_V2_PUBLIC_NAME,
+) -> BootstrapResult:
+    hydrate_env(BOOTSTRAP_ENV_NAMES)
     store = vault or IdentityVault().load()
     result = BootstrapResult()
     store.require_pin_ready()
-    store.data["public_name"] = DEFAULT_PUBLIC_NAME
+    old_summary = store.public_summary()
+    backup = backup_vault_file(store.path)
+
+    preserved_agentmail = deepcopy(store.data.get("agentmail", {}))
+    preserved_agentmail_wallet = deepcopy(store.data.get("wallets", {}).get("agentmail_inbox", {}))
+    preserved_twitch = deepcopy(store.data.get("twitch_account", {}))
+    preserved_twitch_wallet = deepcopy(store.data.get("wallets", {}).get("twitch_account", {}))
+
+    store.data = empty_identity(public_name)
+    if preserved_agentmail:
+        store.data["agentmail"] = preserved_agentmail
+    if preserved_agentmail_wallet:
+        store.data.setdefault("wallets", {})["agentmail_inbox"] = preserved_agentmail_wallet
+    if preserved_twitch:
+        store.data["twitch_account"] = preserved_twitch
+    if preserved_twitch_wallet:
+        store.data.setdefault("wallets", {})["twitch_account"] = preserved_twitch_wallet
+    store.data["previous_identity"] = {
+        "rotated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "public_name": old_summary.get("public_name", ""),
+        "backup_path": str(backup or ""),
+        "agent_eoa_address": old_summary.get("wallets", {}).get("agent_eoa", {}).get("address", ""),
+        "owner_eoa_address": old_summary.get("wallets", {}).get("owner_eoa", {}).get("address", ""),
+        "molty_royale_wallet_address": old_summary.get("wallets", {}).get("molty_royale_wallet", {}).get("address", ""),
+        "claw_account_id": old_summary.get("claw_royale", {}).get("account_id", ""),
+    }
+    if backup:
+        result.add_done(f"Backed up previous encrypted identity vault to {backup}")
+
+    try:
+        ensure_wallet_roles(store.data, result, force_generate=True, allow_env_owner=False)
+    except WalletDependencyError as exc:
+        result.add_blocker(str(exc))
+
+    if execute_external and not result.blockers:
+        for step in (ensure_claw_account, ensure_molty_wallet, ensure_agentmail, ensure_twitch_account, ensure_moltbook):
+            try:
+                step(store.data, result)
+            except (OnboardingAPIError, SecretVaultError) as exc:
+                result.add_blocker(str(exc))
+    elif not execute_external:
+        result.add_blocker("External registration skipped; rerun with --execute to register the v2 identity")
+
+    for message in result.completed:
+        store.event(message)
+    for message in result.blockers:
+        store.blocker(message)
+    store.save()
+    result.summary = store.public_summary()
+    return result
+
+
+def bootstrap_identity(
+    *,
+    execute_external: bool = False,
+    vault: IdentityVault | None = None,
+    public_name: str = "",
+) -> BootstrapResult:
+    hydrate_env(BOOTSTRAP_ENV_NAMES)
+    store = vault or IdentityVault().load()
+    result = BootstrapResult()
+    store.require_pin_ready()
+    store.data["public_name"] = identity_public_name(store.data, public_name)
 
     try:
         ensure_wallets(store.data, result)
@@ -324,8 +456,17 @@ def bootstrap_identity(*, execute_external: bool = False, vault: IdentityVault |
 def _cli() -> int:
     parser = argparse.ArgumentParser(description="Bootstrap Hellion identity into the Cerberus vault")
     parser.add_argument("--execute", action="store_true", help="Call external registration APIs")
+    parser.add_argument("--public-name", default="", help="Public name for newly registered services")
+    parser.add_argument(
+        "--rotate-v2",
+        action="store_true",
+        help="Backup the current encrypted vault, generate fresh v2 wallets, and register the v2 identity",
+    )
     args = parser.parse_args()
-    result = bootstrap_identity(execute_external=args.execute)
+    if args.rotate_v2:
+        result = rotate_identity_v2(execute_external=args.execute, public_name=args.public_name or DEFAULT_V2_PUBLIC_NAME)
+    else:
+        result = bootstrap_identity(execute_external=args.execute, public_name=args.public_name)
     print("completed:")
     for item in result.completed:
         print(f"- {item}")

@@ -36,10 +36,13 @@ from identity_bootstrap import (
     ensure_molty_wallet,
     ensure_twitch_account,
     ensure_wallets,
+    ensure_wallet_roles,
+    identity_public_name,
+    moltbook_name,
     BootstrapResult,
 )
 from isolated_runtime import IsolatedCerberusInstance
-from identity_vault import DEFAULT_PUBLIC_NAME, empty_identity
+from identity_vault import DEFAULT_PUBLIC_NAME, DEFAULT_V2_PUBLIC_NAME, empty_identity
 from knowledge_base import KnowledgeBase
 from memory_system import CompactMemoryStore
 from moltbook_claim_assistant import extract_moltbook_claims, stored_claim, verification_text
@@ -764,6 +767,93 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("molty_royale_wallet", identity["wallets"])
         self.assertTrue(any("claim URL" in blocker for blocker in result.blockers))
 
+    def test_external_onboarding_uses_identity_public_name_override(self) -> None:
+        calls = {}
+
+        class FakeClaw:
+            onboarding_token = "onboard_test"
+
+            def create_account(self, name, wallet_address):  # type: ignore[no-untyped-def]
+                calls["claw_name"] = name
+                return {"apiKey": "mr_live_test", "accountId": "acct_1", "publicId": "pub_1"}
+
+        class FakeMail:
+            api_key = "am_test"
+
+            def create_inbox(self, username, display_name, client_id):  # type: ignore[no-untyped-def]
+                calls["mail_username"] = username
+                calls["mail_display_name"] = display_name
+                return {"inbox_id": f"{username}@agentmail.to", "email": f"{username}@agentmail.to"}
+
+        class FakeMoltbook:
+            def register_agent(self, name, description):  # type: ignore[no-untyped-def]
+                calls["moltbook_name"] = name
+                calls["moltbook_description"] = description
+                return {"api_key": "moltbook_test", "agent_id": "agt_v2"}
+
+        identity = empty_identity(DEFAULT_V2_PUBLIC_NAME)
+        identity["wallets"]["agent_eoa"] = {"address": "0x" + "1" * 40, "private_key": "agent_pk"}
+        result = BootstrapResult()
+
+        ensure_claw_account(identity, result, client=FakeClaw())
+        ensure_agentmail(identity, result, client=FakeMail())
+        ensure_moltbook(identity, result, client=FakeMoltbook())
+
+        self.assertEqual(identity_public_name(identity), DEFAULT_V2_PUBLIC_NAME)
+        self.assertEqual(calls["claw_name"], DEFAULT_V2_PUBLIC_NAME)
+        self.assertEqual(calls["mail_display_name"], DEFAULT_V2_PUBLIC_NAME)
+        self.assertEqual(calls["mail_username"], "hellion-meet-your-molty-maker-v2")
+        self.assertEqual(calls["moltbook_name"], "Hellion-Molty-Maker-v2")
+        self.assertIn(DEFAULT_V2_PUBLIC_NAME, calls["moltbook_description"])
+
+    def test_moltbook_name_respects_service_length_limit(self) -> None:
+        self.assertEqual(moltbook_name(DEFAULT_V2_PUBLIC_NAME), "Hellion-Molty-Maker-v2")
+        self.assertLessEqual(len(moltbook_name(DEFAULT_V2_PUBLIC_NAME)), 30)
+
+    def test_force_wallet_generation_ignores_old_owner_env(self) -> None:
+        old_generator = identity_bootstrap.generate_evm_wallet
+        old_owner = os.environ.get("CERBERUS_OWNER_EOA")
+        old_owner_key = os.environ.get("CERBERUS_OWNER_PRIVATE_KEY")
+        generated = []
+
+        def fake_generate(role: str, purpose: str):  # type: ignore[no-untyped-def]
+            generated.append(role)
+
+            class FakeWallet:
+                address = "0x" + ("a" if role == "agent_eoa" else "b") * 40
+                private_key = "0xsecret"
+
+                def as_secret(self):  # type: ignore[no-untyped-def]
+                    return {
+                        "address": self.address,
+                        "private_key": self.private_key,
+                        "role": role,
+                        "purpose": purpose,
+                    }
+
+            return FakeWallet()
+
+        os.environ["CERBERUS_OWNER_EOA"] = "0x" + "9" * 40
+        os.environ["CERBERUS_OWNER_PRIVATE_KEY"] = "old_owner_secret"
+        try:
+            identity_bootstrap.generate_evm_wallet = fake_generate
+            identity = empty_identity(DEFAULT_V2_PUBLIC_NAME)
+            result = BootstrapResult()
+            ensure_wallet_roles(identity, result, force_generate=True, allow_env_owner=False)
+        finally:
+            identity_bootstrap.generate_evm_wallet = old_generator
+            if old_owner is None:
+                os.environ.pop("CERBERUS_OWNER_EOA", None)
+            else:
+                os.environ["CERBERUS_OWNER_EOA"] = old_owner
+            if old_owner_key is None:
+                os.environ.pop("CERBERUS_OWNER_PRIVATE_KEY", None)
+            else:
+                os.environ["CERBERUS_OWNER_PRIVATE_KEY"] = old_owner_key
+
+        self.assertEqual(generated, ["agent_eoa", "owner_eoa"])
+        self.assertEqual(identity["wallets"]["owner_eoa"]["address"], "0x" + "b" * 40)
+
     def test_twitch_onboarding_tracks_manual_signup_with_agentmail_email(self) -> None:
         old_username = os.environ.get("TWITCH_USERNAME")
         old_hellion_username = os.environ.get("HELLION_TWITCH_USERNAME")
@@ -1255,6 +1345,24 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(claw_identity_token.extract_identity_id(payload), "12345")
 
+    def test_claw_identity_token_extracts_minted_transfer_token_id(self) -> None:
+        owner = "0x" + "a" * 40
+        receipt = {
+            "logs": [
+                {
+                    "address": claw_identity_token.IDENTITY_REGISTRY_ADDRESS,
+                    "topics": [
+                        claw_identity_token.TRANSFER_TOPIC,
+                        "0x" + "0" * 64,
+                        "0x" + "0" * 24 + "a" * 40,
+                        "0x" + hex(4321)[2:].rjust(64, "0"),
+                    ],
+                }
+            ]
+        }
+
+        self.assertEqual(claw_identity_token.extract_minted_token_id(receipt, owner), "4321")
+
     def test_claw_identity_attach_stores_token_status(self) -> None:
         class FakeVault:
             def __init__(self):
@@ -1523,6 +1631,41 @@ class HardeningTests(unittest.TestCase):
                 os.environ.pop("CLAW_ROYALE_FREE_FALLBACK_ENABLED", None)
             else:
                 os.environ["CLAW_ROYALE_FREE_FALLBACK_ENABLED"] = old_fallback
+
+    def test_claw_runtime_blocks_paid_join_when_v2_has_no_balance_or_identity(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        account = {
+            "ok": True,
+            "balance": 0,
+            "readiness": {
+                "walletAddress": True,
+                "scWallet": True,
+                "whitelistApproved": True,
+                "identity": False,
+                "paidReady": False,
+            },
+        }
+
+        self.assertFalse(claw_runtime.account_paid_ready(account))
+        self.assertFalse(claw_runtime.account_identity_ready(account))
+        self.assertIn("paused before join", claw_runtime.join_blocker_for_account(config, account))
+
+    def test_claw_runtime_allows_paid_join_when_paid_ready(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        account = {
+            "ok": True,
+            "balance": 500,
+            "readiness": {
+                "walletAddress": True,
+                "scWallet": True,
+                "whitelistApproved": True,
+                "identity": False,
+                "paidReady": True,
+            },
+        }
+
+        self.assertTrue(claw_runtime.account_paid_ready(account))
+        self.assertEqual(claw_runtime.join_blocker_for_account(config, account), "")
 
     def test_claw_runtime_does_not_act_when_can_act_false(self) -> None:
         payload = {"type": "agent_view", "data": {"gameId": "g1", "canAct": False, "view": {"canAct": False}}}
