@@ -62,6 +62,17 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
 
         self.assertFalse(claw_runtime.wants_action(payload, claw_runtime.unwrap_snapshot(payload), gameplay_ready=True))
 
+    def test_hollow_agent_view_does_not_trigger_action(self) -> None:
+        payload = {
+            "type": "agent_view",
+            "gameId": "game-1",
+            "status": "running",
+            "canAct": True,
+            "view": {},
+        }
+
+        self.assertFalse(claw_runtime.wants_action(payload, claw_runtime.unwrap_snapshot(payload), gameplay_ready=True))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from cortex_types import Cortex, CortexResult, rest_action
+from cortex_types import Cortex, CortexResult, action, rest_action
 from knowledge_base import KnowledgeBase
 from memory_system import CompactMemoryStore
 from turn_state_model import TurnState
@@ -42,9 +42,10 @@ class Arbiter:
         pool = vetoes or candidates
 
         if not pool:
+            fallback = active_fallback_action(state)
             return ArbiterDecision(
-                action=rest_action("no cortex produced an action"),
-                reason="no cortex produced an action",
+                action=fallback,
+                reason=str(fallback.get("reason") or "no cortex produced an action"),
                 candidates=[result.to_plan_entry() for result in results],
                 side_effects=side_effects,
             )
@@ -61,6 +62,26 @@ class Arbiter:
             candidates=[result.to_plan_entry() for result in results],
             side_effects=side_effects,
         )
+
+
+def active_fallback_action(state: TurnState) -> dict[str, Any]:
+    if not state.can_take_main_action:
+        return rest_action("waiting for main-action cooldown")
+    if state.self.ep <= 0:
+        return rest_action("EP empty; recover before movement")
+    for region in state.connected_safe_regions():
+        region_id = region.get("id") if isinstance(region, dict) else ""
+        if region_id:
+            return action("move", regionId=region_id, reason="scout fallback; no higher-priority cortex action")
+    if state.current_region.terrain.lower() == "ruin" or "ruin" in state.current_region.name.lower():
+        return action("explore", reason="scout fallback; ruin present and no higher-priority action")
+    if state.visible_regions:
+        current_id = state.current_region.id
+        for region in state.visible_regions:
+            region_id = str(region.get("id") or region.get("regionId") or "")
+            if region_id and region_id != current_id and not region.get("isDeathZone"):
+                return action("move", regionId=region_id, reason="scout fallback; move to visible region")
+    return action("explore", reason="scout fallback; reveal map options")
 
 
 def make_plan(

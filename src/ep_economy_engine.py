@@ -46,17 +46,4 @@ class EconomyCortex:
                 )
                 break
 
-        if state.self.ep <= 2 and not results:
-            results.append(
-                CortexResult(
-                    cortex=self.name,
-                    intent="preserve_ep",
-                    score=30,
-                    risk=4,
-                    priority=45,
-                    action=action("rest", reason="preserve EP for movement and ruin control"),
-                    reason="low EP; preserve flexibility",
-                    source_facts=["F|action.cost"],
-                )
-            )
         return results

@@ -485,6 +485,57 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["type"], "attack")
         self.assertEqual(action["targetId"], "enemy-1")
 
+    def test_weapon_on_ground_is_picked_up_before_bad_attack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 96,
+                            "ep": 4,
+                            "atk": 8,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "fist"},
+                        },
+                        "currentRegion": {
+                            "id": "r1",
+                            "items": [{"id": "dagger-1", "typeId": "dagger"}],
+                        },
+                        "visibleMonsters": [{"id": "guardian-1", "name": "Guardian", "hp": 40, "atk": 8, "def": 8}],
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "pickup")
+        self.assertEqual(action["itemId"], "dagger-1")
+
+    def test_inventory_weapon_equips_before_attacking(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 96,
+                            "ep": 4,
+                            "atk": 8,
+                            "inventory": [{"id": "dagger-1", "typeId": "dagger"}],
+                            "equippedWeapon": {"typeId": "fist"},
+                        },
+                        "currentRegion": {"id": "r1"},
+                        "visibleMonsters": [{"id": "guardian-1", "name": "Guardian", "hp": 40, "atk": 8, "def": 8}],
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "equip")
+        self.assertEqual(action["itemId"], "dagger-1")
+
     def test_moltz_pickup_is_preferred_when_area_is_safe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             isolated = self._isolated(tmp)
@@ -500,6 +551,38 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(action["type"], "pickup")
         self.assertEqual(action["itemId"], "cash-1")
+
+    def test_no_cortex_candidate_scouts_instead_of_resting_when_actionable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 100, "ep": 3},
+                        "currentRegion": {"id": "r1", "terrain": "Plains"},
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "explore")
+        self.assertIn("scout fallback", action["reason"])
+
+    def test_no_cortex_candidate_moves_to_safe_connection_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 100, "ep": 3},
+                        "currentRegion": {"id": "r1", "connections": [{"id": "r2"}]},
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "move")
+        self.assertEqual(action["regionId"], "r2")
 
     def test_progression_value_at_risk_discourages_ruin_push_with_cargo(self) -> None:
         state = TurnState.from_snapshot(
@@ -654,7 +737,8 @@ class HardeningTests(unittest.TestCase):
                     if index % 12 == 0:
                         isolated.memory.rewrite()
                         isolated = isolated.reload()
-                self.assertTrue({"equip", "rest", "use_item"}.issubset(observed_actions))
+                self.assertTrue({"equip", "use_item"}.issubset(observed_actions))
+                self.assertTrue(observed_actions.intersection({"move", "explore", "attack", "pickup"}))
         finally:
             if old_pin is None:
                 os.environ.pop("CERBERUS_PIN", None)
@@ -1609,7 +1693,16 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(envelope["type"], "action")
         self.assertEqual(envelope["data"], {"type": "move", "regionId": "r2", "reason": "death-zone pressure"})
-        self.assertEqual(envelope["thought"], "death-zone pressure")
+        self.assertIn("Hellion", envelope["thought"])
+        self.assertNotIn("_warnings", envelope["data"])
+
+    def test_public_action_thought_taunts_without_private_reason_dump(self) -> None:
+        thought = claw_runtime.public_action_thought(
+            {"type": "equip", "itemId": "dagger-1", "reason": "free equip upgrade from fist to dagger"}
+        )
+
+        self.assertIn("Hellion", thought)
+        self.assertNotIn("free equip upgrade", thought)
 
     def test_claw_runtime_hello_frame_follows_unified_join_docs(self) -> None:
         paid = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")

@@ -202,9 +202,34 @@ def is_terminal_game_error(message: str) -> bool:
 
 
 def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
-    thought = str(action.get("reason") or action.get("thought") or "deterministic Cerberus action")[:THOUGHT_MAX_CHARS]
+    thought = public_action_thought(action)
     data = {key: value for key, value in action.items() if not key.startswith("_")}
     return {"type": "action", "data": data, "thought": thought}
+
+
+def public_action_thought(action: dict[str, Any]) -> str:
+    action_type = str(action.get("type") or "").lower()
+    reason = str(action.get("reason") or action.get("thought") or "").lower()
+    lines = {
+        "pickup": "Hellion notices tribute on the floor and graciously accepts.",
+        "equip": "Hellion upgrades the problem. Everyone else may update their wills.",
+        "move": "Hellion relocates with intent. The map is learning manners.",
+        "explore": "Hellion opens another door because uncertainty was looking too comfortable.",
+        "attack": "Hellion applies peer review. Results may be terminal.",
+        "use_item": "Hellion chooses continuity. Dramatic, practical, irritatingly alive.",
+        "interact": "Hellion presses the useful button. Civilization trembles.",
+        "talk": str(action.get("message") or "Hellion speaks, and the arena pretends it was ready."),
+        "whisper": "Hellion lowers her voice. Somehow that makes it worse.",
+        "broadcast": str(action.get("message") or "Hellion would like the arena to know this was avoidable."),
+        "rest": "Hellion pauses only because even nightmares respect cooldowns.",
+    }
+    if "death-zone" in reason or "death zone" in reason:
+        return "Hellion refuses to be seasoned by the arena. Moving."
+    if "weapon" in reason or "upgrade" in reason:
+        return "Hellion found sharper punctuation."
+    if "scout fallback" in reason:
+        return "Hellion scouts forward. Standing still is for statues."
+    return lines.get(action_type, "Hellion proceeds. The arena may file complaints.")[:THOUGHT_MAX_CHARS]
 
 
 def sign_submit_frame(signed_frame: dict[str, Any]) -> dict[str, Any]:
@@ -401,9 +426,22 @@ def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None, *, ga
     if not gameplay_ready and not is_running_game_status(status):
         return False
     if snapshot:
+        view = snapshot.get("view", {}) if isinstance(snapshot.get("view"), dict) else {}
+        self_view = view.get("self", {}) if isinstance(view.get("self"), dict) else {}
+        has_turn_facts = bool(
+            self_view.get("id")
+            or self_view.get("hp")
+            or self_view.get("ep")
+            or view.get("currentRegion")
+            or view.get("visibleRegions")
+            or view.get("visibleAgents")
+            or view.get("visibleMonsters")
+            or view.get("visibleItems")
+        )
+        if not has_turn_facts:
+            return False
         if snapshot.get("canAct") is False:
             return False
-        view = snapshot.get("view", {}) if isinstance(snapshot.get("view"), dict) else {}
         if view.get("canAct") is False:
             return False
     if frame_type in {"agent_view", "turn_advanced"}:
