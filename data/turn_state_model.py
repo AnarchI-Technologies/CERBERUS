@@ -128,7 +128,17 @@ class TurnState:
             turn=_as_int(snapshot.get("turn") or view.get("turn")),
             self=parse_agent(self_raw),
             current_region=parse_region(region_raw),
-            connected_regions=_as_list(region_raw.get("connections") or view.get("connectedRegions")),
+            connected_regions=_as_list(
+                region_raw.get("connections")
+                or region_raw.get("connectedRegions")
+                or region_raw.get("neighbors")
+                or region_raw.get("adjacentRegions")
+                or region_raw.get("exits")
+                or view.get("connectedRegions")
+                or view.get("neighbors")
+                or view.get("adjacentRegions")
+                or view.get("exits")
+            ),
             visible_regions=[r for r in _as_list(view.get("visibleRegions")) if isinstance(r, dict)],
             visible_agents=[parse_agent(a) for a in _as_list(view.get("visibleAgents")) if isinstance(a, dict)],
             visible_monsters=[parse_agent(m, kind="monster") for m in _as_list(view.get("visibleMonsters")) if isinstance(m, dict)],

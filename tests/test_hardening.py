@@ -414,6 +414,53 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["type"], "use_item")
         self.assertEqual(action["itemId"], "med-1")
 
+    def test_death_zone_pressure_uses_visible_region_when_connections_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 80, "ep": 3},
+                        "currentRegion": {"id": "r1", "isDeathZone": True},
+                        "visibleRegions": [
+                            {"id": "r1", "isDeathZone": True},
+                            {"id": "r2", "isDeathZone": False},
+                        ],
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "move")
+        self.assertEqual(action["regionId"], "r2")
+
+    def test_death_zone_pressure_explores_instead_of_resting_when_no_region_parse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 80, "ep": 2},
+                        "currentRegion": {"id": "r1", "isDeathZone": True},
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "explore")
+
+    def test_turn_state_parses_alternate_connection_fields(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 80, "ep": 3},
+                    "currentRegion": {"id": "r1", "adjacentRegions": [{"id": "r2"}]},
+                }
+            }
+        )
+
+        self.assertEqual(state.connected_safe_regions()[0]["id"], "r2")
+
     def test_favorable_fight_attacks_when_main_action_is_available(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             isolated = self._isolated(tmp)
@@ -1679,6 +1726,7 @@ class HardeningTests(unittest.TestCase):
             )
         )
         self.assertTrue(claw_runtime.is_terminal_game_error("GAME_ALREADY_OVER"))
+        self.assertTrue(claw_runtime.is_terminal_game_error("AGENT_DEAD"))
         self.assertFalse(claw_runtime.is_terminal_game_error("ACTION_COOLDOWN"))
 
     def test_runtime_state_can_clear_stale_game_id(self) -> None:

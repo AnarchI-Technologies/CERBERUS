@@ -20,7 +20,8 @@ class ThreatCortex:
         pressure = death_zone_pressure(state)
         if pressure >= 80:
             region = escape_region(state)
-            if region:
+            emergency_action = escape_action(state, region)
+            if emergency_action["type"] == "move":
                 results.append(
                     CortexResult(
                         cortex=self.name,
@@ -29,8 +30,8 @@ class ThreatCortex:
                         risk=5,
                         priority=100,
                         veto=True,
-                        action=action("move", regionId=region.get("id")),
-                        reason=f"death-zone pressure {pressure}; move to {region.get('id')}",
+                        action=emergency_action,
+                        reason=f"death-zone pressure {pressure}; move to {emergency_action.get('regionId')}",
                         source_facts=["F|safety.deathzone"],
                     )
                 )
@@ -38,14 +39,14 @@ class ThreatCortex:
                 results.append(
                     CortexResult(
                         cortex=self.name,
-                        intent="survive_no_escape_route",
-                        score=70,
-                        risk=40,
+                        intent="emergency_death_zone_probe",
+                        score=88,
+                        risk=25,
                         priority=95,
                         veto=True,
-                        action=rest_action("death-zone pressure but no safe connected region parsed"),
-                        reason="no safe connected region parsed",
-                        source_facts=["F|safety.deathzone"],
+                        action=emergency_action,
+                        reason=str(emergency_action.get("reason") or "death-zone emergency fallback"),
+                        source_facts=["F|safety.deathzone", "F|action.cost"],
                     )
                 )
 
@@ -114,3 +115,28 @@ class ThreatCortex:
 def scan(perception) -> list[CortexResult]:
     state = perception if isinstance(perception, TurnState) else TurnState.from_snapshot(perception)
     return ThreatCortex().evaluate(state, {})
+
+
+def escape_action(state: TurnState, region: dict | None = None) -> dict:
+    if region and region.get("id"):
+        return action("move", regionId=region.get("id"))
+
+    pending = state.pending_deathzone_ids
+    current = state.current_region.id
+    for candidate in state.visible_regions:
+        region_id = str(candidate.get("id") or candidate.get("regionId") or "")
+        if not region_id or region_id == current or region_id in pending:
+            continue
+        if candidate.get("isDeathZone"):
+            continue
+        return action("move", regionId=region_id, reason="death-zone pressure; probe visible non-death-zone region")
+
+    for candidate in state.connected_regions:
+        region_id = str(candidate.get("id") or candidate.get("regionId") or candidate) if isinstance(candidate, dict) else str(candidate)
+        if region_id and region_id != current:
+            return action("move", regionId=region_id, reason="death-zone pressure; emergency move via raw connection id")
+
+    if state.self.ep > 0:
+        return action("explore", reason="death-zone pressure; no escape route parsed, spend action to reveal exits")
+
+    return rest_action("death-zone pressure but no EP or region data available")

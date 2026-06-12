@@ -195,6 +195,8 @@ def is_terminal_game_error(message: str) -> bool:
             "game ended",
             "game is over",
             "game_over",
+            "agent_dead",
+            "agent is dead",
         )
     )
 
