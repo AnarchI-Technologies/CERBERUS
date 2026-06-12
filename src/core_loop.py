@@ -21,7 +21,9 @@ for folder in (ROOT / "src", ROOT / "data"):
 from agent_dossiers import AgentDossierStore
 from claw_contract import KNOWN_ACTION_TYPES, REQUIRED_ACTION_FIELDS
 from combat_decider import CombatCortex
+from combat_decider import target_in_attack_range
 from decision_engine import make_plan as build_plan
+from decision_engine import active_fallback_action
 from ep_economy_engine import EconomyCortex
 from free_action_abuse import FreeActionCortex
 from knowledge_base import KnowledgeBase
@@ -71,6 +73,39 @@ def normalize_action(action: Any) -> dict[str, Any]:
                 if key in {"type", "targetId", "targetType", "regionId", "itemId", "message", "reason"}
             },
         }
+    return action
+
+
+def legalize_action(action: dict[str, Any], state: TurnState) -> dict[str, Any]:
+    action_type = str(action.get("type") or "")
+    if action_type == "attack":
+        target_id = str(action.get("targetId") or "")
+        candidates = [*state.visible_agents, *state.visible_monsters]
+        target = next((item for item in candidates if item.id == target_id and item.is_alive), None)
+        if target is None:
+            fallback = active_fallback_action(state)
+            fallback["reason"] = "blocked invalid attack target; " + str(fallback.get("reason") or "")
+            fallback["_rejected_action"] = {key: action.get(key) for key in ("type", "targetId", "targetType", "reason")}
+            return fallback
+        if not target_in_attack_range(state, target):
+            fallback = active_fallback_action(state)
+            fallback["reason"] = "blocked out-of-range attack; " + str(fallback.get("reason") or "")
+            fallback["_rejected_action"] = {key: action.get(key) for key in ("type", "targetId", "targetType", "reason")}
+            return fallback
+    if action_type == "explore":
+        terrain = state.current_region.terrain.lower()
+        name = state.current_region.name.lower()
+        if "ruin" not in terrain and "ruin" not in name and not state.ruins and state.connected_safe_regions():
+            fallback = active_fallback_action(state)
+            if fallback.get("type") == "explore":
+                fallback = {"type": "move", "regionId": state.connected_safe_regions()[0]["id"], "reason": "blocked non-ruin explore; move to scout instead"}
+            fallback["_rejected_action"] = {key: action.get(key) for key in ("type", "reason")}
+            return fallback
+    if action_type == "interact" and state.is_in_death_zone:
+        fallback = active_fallback_action(state)
+        fallback["reason"] = "blocked death-zone interact; " + str(fallback.get("reason") or "")
+        fallback["_rejected_action"] = {key: action.get(key) for key in ("type", "targetId", "reason")}
+        return fallback
     return action
 
 
@@ -136,6 +171,7 @@ def cerberus_tick(
         state,
     )
     action = normalize_action(action)
+    action = normalize_action(legalize_action(action, turn_state))
 
     memory.remember_turn(state, action=action)
     _save_or_warn(action, "memory", memory)

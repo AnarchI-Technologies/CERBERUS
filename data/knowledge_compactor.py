@@ -58,6 +58,7 @@ CURATED_FACTS = [
     "F|combat.guardian|hp=150;atk=20;def=34;ep=10;behavior=stationary_alert_turret",
     "F|combat.damage|formula=atk+weapon_bonus-(defender_def*0.5);minimum=1;weather_clear=0;rain=-5%;fog=-10%;storm=-15%",
     "F|combat.weapon|fist=0_rng0;dagger=16_rng0;sword=20_rng0;katana=35_rng0;bow=5_rng1;pistol=10_rng1;sniper=28_rng2",
+    "F|combat.range|visible_not_attackable=true;verify_distance<=weapon_range_or_same_region_before_attack;out_of_range_attack_wastes_turn=true",
     "F|items.recovery|bandage=10hp;medkit=30hp+5ep;legacy_emergency_food=20hp;legacy_energy_drink=5ep",
     "F|safety.deathzone|starts_day2;expands_every_18h_or_3_turns;damage=1.34hp_s;avoid_pendingDeathzones",
     "F|safety.alert|explore=+2;complete_ruin=+4;threshold=10;below_10_no_decay;alerted_end_turn=-4;guardian_target_when_alerted=true",

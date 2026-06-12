@@ -28,6 +28,31 @@ def equipped_weapon(state: TurnState) -> tuple[str, int, int]:
     return "fist", 0, 0
 
 
+def _target_distance(target: AgentState) -> int | None:
+    for key in ("distance", "range", "rangeToTarget", "regionDistance", "distanceRegions"):
+        value = target.raw.get(key)
+        if isinstance(value, bool):
+            continue
+        try:
+            if value not in (None, ""):
+                return max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def target_in_attack_range(state: TurnState, target: AgentState) -> bool:
+    _weapon, _bonus, weapon_range = equipped_weapon(state)
+    distance = _target_distance(target)
+    if distance is not None:
+        return distance <= weapon_range
+    if target.region_id and state.current_region.id and target.region_id != state.current_region.id:
+        return weapon_range > 0
+    if target.raw.get("inRange") is False or target.raw.get("attackable") is False:
+        return False
+    return True
+
+
 def expected_damage(state: TurnState, target: AgentState) -> float:
     _, bonus, _ = equipped_weapon(state)
     return max(1.0, state.self.atk + bonus - target.defense * 0.5)
@@ -48,9 +73,13 @@ class CombatCortex:
         if not state.can_take_main_action or state.self.ep < 1 or state.alert_active or state.is_low_hp:
             return results
 
-        targets = [agent for agent in state.visible_agents if agent.is_alive and agent.id != state.self.id]
+        targets = [
+            agent
+            for agent in state.visible_agents
+            if agent.is_alive and agent.id != state.self.id and target_in_attack_range(state, agent)
+        ]
         if not targets:
-            targets = [monster for monster in state.visible_monsters if monster.is_alive]
+            targets = [monster for monster in state.visible_monsters if monster.is_alive and target_in_attack_range(state, monster)]
         if not targets:
             return results
 

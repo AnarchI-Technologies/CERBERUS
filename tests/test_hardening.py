@@ -16,6 +16,7 @@ for folder in (ROOT / "src", ROOT / "data"):
 
 from agent_dossiers import AgentDossierStore
 from core_loop import cerberus_tick, normalize_action
+from core_loop import legalize_action
 import identity_bootstrap
 import claw_contract
 import claw_identity_token
@@ -484,6 +485,75 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(action["type"], "attack")
         self.assertEqual(action["targetId"], "enemy-1")
+
+    def test_combat_does_not_attack_out_of_range_visible_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 96,
+                            "ep": 4,
+                            "atk": 24,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "dagger"},
+                        },
+                        "currentRegion": {"id": "r1", "connections": [{"id": "r2"}]},
+                        "visibleAgents": [
+                            {"id": "enemy-1", "name": "Rival", "hp": 12, "atk": 9, "def": 2, "distance": 2}
+                        ],
+                    },
+                }
+            )
+
+        self.assertNotEqual(action["type"], "attack")
+        self.assertEqual(action["type"], "move")
+
+    def test_ranged_weapon_allows_visible_target_within_range(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 96,
+                            "ep": 4,
+                            "atk": 24,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "sniper"},
+                        },
+                        "currentRegion": {"id": "r1"},
+                        "visibleAgents": [
+                            {"id": "enemy-1", "name": "Rival", "hp": 12, "atk": 9, "def": 2, "distance": 2}
+                        ],
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "attack")
+        self.assertEqual(action["targetId"], "enemy-1")
+
+    def test_legalizer_redirects_out_of_range_attack(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 90, "ep": 3, "equippedWeapon": {"typeId": "fist"}},
+                    "currentRegion": {"id": "r1", "connections": [{"id": "r2"}]},
+                    "visibleAgents": [{"id": "enemy-1", "hp": 10, "distance": 1}],
+                },
+            }
+        )
+
+        action = legalize_action({"type": "attack", "targetId": "enemy-1"}, state)
+
+        self.assertEqual(action["type"], "move")
+        self.assertIn("_rejected_action", action)
 
     def test_weapon_on_ground_is_picked_up_before_bad_attack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
