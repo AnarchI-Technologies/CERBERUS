@@ -71,7 +71,9 @@ class AgentState:
     id: str = ""
     name: str = ""
     hp: int = 0
+    max_hp: int = 100
     ep: int = 0
+    max_ep: int = 10
     atk: int = 25
     defense: int = 5
     is_alive: bool = True
@@ -172,7 +174,9 @@ class TurnState:
 
     @property
     def is_low_hp(self) -> bool:
-        return self.self.hp > 0 and self.self.hp <= 35
+        if self.self.hp <= 0:
+            return False
+        return self.self.hp <= max(35, int(self.self.max_hp * 0.55))
 
     @property
     def has_broadcast_channel(self) -> bool:
@@ -253,7 +257,9 @@ def parse_agent(raw: dict[str, Any], *, kind: str = "agent") -> AgentState:
         id=str(raw.get("id") or raw.get("agentId") or ""),
         name=str(raw.get("name") or raw.get("agentName") or ""),
         hp=_as_int(raw.get("hp")),
+        max_hp=_as_int(raw.get("maxHp") or raw.get("maxHP") or raw.get("max_hp"), 100),
         ep=_as_int(raw.get("ep")),
+        max_ep=_as_int(raw.get("maxEp") or raw.get("maxEP") or raw.get("max_ep"), 10),
         atk=_as_int(raw.get("atk") or raw.get("attack"), 25),
         defense=_as_int(raw.get("def") or raw.get("defense"), 5),
         is_alive=_as_bool(raw.get("isAlive"), True),

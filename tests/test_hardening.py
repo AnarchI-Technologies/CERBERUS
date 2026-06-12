@@ -415,6 +415,29 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["type"], "use_item")
         self.assertEqual(action["itemId"], "med-1")
 
+    def test_mid_hp_heals_before_risky_combat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 52,
+                            "maxHp": 100,
+                            "ep": 3,
+                            "inventory": [{"id": "med-1", "typeId": "medkit"}],
+                        },
+                        "currentRegion": {"id": "r1"},
+                        "visibleMonsters": [{"id": "m1", "hp": 18, "atk": 12, "def": 4}],
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "use_item")
+        self.assertEqual(action["itemId"], "med-1")
+
     def test_death_zone_pressure_uses_visible_region_when_connections_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             isolated = self._isolated(tmp)
@@ -581,6 +604,32 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(action["type"], "pickup")
         self.assertEqual(action["itemId"], "dagger-1")
+
+    def test_duplicate_ground_weapon_is_not_picked_up(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 96,
+                            "ep": 4,
+                            "atk": 24,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "dagger"},
+                        },
+                        "currentRegion": {
+                            "id": "r1",
+                            "items": [{"id": "dagger-2", "typeId": "dagger"}],
+                        },
+                        "visibleMonsters": [{"id": "guardian-1", "name": "Guardian", "hp": 20, "atk": 8, "def": 2}],
+                    },
+                }
+            )
+
+        self.assertNotEqual(action.get("itemId"), "dagger-2")
 
     def test_inventory_weapon_equips_before_attacking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1773,6 +1822,45 @@ class HardeningTests(unittest.TestCase):
 
         self.assertIn("Hellion", thought)
         self.assertNotIn("free equip upgrade", thought)
+
+    def test_claw_runtime_snapshot_summary_exposes_live_dashboard_stats(self) -> None:
+        summary = claw_runtime.snapshot_summary(
+            {
+                "gameId": "game-1",
+                "turn": 7,
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 52, "maxHp": 100, "ep": 3, "maxEp": 8, "atk": 19},
+                    "currentRegion": {"id": "r1", "name": "Ruin Gate", "terrain": "Ruin"},
+                    "visibleAgents": [{"id": "enemy-1"}],
+                    "visibleMonsters": [{"id": "mob-1"}],
+                    "visibleItems": [{"id": "loot-1"}],
+                    "alertGauge": 4,
+                },
+            }
+        )
+
+        self.assertEqual(summary["hp"], 52)
+        self.assertEqual(summary["ep"], 3)
+        self.assertEqual(summary["region_name"], "Ruin Gate")
+        self.assertEqual(summary["visible_agents"], 1)
+        self.assertEqual(summary["visible_monsters"], 1)
+
+    def test_render_stats_includes_public_wallets(self) -> None:
+        old_values = {key: os.environ.get(key) for key in ("CERBERUS_AGENT_EOA_ADDRESS", "CERBERUS_OWNER_EOA_ADDRESS", "CERBERUS_MOLTY_WALLET_ADDRESS")}
+        try:
+            os.environ["CERBERUS_AGENT_EOA_ADDRESS"] = "0x" + "1" * 40
+            os.environ["CERBERUS_OWNER_EOA_ADDRESS"] = "0x" + "2" * 40
+            os.environ["CERBERUS_MOLTY_WALLET_ADDRESS"] = "0x" + "3" * 40
+            payload = render_app.stats()
+        finally:
+            for key, value in old_values.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(payload["public_wallets"]["owner_eoa"], "0x" + "2" * 40)
 
     def test_claw_runtime_hello_frame_follows_unified_join_docs(self) -> None:
         paid = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")

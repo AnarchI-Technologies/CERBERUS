@@ -5,6 +5,7 @@ Economy Cortex: free-action value, sMoltz/shop/reforge posture, EP thrift.
 from __future__ import annotations
 
 from cortex_types import CortexResult, action
+from free_action_abuse import weapon_bonus_for_item
 from turn_state_model import TurnState
 
 
@@ -15,9 +16,6 @@ VALUABLE_ITEM_TERMS = (
     "smoltz",
     "medkit",
     "bandage",
-    "katana",
-    "sword",
-    "sniper",
 )
 
 
@@ -31,6 +29,8 @@ class EconomyCortex:
 
         for item in state.visible_items + state.current_region.items:
             label = str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
+            if weapon_bonus_for_item(item) > 0:
+                continue
             if any(term in label for term in VALUABLE_ITEM_TERMS):
                 results.append(
                     CortexResult(

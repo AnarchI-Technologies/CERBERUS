@@ -69,6 +69,9 @@ def readiness() -> dict[str, Any]:
             "CLAW_ROYALE_RUNTIME_ENABLED",
             "CLAW_ROYALE_GAME_MODE",
             "CERBERUS_AGENT_EOA_PRIVATE_KEY",
+            "CERBERUS_AGENT_EOA_ADDRESS",
+            "CERBERUS_OWNER_EOA_ADDRESS",
+            "CERBERUS_MOLTY_WALLET_ADDRESS",
             "X_CLIENT_ID",
             "X_CLIENT_SECRET",
             "X_REDIRECT_URI",
@@ -88,6 +91,9 @@ def readiness() -> dict[str, Any]:
         "CLAW_ROYALE_RUNTIME_ENABLED": claw_runtime_enabled(),
         "CLAW_ROYALE_GAME_MODE": bool(os.getenv("CLAW_ROYALE_GAME_MODE", "paid")),
         "CERBERUS_AGENT_EOA_PRIVATE_KEY": bool(os.getenv("CERBERUS_AGENT_EOA_PRIVATE_KEY")),
+        "CERBERUS_AGENT_EOA_ADDRESS": bool(os.getenv("CERBERUS_AGENT_EOA_ADDRESS")),
+        "CERBERUS_OWNER_EOA_ADDRESS": bool(os.getenv("CERBERUS_OWNER_EOA_ADDRESS")),
+        "CERBERUS_MOLTY_WALLET_ADDRESS": bool(os.getenv("CERBERUS_MOLTY_WALLET_ADDRESS")),
         "X_CLIENT_ID": bool(os.getenv("X_CLIENT_ID")),
         "X_CLIENT_SECRET": bool(os.getenv("X_CLIENT_SECRET")),
         "X_REDIRECT_URI": bool(os.getenv("X_REDIRECT_URI")),
@@ -152,6 +158,11 @@ def stats() -> dict[str, Any]:
         "current_game_id": game_id,
         "spectate_url": spectate_url(game_id) if game_id else "",
         "claw_runtime": runtime_status,
+        "public_wallets": {
+            "agent_eoa": os.getenv("CERBERUS_AGENT_EOA_ADDRESS", ""),
+            "owner_eoa": os.getenv("CERBERUS_OWNER_EOA_ADDRESS", ""),
+            "molty_wallet": os.getenv("CERBERUS_MOLTY_WALLET_ADDRESS", ""),
+        },
         "memory_dir": ready.get("memory_dir", ""),
         "memory_writable": ready.get("memory_writable", False),
         "memory_error": ready.get("memory_error", ""),
@@ -354,6 +365,8 @@ def dashboard_html(query: str = "") -> bytes:
     aside {{ border-right: 1px solid #2a3140; padding: 16px; overflow: auto; }}
     iframe {{ width: 100%; height: 100%; border: 0; background: #080a0d; }}
     .metric {{ border: 1px solid #2a3140; border-radius: 6px; padding: 10px; margin-bottom: 10px; background: #151923; }}
+    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }}
+    .grid .metric {{ margin-bottom: 8px; }}
     .label {{ color: #98a2b3; font-size: 12px; }}
     .value {{ font-size: 14px; overflow-wrap: anywhere; margin-top: 4px; }}
     button, a.button {{ background: #e8edf7; color: #0f1115; border: 0; border-radius: 6px; padding: 8px 10px; text-decoration: none; cursor: pointer; }}
@@ -371,6 +384,17 @@ def dashboard_html(query: str = "") -> bytes:
       <div class="metric"><div class="label">Service</div><div id="service" class="value">loading</div></div>
       <div class="metric"><div class="label">Current Game</div><div id="game" class="value">unknown</div></div>
       <div class="metric"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
+      <div class="grid">
+        <div class="metric"><div class="label">Runtime</div><div id="runtime-state" class="value">loading</div></div>
+        <div class="metric"><div class="label">Mode</div><div id="mode" class="value">loading</div></div>
+        <div class="metric"><div class="label">HP / EP</div><div id="vitals" class="value">loading</div></div>
+        <div class="metric"><div class="label">Region</div><div id="region" class="value">loading</div></div>
+        <div class="metric"><div class="label">Visible</div><div id="visible" class="value">loading</div></div>
+        <div class="metric"><div class="label">Inventory</div><div id="inventory" class="value">loading</div></div>
+      </div>
+      <div class="metric"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
+      <div class="metric"><div class="label">Readiness</div><div id="readiness" class="value">loading</div></div>
+      <div class="metric"><div class="label">Wallets</div><div id="wallets" class="value">loading</div></div>
       <div class="metric"><div class="label">Memory DB</div><div id="memory" class="value">loading</div></div>
       <div class="metric"><div class="label">Writable</div><div id="writable" class="value">loading</div></div>
       <div class="metric"><div class="label">Configured Env</div><div id="env" class="value">loading</div></div>
@@ -433,6 +457,21 @@ def dashboard_html(query: str = "") -> bytes:
       const blockers = runtimeBlockers(data);
       document.getElementById("blockers").textContent = blockers.length ? blockers.join("; ") : "none";
       const mem = data.longterm_memory || {{}};
+      const runtime = data.claw_runtime || {{}};
+      const snap = runtime.last_snapshot || {{}};
+      const account = runtime.account || {{}};
+      const readiness = account.readiness || {{}};
+      const wallets = data.public_wallets || {{}};
+      const lastAction = runtime.last_action || {{}};
+      document.getElementById("runtime-state").textContent = runtime.state || "unknown";
+      document.getElementById("mode").textContent = runtime.mode || "unknown";
+      document.getElementById("vitals").textContent = ((snap.hp ?? "?") + "/" + (snap.max_hp ?? "?") + " HP, " + (snap.ep ?? "?") + "/" + (snap.max_ep ?? "?") + " EP");
+      document.getElementById("region").textContent = [snap.region_name, snap.region_id, snap.terrain, snap.death_zone ? "death zone" : ""].filter(Boolean).join(" | ") || "unknown";
+      document.getElementById("visible").textContent = "agents " + (snap.visible_agents ?? 0) + ", monsters " + (snap.visible_monsters ?? 0) + ", items " + (snap.visible_items ?? 0);
+      document.getElementById("inventory").textContent = String(snap.inventory_count ?? 0);
+      document.getElementById("last-action").textContent = [lastAction.type, lastAction.targetId || lastAction.regionId || lastAction.itemId, lastAction.reason].filter(Boolean).join(" | ") || "none";
+      document.getElementById("readiness").textContent = "id " + !!readiness.identity + ", wallet " + !!readiness.walletAddress + ", sc " + !!readiness.scWallet + ", paid " + !!readiness.paidReady + ", balance " + (account.balance ?? "?");
+      document.getElementById("wallets").textContent = "owner " + (wallets.owner_eoa || "unset") + "; agent " + (wallets.agent_eoa || "unset") + "; molty " + (wallets.molty_wallet || "unset");
       document.getElementById("memory").textContent = (mem.items || 0) + " items, " + (mem.bytes || 0) + " bytes";
       document.getElementById("writable").textContent = data.memory_writable ? "yes" : "no";
       document.getElementById("env").textContent = Object.entries(data.env || {{}}).filter(([,v]) => v).map(([k]) => k).join(", ") || "none";

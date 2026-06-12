@@ -56,6 +56,7 @@ ROOM_LIST_KEYS = (
     "lobbies",
     "matches",
 )
+from turn_state_model import TurnState
 ROOM_COUNT_KEYS = (
     "agentCount",
     "agentsCount",
@@ -230,6 +231,35 @@ def public_action_thought(action: dict[str, Any]) -> str:
     if "scout fallback" in reason:
         return "Hellion scouts forward. Standing still is for statues."
     return lines.get(action_type, "Hellion proceeds. The arena may file complaints.")[:THOUGHT_MAX_CHARS]
+
+
+def snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(snapshot, dict):
+        return {}
+    state = TurnState.from_snapshot(snapshot)
+    return {
+        "game_id": state.game_id,
+        "agent_id": state.agent_id,
+        "turn": state.turn,
+        "status": state.status,
+        "hp": state.self.hp,
+        "max_hp": state.self.max_hp,
+        "ep": state.self.ep,
+        "max_ep": state.self.max_ep,
+        "atk": state.self.atk,
+        "defense": state.self.defense,
+        "alive": state.self.is_alive,
+        "region_id": state.current_region.id,
+        "region_name": state.current_region.name,
+        "terrain": state.current_region.terrain,
+        "death_zone": state.current_region.is_death_zone,
+        "visible_agents": len(state.visible_agents),
+        "visible_monsters": len(state.visible_monsters),
+        "visible_items": len(state.visible_items) + len(state.current_region.items),
+        "inventory_count": len(state.inventory),
+        "alert_gauge": state.alert_gauge,
+        "can_act": state.can_take_main_action,
+    }
 
 
 def sign_submit_frame(signed_frame: dict[str, Any]) -> dict[str, Any]:
@@ -685,6 +715,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 current_game_id=game_id or stored_game_id(),
                 game_status=status,
                 gameplay_ready=gameplay_ready,
+                last_snapshot=snapshot_summary(snapshot),
             )
             if snapshot and wants_action(payload, snapshot, gameplay_ready=gameplay_ready):
                 action = cerberus_tick(snapshot)

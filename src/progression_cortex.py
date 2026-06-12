@@ -58,12 +58,13 @@ class ProgressionCortex:
             if "pack" in str(item.get("type") or item.get("typeId") or item.get("name") or "").lower()
         ]
         if carried_relics or carried_packs:
+            cargo_risk = max(20 if state.self.hp < 50 else 5, progression_value_at_risk(state))
             results.append(
                 CortexResult(
                     cortex=self.name,
                     intent="preserve_progression_cargo",
                     score=65 + 5 * len(carried_relics) + 12 * len(carried_packs),
-                    risk=20 if state.self.hp < 50 else 5,
+                    risk=cargo_risk,
                     priority=70,
                     action=None,
                     reason=f"carrying relics={len(carried_relics)} packs={len(carried_packs)}; bias toward survival",
