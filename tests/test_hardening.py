@@ -56,6 +56,7 @@ from onboarding_clients import ClawRoyaleClient, build_claw_siwe_message
 from onboarding_clients import OnboardingAPIError, _unwrap
 from progression_cortex import ProgressionCortex
 from risk_engine import progression_value_at_risk
+from settlement_memory import settlement_lessons
 from social_cortex import SocialCortex
 from turn_state_model import TurnState
 from wallet_identity import wallet_for_purpose
@@ -746,6 +747,48 @@ class HardeningTests(unittest.TestCase):
 
         self.assertNotEqual(action.get("itemId"), "dagger-2")
 
+    def test_energy_item_is_used_before_rest_when_ep_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 90,
+                            "ep": 0,
+                            "inventory": [{"id": "energy-1", "typeId": "energy_drink"}],
+                        },
+                        "currentRegion": {"id": "r1", "connections": [{"id": "r2"}]},
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "use_item")
+        self.assertEqual(action["itemId"], "energy-1")
+
+    def test_map_is_used_when_navigation_knowledge_is_sparse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 90,
+                            "ep": 4,
+                            "inventory": [{"id": "map-1", "typeId": "map"}],
+                        },
+                        "currentRegion": {"id": "r1"},
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "use_item")
+        self.assertEqual(action["itemId"], "map-1")
+
     def test_inventory_weapon_equips_before_attacking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             isolated = self._isolated(tmp)
@@ -1132,6 +1175,48 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["type"], "move")
         self.assertEqual(action["regionId"], "r2")
 
+    def test_fallback_movement_prefers_scored_value_region(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 100, "ep": 3},
+                        "currentRegion": {
+                            "id": "r1",
+                            "connections": [
+                                {"id": "empty", "terrain": "Plain"},
+                                {"id": "loot", "terrain": "Ruin", "items": [{"id": "cash", "typeId": "smoltz_bundle"}]},
+                            ],
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "move")
+        self.assertEqual(action["regionId"], "loot")
+
+    def test_fallback_movement_pursues_wounded_enemy_in_safe_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 100, "ep": 3, "equippedWeapon": {"typeId": "fist"}},
+                        "currentRegion": {
+                            "id": "r1",
+                            "connections": [{"id": "r2"}, {"id": "r3"}],
+                        },
+                        "visibleAgents": [{"id": "enemy-1", "hp": 20, "regionId": "r2", "distance": 2}],
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "move")
+        self.assertEqual(action["regionId"], "r2")
+
     def test_progression_value_at_risk_discourages_ruin_push_with_cargo(self) -> None:
         state = TurnState.from_snapshot(
             {
@@ -1157,6 +1242,27 @@ class HardeningTests(unittest.TestCase):
         self.assertGreaterEqual(risk, 50)
         self.assertTrue(results)
         self.assertGreaterEqual(results[0].risk, risk)
+
+    def test_settlement_memory_extracts_compact_lessons(self) -> None:
+        lessons = settlement_lessons(
+            {
+                "events": [
+                    {
+                        "type": "game_settled",
+                        "data": {
+                            "settlement": {
+                                "finalRank": 31,
+                                "kills": 0,
+                                "rewards": {"sMoltz": 0},
+                            }
+                        },
+                    }
+                ]
+            }
+        )
+
+        self.assertTrue(any("zero kills" in lesson for lesson in lessons))
+        self.assertTrue(any("rank 31" in lesson for lesson in lessons))
 
     def test_social_side_effect_failures_are_captured_without_crashing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -35,9 +35,11 @@ from owner_command_cortex import OwnerCommandCortex, action_response_for_owner_c
 from progression_cortex import ProgressionCortex
 from runtime_state import owner_messages as load_owner_messages
 from runtime_state import append_hellion_owner_response, last_hellion_response_for_command
+from settlement_memory import remember_settlement_lessons
 from social_cortex import SocialCortex
 from threat_engine import ThreatCortex
 from turn_state_model import TurnState
+from utility_cortex import UtilityCortex
 
 
 def _call(service: Callable[..., Any] | None, fallback: Any, *args: Any, **kwargs: Any) -> Any:
@@ -173,6 +175,19 @@ def _remember_longterm_or_warn(
         )
 
 
+def _remember_settlement_or_warn(action: dict[str, Any], state: dict[str, Any], memory: CompactMemoryStore) -> None:
+    try:
+        lessons = remember_settlement_lessons(state, memory)
+        if lessons:
+            action.setdefault("_side_effects", []).append(
+                {"type": "settlement_lessons_recorded", "count": len(lessons)}
+            )
+    except Exception as exc:
+        action.setdefault("_warnings", []).append(
+            {"type": "save_error", "store": "settlement_memory", "error": str(exc)[:240]}
+        )
+
+
 def _respond_to_owner_command_or_warn(
     action: dict[str, Any],
     owner_directives: list[dict[str, Any]] | None,
@@ -259,6 +274,7 @@ def cerberus_tick(
             ThreatCortex(),
             OwnerCommandCortex(),
             FreeActionCortex(),
+            UtilityCortex(),
             ProgressionCortex(),
             CombatCortex(),
             EconomyCortex(),
@@ -275,6 +291,7 @@ def cerberus_tick(
     action = normalize_action(action)
     action = normalize_action(legalize_action(action, turn_state))
     _respond_to_owner_command_or_warn(action, owner_directives)
+    _remember_settlement_or_warn(action, state, memory)
 
     memory.remember_turn(state, action=action)
     _save_or_warn(action, "memory", memory)

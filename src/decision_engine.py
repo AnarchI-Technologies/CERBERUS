@@ -10,7 +10,7 @@ from typing import Any
 from cortex_types import Cortex, CortexResult, action, rest_action
 from knowledge_base import KnowledgeBase
 from memory_system import CompactMemoryStore
-from turn_state_model import TurnState
+from turn_state_model import AgentState, TurnState
 
 
 def has_usable_turn_facts(state: TurnState) -> bool:
@@ -85,10 +85,9 @@ def active_fallback_action(state: TurnState) -> dict[str, Any]:
         return rest_action("waiting for main-action cooldown")
     if state.self.ep <= 0:
         return rest_action("EP empty; recover before movement")
-    for region in state.connected_safe_regions():
-        region_id = region.get("id") if isinstance(region, dict) else ""
-        if region_id:
-            return action("move", regionId=region_id, reason="scout fallback; no higher-priority cortex action")
+    best_region = best_fallback_region(state)
+    if best_region:
+        return action("move", regionId=best_region, reason="scout fallback; move to best scored safe region")
     if state.current_region.terrain.lower() == "ruin" or "ruin" in state.current_region.name.lower():
         return action("explore", reason="scout fallback; ruin present and no higher-priority action")
     if state.visible_regions:
@@ -98,6 +97,69 @@ def active_fallback_action(state: TurnState) -> dict[str, Any]:
             if region_id and region_id != current_id and not region.get("isDeathZone"):
                 return action("move", regionId=region_id, reason="scout fallback; move to visible region")
     return action("explore", reason="scout fallback; reveal map options")
+
+
+def _region_id(region: dict | str) -> str:
+    return str(region.get("id") or region.get("regionId") or "") if isinstance(region, dict) else str(region or "")
+
+
+def _region_label(region: dict | str) -> str:
+    if not isinstance(region, dict):
+        return ""
+    return f"{region.get('name','')} {region.get('terrain','')} {region.get('type','')}".lower()
+
+
+def _item_label(item: dict) -> str:
+    return str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
+
+
+def _target_region_score(state: TurnState, region_id: str) -> float:
+    score = 0.0
+    for target in [*state.visible_agents, *state.visible_monsters]:
+        if not isinstance(target, AgentState) or not target.is_alive or target.id == state.self.id:
+            continue
+        if target.region_id == region_id:
+            score += 24 if target.hp <= 35 else 10
+            if target.kind == "monster" and "guardian" in f"{target.name} {target.id}".lower():
+                score += 12
+    return score
+
+
+def fallback_region_score(state: TurnState, region: dict | str) -> float:
+    region_id = _region_id(region)
+    if not region_id:
+        return -999.0
+    label = _region_label(region)
+    score = 0.0
+    if "water" in label or "storm" in label:
+        score -= 12
+    if "ruin" in label:
+        score += 8
+    if "hill" in label or "plains" in label:
+        score += 3
+    if isinstance(region, dict):
+        score += min(6, len(region.get("connections", []) or []))
+        for item in region.get("items", []) or []:
+            item_label = _item_label(item) if isinstance(item, dict) else ""
+            if any(term in item_label for term in ("smoltz", "moltz", "relic", "pack")):
+                score += 20
+            elif any(term in item_label for term in ("katana", "sniper", "sword", "pistol", "dagger")):
+                score += 12
+            elif any(term in item_label for term in ("medkit", "bandage", "energy")):
+                score += 7
+    score += _target_region_score(state, region_id)
+    return score
+
+
+def best_fallback_region(state: TurnState) -> str:
+    safe = state.connected_safe_regions()
+    if not safe:
+        return ""
+    scored = [(fallback_region_score(state, region), _region_id(region)) for region in safe]
+    scored = [(score, region_id) for score, region_id in scored if region_id]
+    if not scored:
+        return ""
+    return sorted(scored, key=lambda item: (item[0], item[1]), reverse=True)[0][1]
 
 
 def make_plan(
