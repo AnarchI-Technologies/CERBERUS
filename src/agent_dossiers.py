@@ -53,6 +53,8 @@ class AgentDossier:
             bits.append("tend=" + ",".join(self.observed_tendencies[-5:]))
         if self.validated_strats:
             bits.append("strats=" + ",".join(self.validated_strats[-3:]))
+        if self.social_notes:
+            bits.append("notes=" + ",".join(self.social_notes[-2:]))
         return "D|" + ";".join(bits)
 
 
@@ -123,6 +125,11 @@ class AgentDossierStore:
         record.killed_by_us += 1
         if tricked:
             record.tricked_into_death += 1
+        return record
+
+    def record_killed_us(self, agent_id: str, *, name: str = "") -> AgentDossier:
+        record = self.observe_agent(agent_id, name=name)
+        record.killed_us += 1
         return record
 
     def record_social_profile(self, agent_id: str, *, handle: str, followed: bool = False) -> AgentDossier:

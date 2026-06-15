@@ -22,6 +22,7 @@ from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, recon
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
 from env_loader import hydrate_env
+from memory_system import CompactMemoryStore
 from onboarding_clients import ClawRoyaleClient
 from runtime_state import (
     claw_runtime_status_file,
@@ -629,6 +630,75 @@ def account_status_summary(config: ClawRuntimeConfig) -> dict[str, Any]:
     }
 
 
+def _status_snapshot_to_compact_state(status: dict[str, Any]) -> dict[str, Any]:
+    snapshot = status.get("last_snapshot") if isinstance(status.get("last_snapshot"), dict) else {}
+    return {
+        "gameId": snapshot.get("game_id") or status.get("current_game_id") or "",
+        "turn": snapshot.get("turn") or 0,
+        "view": {
+            "self": {
+                "id": snapshot.get("agent_id") or status.get("agent_id") or "",
+                "hp": snapshot.get("hp") or 0,
+                "maxHp": snapshot.get("max_hp") or 100,
+                "ep": snapshot.get("ep") or 0,
+                "maxEp": snapshot.get("max_ep") or 10,
+                "atk": snapshot.get("atk") or 0,
+                "def": snapshot.get("defense") or 0,
+                "isAlive": snapshot.get("alive", True),
+            },
+            "currentRegion": {
+                "id": snapshot.get("region_id") or "",
+                "name": snapshot.get("region_name") or "",
+                "terrain": snapshot.get("terrain") or "",
+                "isDeathZone": snapshot.get("death_zone", False),
+            },
+            "alertGauge": snapshot.get("alert_gauge") or 0,
+        },
+    }
+
+
+def record_action_result_learning(payload: dict[str, Any], *, status: dict[str, Any] | None = None) -> None:
+    status = status if isinstance(status, dict) else read_json(claw_runtime_status_file())
+    last_action = status.get("last_action") if isinstance(status.get("last_action"), dict) else {}
+    if not last_action:
+        return
+    snapshot = status.get("last_snapshot") if isinstance(status.get("last_snapshot"), dict) else {}
+
+    error_text = str(payload.get("message") or payload.get("error") or "")
+    success_raw = payload.get("success", payload.get("ok"))
+    accepted = not error_text and success_raw is not False
+    code = payload.get("code") or payload.get("status") or payload.get("errorCode") or ""
+    action_type = str(last_action.get("type") or "unknown")
+
+    store = CompactMemoryStore().load()
+    store.remember_turn(
+        _status_snapshot_to_compact_state(status),
+        action=last_action,
+        outcome={
+            "ok": accepted,
+            "code": code or ("accepted" if accepted else "rejected"),
+            "hp": payload.get("hp") or payload.get("currentHp") or snapshot.get("hp"),
+            "ep": payload.get("ep") or payload.get("currentEp") or snapshot.get("ep"),
+        },
+    )
+    if accepted:
+        store.remember_lesson(
+            "runtime",
+            f"action_result: {action_type} accepted; keep this route available when the same board shape returns",
+            source="frame:action_result",
+            confidence="0.79",
+        )
+    else:
+        detail = error_text or str(code or "unknown_error")
+        store.remember_lesson(
+            "runtime",
+            f"action_result: {action_type} failed with {detail[:120]}; avoid repeating that request blindly",
+            source="frame:action_result",
+            confidence="0.9",
+        )
+    store.save()
+
+
 def _balance_float(value: Any) -> float:
     try:
         return float(value or 0)
@@ -738,6 +808,8 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 error_text = str(payload.get("message") or payload.get("error") or "")
                 if "not running" in error_text.lower():
                     gameplay_ready = False
+                if frame_type == "action_result":
+                    record_action_result_learning(payload)
                 if is_terminal_game_error(error_text):
                     clear_game_id()
                     record_account_balance(config, stage="game_ended")
