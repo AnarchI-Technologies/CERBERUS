@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -96,6 +98,32 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
             claw_runtime.hello_frame(config, welcome),
             {"type": "hello", "entryType": "paid", "mode": "onchain"},
         )
+
+    def test_recent_paid_join_failure_keeps_free_mode_temporarily(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
+        welcome = {
+            "type": "welcome",
+            "decision": "ASK_ENTRY_TYPE",
+            "readiness": {"paidRoom": {"ok": True, "mode": {"onchain": True}}},
+        }
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        old_cooldown = os.environ.get("CLAW_ROYALE_PAID_RETRY_COOLDOWN_SECONDS")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                os.environ["CLAW_ROYALE_PAID_RETRY_COOLDOWN_SECONDS"] = "600"
+                claw_runtime.update_status(last_error="SERVICE_UNAVAILABLE: join onchain failed")
+
+                self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+            if old_cooldown is None:
+                os.environ.pop("CLAW_ROYALE_PAID_RETRY_COOLDOWN_SECONDS", None)
+            else:
+                os.environ["CLAW_ROYALE_PAID_RETRY_COOLDOWN_SECONDS"] = old_cooldown
 
 
 if __name__ == "__main__":

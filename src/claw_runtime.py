@@ -37,6 +37,7 @@ from runtime_state import (
 DEFAULT_MIN_RECONNECT_SECONDS = 5
 DEFAULT_MAX_RECONNECT_SECONDS = 90
 DEFAULT_ROUTE_PROBE_SECONDS = 15
+DEFAULT_PAID_RETRY_COOLDOWN_SECONDS = 600
 JOIN_PATH = "/ws/join"
 AGENT_PATH = "/ws/agent"
 NO_HELLO_DECISIONS = {
@@ -414,7 +415,27 @@ def should_auto_upgrade_to_paid(config: ClawRuntimeConfig, welcome: dict[str, An
         return ""
     if os.getenv("CLAW_ROYALE_DISABLE_PAID_AUTO_UPGRADE", "").strip().lower() in {"1", "true", "yes", "on"}:
         return ""
+    if recent_paid_join_failure_active():
+        return ""
     return _readiness_paid_mode(welcome)
+
+
+def recent_paid_join_failure_active() -> bool:
+    status = read_json(claw_runtime_status_file())
+    error = str(status.get("last_error") or "").lower()
+    if "join onchain failed" not in error and "join offchain failed" not in error:
+        return False
+    try:
+        cooldown = int(os.getenv("CLAW_ROYALE_PAID_RETRY_COOLDOWN_SECONDS", str(DEFAULT_PAID_RETRY_COOLDOWN_SECONDS)))
+    except ValueError:
+        cooldown = DEFAULT_PAID_RETRY_COOLDOWN_SECONDS
+    if cooldown <= 0:
+        return False
+    try:
+        updated_at = int(status.get("updated_at") or 0)
+    except (TypeError, ValueError):
+        updated_at = 0
+    return updated_at > 0 and int(time.time()) - updated_at < cooldown
 
 
 def account_paid_ready(account: dict[str, Any], *, minimum_smoltz: float = 500.0) -> bool:
