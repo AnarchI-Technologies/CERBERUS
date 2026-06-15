@@ -62,7 +62,19 @@ def target_score(state: TurnState, target: AgentState) -> float:
     damage = expected_damage(state, target)
     lethal = damage >= max(1, target.hp)
     hp_factor = max(0, 50 - target.hp)
-    return damage + hp_factor + (35 if lethal else 0)
+    label = f"{target.name} {target.id}".lower()
+    guardian_value = 25 if target.kind == "monster" and "guardian" in label else 0
+    monster_value = 8 if target.kind == "monster" else 0
+    return damage + hp_factor + guardian_value + monster_value + (35 if lethal else 0)
+
+
+def is_worth_attacking(state: TurnState, target: AgentState) -> bool:
+    damage = expected_damage(state, target)
+    if damage <= 3 and target.hp > damage * 4:
+        return False
+    if target.atk >= state.self.hp and damage < target.hp:
+        return False
+    return True
 
 
 class CombatCortex:
@@ -78,8 +90,15 @@ class CombatCortex:
             for agent in state.visible_agents
             if agent.is_alive and agent.id != state.self.id and target_in_attack_range(state, agent)
         ]
+        targets.extend(
+            monster
+            for monster in state.visible_monsters
+            if monster.is_alive and target_in_attack_range(state, monster)
+        )
         if not targets:
-            targets = [monster for monster in state.visible_monsters if monster.is_alive and target_in_attack_range(state, monster)]
+            return results
+
+        targets = [target for target in targets if is_worth_attacking(state, target)]
         if not targets:
             return results
 

@@ -29,6 +29,7 @@ DEFAULT_MAX_SUMMARIES = 96
 DEFAULT_MAX_LESSONS = 96
 DEFAULT_MAX_FACTS = 128
 DEFAULT_CONTEXT_BYTES = 6000
+COMPACT_MEMORY_NONWINDOWS_FALLBACK_ENV = "CERBERUS_COMPACT_MEMORY_PLAINTEXT_FALLBACK"
 SECRET_KEYS = {
     "api_key",
     "apikey",
@@ -67,6 +68,17 @@ def scrub_scalar(value: Any, *, limit: int = 160) -> str:
 def secret_like_key(key: str) -> bool:
     normalized = "".join(ch for ch in key.lower() if ch.isalnum() or ch == "_")
     return any(marker in normalized for marker in SECRET_KEYS)
+
+
+def compact_memory_plaintext_fallback_enabled() -> bool:
+    """Allow compact non-secret memory to persist on hosts without DPAPI."""
+
+    value = os.getenv(COMPACT_MEMORY_NONWINDOWS_FALLBACK_ENV, "true")
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def compact_memory_encryption_available() -> bool:
+    return os.name == "nt"
 
 
 def redact_secrets(value: Any) -> Any:
@@ -291,11 +303,20 @@ class CompactMemoryStore:
             should_encrypt = bool(os.getenv("CERBERUS_PIN"))
 
         if should_encrypt:
-            return write_vault(
-                self.encrypted_path,
-                self.data,
-                purpose="cerberus.compact_memory",
-            )
+            if not compact_memory_encryption_available() and compact_memory_plaintext_fallback_enabled():
+                self.data["storage"] = {
+                    "mode": "plaintext_compact_nonwindows",
+                    "reason": "dpapi_unavailable",
+                    "secret_policy": "compact_memory_only_no_raw_secrets",
+                }
+                self.data["integrity"] = self._integrity()
+                should_encrypt = False
+            else:
+                return write_vault(
+                    self.encrypted_path,
+                    self.data,
+                    purpose="cerberus.compact_memory",
+                )
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(

@@ -30,6 +30,8 @@ import x_oauth
 import runtime_state
 import render_env_export
 import env_doctor
+import memory_system
+import profit_simulator
 from identity_bootstrap import (
     ensure_agentmail,
     ensure_claw_account,
@@ -45,6 +47,7 @@ from identity_bootstrap import (
 from isolated_runtime import IsolatedCerberusInstance
 from identity_vault import DEFAULT_PUBLIC_NAME, DEFAULT_V2_PUBLIC_NAME, empty_identity
 from knowledge_base import KnowledgeBase
+from longterm_memory import LongTermMemoryStore
 from memory_system import CompactMemoryStore
 from moltbook_claim_assistant import extract_moltbook_claims, stored_claim, verification_text
 from moltybook_client import MoltyBookClient, process_social_side_effects
@@ -341,6 +344,69 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(reloaded.memory.data["turns"], [])
         self.assertIn("load_warning", reloaded.memory.data)
+
+    def test_compact_memory_falls_back_to_plaintext_when_dpapi_unavailable(self) -> None:
+        old_pin = os.environ.get("CERBERUS_PIN")
+        old_available = memory_system.compact_memory_encryption_available
+        try:
+            os.environ["CERBERUS_PIN"] = "2468"
+            memory_system.compact_memory_encryption_available = lambda: False  # type: ignore[assignment]
+            with tempfile.TemporaryDirectory() as tmp:
+                store = CompactMemoryStore(
+                    path=Path(tmp) / "memory.json",
+                    encrypted_path=Path(tmp) / "memory.vault.json",
+                ).load()
+                store.remember_turn({"view": {"self": {"id": "me", "hp": 90, "ep": 5}}})
+                path = store.save()
+                reloaded = CompactMemoryStore(
+                    path=Path(tmp) / "memory.json",
+                    encrypted_path=Path(tmp) / "memory.vault.json",
+                ).load()
+        finally:
+            memory_system.compact_memory_encryption_available = old_available  # type: ignore[assignment]
+            if old_pin is None:
+                os.environ.pop("CERBERUS_PIN", None)
+            else:
+                os.environ["CERBERUS_PIN"] = old_pin
+
+        self.assertTrue(str(path).endswith("memory.json"))
+        self.assertEqual(reloaded.data["storage"]["mode"], "plaintext_compact_nonwindows")
+        self.assertNotIn("warning", reloaded.data["integrity"])
+        self.assertEqual(len(reloaded.data["turns"]), 1)
+
+    def test_tick_writes_sanitized_longterm_memory_when_store_is_wired(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.json",
+                encrypted_path=Path(tmp) / "memory.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            longterm = LongTermMemoryStore(Path(tmp) / "hellion.longterm.sqlite")
+
+            action = cerberus_tick(
+                {
+                    "gameId": "g1",
+                    "turn": 7,
+                    "view": {
+                        "self": {"id": "me", "hp": 91, "maxHp": 100, "ep": 4, "maxEp": 10},
+                        "currentRegion": {"id": "r1", "name": "Ruin Mouth", "terrain": "ruin"},
+                        "visibleItems": [{"id": "dagger-1", "typeId": "dagger"}],
+                    },
+                },
+                memory_store=memory,
+                dossier_store=dossiers,
+                longterm_store=longterm,
+            )
+
+            rows = longterm.top(kind="turn", scope="claw_royale", limit=5)
+
+        self.assertEqual(action["type"], "pickup")
+        self.assertEqual(len(rows), 1)
+        self.assertIn("action=pickup", rows[0]["text"])
+        self.assertNotIn("private", rows[0]["text"].lower())
 
     def test_cannot_act_blocks_main_actions_but_free_equip_still_works(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -670,6 +736,86 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(action["type"], "pickup")
         self.assertEqual(action["itemId"], "cash-1")
+
+    def test_moltz_pickup_is_preferred_before_contested_attack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 100,
+                            "ep": 4,
+                            "atk": 24,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1", "items": [{"id": "cash-1", "typeId": "smoltz_bundle"}]},
+                        "visibleAgents": [{"id": "enemy-1", "hp": 12, "atk": 8, "def": 2}],
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "pickup")
+        self.assertEqual(action["itemId"], "cash-1")
+
+    def test_combat_skips_low_damage_guardian_chipping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 100,
+                            "ep": 4,
+                            "atk": 4,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "fist"},
+                        },
+                        "currentRegion": {"id": "r1", "connections": [{"id": "r2"}]},
+                        "visibleMonsters": [{"id": "guardian-1", "name": "Guardian", "hp": 40, "atk": 8, "def": 8}],
+                    },
+                }
+            )
+
+        self.assertNotEqual(action["type"], "attack")
+        self.assertEqual(action["type"], "move")
+
+    def test_combat_prefers_killable_guardian_over_nonlethal_rival(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 100,
+                            "ep": 4,
+                            "atk": 20,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1"},
+                        "visibleAgents": [{"id": "rival-1", "name": "Rival", "hp": 70, "atk": 8, "def": 3}],
+                        "visibleMonsters": [{"id": "guardian-1", "name": "Guardian", "hp": 24, "atk": 8, "def": 4}],
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "attack")
+        self.assertEqual(action["targetId"], "guardian-1")
+
+    def test_profit_simulator_reports_required_game_pacing_for_target(self) -> None:
+        report = profit_simulator.simulate(games_per_day=61, target_per_day=1000)
+
+        self.assertTrue(report["target_met"])
+        self.assertGreaterEqual(report["expected_smoltz_per_day"], 1000)
+        self.assertLessEqual(report["required_games_for_target"], 61)
 
     def test_no_cortex_candidate_scouts_instead_of_resting_when_actionable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1019,6 +1165,10 @@ class HardeningTests(unittest.TestCase):
 
     def test_external_onboarding_uses_identity_public_name_override(self) -> None:
         calls = {}
+        saved_env = {
+            key: os.environ.get(key)
+            for key in ("AGENTMAIL_INBOX_ID", "AGENTMAIL_EMAIL", "AGENTMAIL_API_KEY")
+        }
 
         class FakeClaw:
             onboarding_token = "onboard_test"
@@ -1045,9 +1195,18 @@ class HardeningTests(unittest.TestCase):
         identity["wallets"]["agent_eoa"] = {"address": "0x" + "1" * 40, "private_key": "agent_pk"}
         result = BootstrapResult()
 
-        ensure_claw_account(identity, result, client=FakeClaw())
-        ensure_agentmail(identity, result, client=FakeMail())
-        ensure_moltbook(identity, result, client=FakeMoltbook())
+        try:
+            for key in saved_env:
+                os.environ.pop(key, None)
+            ensure_claw_account(identity, result, client=FakeClaw())
+            ensure_agentmail(identity, result, client=FakeMail())
+            ensure_moltbook(identity, result, client=FakeMoltbook())
+        finally:
+            for key, value in saved_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
 
         self.assertEqual(identity_public_name(identity), DEFAULT_V2_PUBLIC_NAME)
         self.assertEqual(calls["claw_name"], DEFAULT_V2_PUBLIC_NAME)
@@ -1979,6 +2138,35 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(claw_runtime.is_terminal_game_error("GAME_ALREADY_OVER"))
         self.assertTrue(claw_runtime.is_terminal_game_error("AGENT_DEAD"))
         self.assertFalse(claw_runtime.is_terminal_game_error("ACTION_COOLDOWN"))
+
+    def test_claw_runtime_records_balance_delta_for_completed_games(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        old_account = claw_runtime.account_status_summary
+        balances = iter([100.0, 120.0])
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+
+                def fake_account(config):  # type: ignore[no-untyped-def]
+                    return {"ok": True, "balance": next(balances), "readiness": {}, "currentGames": []}
+
+                claw_runtime.account_status_summary = fake_account  # type: ignore[assignment]
+                config = claw_runtime.ClawRuntimeConfig(api_key="key")
+                claw_runtime.record_account_balance(config, stage="connect")
+                claw_runtime.record_account_balance(config, stage="game_ended")
+                status = runtime_state.read_json(runtime_state.claw_runtime_status_file())
+        finally:
+            claw_runtime.account_status_summary = old_account  # type: ignore[assignment]
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(status["games_completed"], 1)
+        self.assertEqual(status["last_balance_delta"], 20.0)
+        self.assertEqual(status["average_balance_delta_per_game"], 20.0)
+        self.assertEqual(status["games_needed_for_1000_per_day"], 50)
 
     def test_runtime_state_can_clear_stale_game_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -27,6 +27,7 @@ from decision_engine import active_fallback_action
 from ep_economy_engine import EconomyCortex
 from free_action_abuse import FreeActionCortex
 from knowledge_base import KnowledgeBase
+from longterm_memory import LongTermMemoryStore
 from memory_system import CompactMemoryStore
 from memory_cortex import MemoryCortex
 from progression_cortex import ProgressionCortex
@@ -118,11 +119,62 @@ def _save_or_warn(action: dict[str, Any], label: str, service: Any) -> None:
         )
 
 
+def _longterm_turn_text(state: TurnState, action: dict[str, Any]) -> str:
+    visible_items = len(state.visible_items) + len(state.current_region.items)
+    visible_enemies = len([agent for agent in state.visible_agents if agent.is_alive])
+    visible_monsters = len([monster for monster in state.visible_monsters if monster.is_alive])
+    reason = str(action.get("reason") or action.get("thought") or "")[:180]
+    region = state.current_region.name or state.current_region.id or "unknown"
+    return (
+        f"turn action={action.get('type') or 'unknown'}"
+        f"; reason={reason or 'none'}"
+        f"; hp={state.self.hp}/{state.self.max_hp}"
+        f"; ep={state.self.ep}/{state.self.max_ep}"
+        f"; region={region}"
+        f"; visible_items={visible_items}"
+        f"; visible_agents={visible_enemies}"
+        f"; visible_monsters={visible_monsters}"
+        f"; death_zone={state.is_in_death_zone}"
+    )
+
+
+def _remember_longterm_or_warn(
+    action: dict[str, Any],
+    longterm: LongTermMemoryStore | None,
+    state: TurnState,
+) -> None:
+    if longterm is None:
+        return
+    try:
+        key = str(action.get("type") or "unknown")
+        if state.current_region.terrain:
+            key += f":{state.current_region.terrain.lower()}"
+        longterm.remember(
+            kind="turn",
+            scope="claw_royale",
+            key=key,
+            text=_longterm_turn_text(state, action),
+            confidence=0.72,
+            importance=45,
+            metadata={
+                "game_id": state.game_id,
+                "turn": state.turn,
+                "action": action.get("type"),
+                "region_id": state.current_region.id,
+            },
+        )
+    except Exception as exc:
+        action.setdefault("_warnings", []).append(
+            {"type": "save_error", "store": "longterm_memory", "error": str(exc)[:240]}
+        )
+
+
 def cerberus_tick(
     state: dict[str, Any],
     *,
     memory_store: CompactMemoryStore | None = None,
     dossier_store: AgentDossierStore | None = None,
+    longterm_store: LongTermMemoryStore | None = None,
     observe_fn: Callable[[dict[str, Any]], Any] | None = None,
     threat_scan: Callable[[Any], Any] | None = None,
     opportunity_scan: Callable[[Any], Any] | None = None,
@@ -136,6 +188,9 @@ def cerberus_tick(
 
     memory = memory_store or CompactMemoryStore().load()
     dossiers = dossier_store or AgentDossierStore().load()
+    longterm = longterm_store
+    if longterm is None and memory_store is None and dossier_store is None:
+        longterm = LongTermMemoryStore()
     knowledge = KnowledgeBase().load()
     turn_state = TurnState.from_snapshot(state)
     perception = _call(observe_fn, turn_state, turn_state)
@@ -176,4 +231,5 @@ def cerberus_tick(
     memory.remember_turn(state, action=action)
     _save_or_warn(action, "memory", memory)
     _save_or_warn(action, "dossiers", dossiers)
+    _remember_longterm_or_warn(action, longterm, turn_state)
     return action

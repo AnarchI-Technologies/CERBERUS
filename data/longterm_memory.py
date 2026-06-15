@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -75,12 +76,13 @@ class LongTermMemoryStore:
         return conn
 
     def initialize(self) -> Path:
-        with self.connect() as conn:
+        with closing(self.connect()) as conn:
             conn.executescript(SCHEMA)
             try:
                 conn.executescript(FTS_SCHEMA)
             except sqlite3.DatabaseError:
                 pass
+            conn.commit()
         return self.path
 
     def remember(
@@ -103,7 +105,7 @@ class LongTermMemoryStore:
         )
         item_id = stable_hash({"kind": kind, "scope": scope, "key": key, "source_hash": source_hash}, length=32)
         metadata_json = json.dumps(metadata or {}, ensure_ascii=True, separators=(",", ":"))
-        with self.connect() as conn:
+        with closing(self.connect()) as conn:
             conn.execute(
                 """
                 INSERT INTO memory_items (
@@ -141,6 +143,7 @@ class LongTermMemoryStore:
                 )
             except sqlite3.DatabaseError:
                 pass
+            conn.commit()
         return item_id
 
     def top(self, *, kind: str = "", scope: str = "", limit: int = 12) -> list[dict[str, Any]]:
@@ -155,7 +158,7 @@ class LongTermMemoryStore:
             params.append(scope)
         where = "WHERE " + " AND ".join(clauses) if clauses else ""
         params.append(limit)
-        with self.connect() as conn:
+        with closing(self.connect()) as conn:
             rows = conn.execute(
                 f"""
                 SELECT id, kind, scope, key, text, confidence, importance, hits, last_seen
@@ -173,7 +176,7 @@ class LongTermMemoryStore:
 
     def stats(self) -> dict[str, Any]:
         self.initialize()
-        with self.connect() as conn:
+        with closing(self.connect()) as conn:
             count = conn.execute("SELECT count(*) FROM memory_items").fetchone()[0]
             page_count = conn.execute("PRAGMA page_count").fetchone()[0]
             page_size = conn.execute("PRAGMA page_size").fetchone()[0]

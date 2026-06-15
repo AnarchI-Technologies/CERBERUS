@@ -571,6 +571,45 @@ def account_status_summary(config: ClawRuntimeConfig) -> dict[str, Any]:
     }
 
 
+def _balance_float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def record_account_balance(config: ClawRuntimeConfig, *, stage: str) -> dict[str, Any]:
+    status = read_json(claw_runtime_status_file())
+    account = account_status_summary(config)
+    if not account.get("ok"):
+        update_status(account=account, balance_stage=stage)
+        return account
+
+    balance = _balance_float(account.get("balance"))
+    first_balance = status.get("first_balance")
+    last_balance = status.get("last_balance")
+    if first_balance in (None, ""):
+        first_balance = balance
+    delta = balance - _balance_float(last_balance if last_balance not in (None, "") else first_balance)
+    total_delta = balance - _balance_float(first_balance)
+    completed = int(status.get("games_completed") or 0)
+    if stage == "game_ended":
+        completed += 1
+    per_game = total_delta / completed if completed > 0 else 0.0
+    update_status(
+        account=account,
+        balance_stage=stage,
+        first_balance=first_balance,
+        last_balance=balance,
+        last_balance_delta=round(delta, 6),
+        total_balance_delta=round(total_delta, 6),
+        games_completed=completed,
+        average_balance_delta_per_game=round(per_game, 6),
+        games_needed_for_1000_per_day=int((1000 + per_game - 1) // per_game) if per_game > 0 else 0,
+    )
+    return account
+
+
 async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     version = discover_version(config.base_url)
     if version != config.version:
@@ -585,7 +624,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
         )
     url = websocket_url(config, path)
     extra_headers = config.headers
-    account_status = account_status_summary(config)
+    account_status = record_account_balance(config, stage="connect")
     join_blocker = join_blocker_for_account(config, account_status)
     update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, account=account_status, last_error="")
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
@@ -643,6 +682,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                     gameplay_ready = False
                 if is_terminal_game_error(error_text):
                     clear_game_id()
+                    record_account_balance(config, stage="game_ended")
                     update_status(
                         state="game_ended",
                         last_frame_type=frame_type,
@@ -699,6 +739,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 gameplay_ready = False
             elif is_terminal_game_error(str(payload.get("message") or payload.get("error") or status)):
                 clear_game_id()
+                record_account_balance(config, stage="game_ended")
                 update_status(
                     state="game_ended",
                     last_frame_type=frame_type,

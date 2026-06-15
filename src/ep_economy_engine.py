@@ -24,7 +24,7 @@ class EconomyCortex:
 
     def evaluate(self, state: TurnState, context: dict) -> list[CortexResult]:
         results: list[CortexResult] = []
-        if state.visible_agents:
+        if len(state.inventory) >= 10:
             return results
 
         for item in state.visible_items + state.current_region.items:
@@ -32,13 +32,14 @@ class EconomyCortex:
             if weapon_bonus_for_item(item) > 0:
                 continue
             if any(term in label for term in VALUABLE_ITEM_TERMS):
+                premium_value = any(term in label for term in ("relic", "pack", "moltz", "smoltz"))
                 results.append(
                     CortexResult(
                         cortex=self.name,
                         intent="collect_free_value",
-                        score=48 if "relic" not in label and "pack" not in label else 70,
+                        score=78 if premium_value else 52,
                         risk=3,
-                        priority=58,
+                        priority=75 if premium_value else 58,
                         action=action("pickup", itemId=item.get("id")),
                         reason=f"free pickup value: {label}",
                         source_facts=["F|action.free", "F|economy.free", "F|economy.reforge"],

@@ -142,6 +142,10 @@ The default Render memory directory is:
 /var/data/.cerberus
 ```
 
+That path should live on the mounted Render disk. Compact memory, long-term
+SQLite memory, current-game state, stream chat, voice-lab state, and runtime
+status all resolve through `CERBERUS_MEMORY_DIR`.
+
 Suggested Render environment values:
 
 ```text
@@ -189,10 +193,27 @@ Then open:
 http://127.0.0.1:18080/dashboard
 ```
 
+Run the deterministic profit simulation:
+
+```powershell
+python src\profit_simulator.py --games-per-day 61 --target-per-day 1000
+```
+
+The simulator uses synthetic, documented assumptions. It does not prove live
+earnings, but it gives a repeatable target: if real telemetry averages roughly
+20 sMoltz per productive game, Hellion needs about 50 completed games per day;
+with the current mixed synthetic scenario set, she needs about 61 games per day
+to clear 1000 sMoltz/day.
+
 The dashboard reads `claw_runtime` from `/stats`. If no game is embedded yet,
 check the Runtime Blockers panel first; it reports whether the worker is
 disabled, reconnecting, blocked on a paid-join signature frame, or waiting for
 Claw Royale to send the next active game snapshot.
+
+`/stats` also reports `claw_runtime.games_completed`,
+`last_balance_delta`, `total_balance_delta`,
+`average_balance_delta_per_game`, and `games_needed_for_1000_per_day` after the
+runtime observes account balances across completed games.
 
 If Claw publishes a new WebSocket URL, set `CLAW_ROYALE_WS_PATHS` to a
 comma-separated list of paths or full `wss://` URLs. The runtime rotates through
