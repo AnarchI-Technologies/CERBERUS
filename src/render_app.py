@@ -33,11 +33,13 @@ from claw_config import active_claw_version, claw_api_base  # noqa: E402
 from claw_runtime import run_forever as run_claw_runtime  # noqa: E402
 from env_loader import hydrate_env  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
-from memory_system import DEFAULT_MEMORY_DIR  # noqa: E402
+from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, utc_now  # noqa: E402
 from runtime_state import (
+    append_owner_message,
     append_stream_chat,
     claw_runtime_status_file,
     hellion_voice_lab,
+    owner_messages,
     read_json,
     remember_game_id,
     stream_chat_messages,
@@ -168,6 +170,7 @@ def stats() -> dict[str, Any]:
         "memory_error": ready.get("memory_error", ""),
         "longterm_memory_error": ready.get("longterm_memory_error", ""),
         "longterm_memory": ready.get("longterm_memory", {}),
+        "owner_messages": owner_messages(),
         "env": ready.get("env", {}),
     }
 
@@ -358,51 +361,81 @@ def dashboard_html(query: str = "") -> bytes:
   <title>Cerberus Hellion Dashboard</title>
   <style>
     :root {{ color-scheme: dark; font-family: Arial, sans-serif; }}
-    body {{ margin: 0; background: #0f1115; color: #f4f7fb; }}
-    header {{ padding: 16px 20px; border-bottom: 1px solid #2a3140; display: flex; gap: 16px; align-items: center; justify-content: space-between; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: #05070a; color: #f4f7fb; overflow: hidden; }}
+    header {{ height: 52px; padding: 10px 14px; border-bottom: 1px solid #2a3140; display: flex; gap: 12px; align-items: center; justify-content: space-between; background: #0f1115; }}
     h1 {{ font-size: 18px; margin: 0; font-weight: 700; }}
-    main {{ display: grid; grid-template-columns: 340px 1fr; min-height: calc(100vh - 58px); }}
-    aside {{ border-right: 1px solid #2a3140; padding: 16px; overflow: auto; }}
+    main {{ position: relative; height: calc(100vh - 52px); overflow: hidden; }}
     iframe {{ width: 100%; height: 100%; border: 0; background: #080a0d; }}
-    .metric {{ border: 1px solid #2a3140; border-radius: 6px; padding: 10px; margin-bottom: 10px; background: #151923; }}
-    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }}
-    .grid .metric {{ margin-bottom: 8px; }}
+    .top-actions {{ display: flex; gap: 8px; align-items: center; }}
+    .button, button {{ background: #e8edf7; color: #0f1115; border: 0; border-radius: 6px; padding: 8px 10px; text-decoration: none; cursor: pointer; font-size: 13px; }}
+    .frame {{ height: 100%; width: 100%; }}
+    details.owner-panel {{ position: absolute; top: 12px; right: 12px; width: min(430px, calc(100vw - 24px)); max-height: calc(100% - 24px); overflow: auto; border: 1px solid rgba(255,255,255,.18); border-radius: 8px; background: rgba(13,17,24,.96); box-shadow: 0 18px 60px rgba(0,0,0,.45); }}
+    details.owner-panel:not([open]) {{ width: auto; overflow: visible; }}
+    summary {{ list-style: none; cursor: pointer; padding: 10px 12px; font-weight: 700; border-bottom: 1px solid transparent; }}
+    details[open] summary {{ border-bottom-color: rgba(255,255,255,.12); }}
+    summary::-webkit-details-marker {{ display: none; }}
+    .panel-body {{ padding: 12px; }}
+    .metric {{ border: 1px solid #2a3140; border-radius: 6px; padding: 9px; background: #151923; min-width: 0; }}
+    .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }}
     .label {{ color: #98a2b3; font-size: 12px; }}
     .value {{ font-size: 14px; overflow-wrap: anywhere; margin-top: 4px; }}
-    button, a.button {{ background: #e8edf7; color: #0f1115; border: 0; border-radius: 6px; padding: 8px 10px; text-decoration: none; cursor: pointer; }}
-    .frame {{ min-height: calc(100vh - 58px); }}
-    @media (max-width: 900px) {{ main {{ grid-template-columns: 1fr; }} aside {{ border-right: 0; border-bottom: 1px solid #2a3140; }} .frame {{ min-height: 72vh; }} }}
+    .wide {{ margin-bottom: 8px; }}
+    .owner-form {{ display: grid; gap: 8px; margin: 10px 0; }}
+    textarea, input {{ width: 100%; border: 1px solid #2a3140; border-radius: 6px; background: #090c12; color: #f4f7fb; padding: 9px; font: inherit; }}
+    textarea {{ resize: vertical; min-height: 76px; max-height: 180px; }}
+    .form-row {{ display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }}
+    .owner-log {{ max-height: 160px; overflow: auto; display: grid; gap: 8px; }}
+    .owner-msg {{ border: 1px solid #2a3140; border-radius: 6px; padding: 8px; background: #10151f; font-size: 13px; line-height: 1.35; }}
+    .hint {{ color: #98a2b3; font-size: 12px; margin-top: 4px; }}
+    @media (max-width: 700px) {{ header {{ height: 48px; }} main {{ height: calc(100vh - 48px); }} h1 {{ font-size: 16px; }} .top-actions .button {{ display: none; }} }}
   </style>
 </head>
 <body>
   <header>
     <h1>Hellion Dashboard</h1>
-    <button onclick="refreshFeed()">Refresh Feed</button>
+    <div class="top-actions">
+      <a id="open-feed" class="button" href="{initial_feed_url or spectate_base_url}" target="_blank" rel="noreferrer">Open Spectate</a>
+      <button onclick="refreshFeed()">Refresh Feed</button>
+    </div>
   </header>
   <main>
-    <aside>
-      <div class="metric"><div class="label">Service</div><div id="service" class="value">loading</div></div>
-      <div class="metric"><div class="label">Current Game</div><div id="game" class="value">unknown</div></div>
-      <div class="metric"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
-      <div class="grid">
-        <div class="metric"><div class="label">Runtime</div><div id="runtime-state" class="value">loading</div></div>
-        <div class="metric"><div class="label">Mode</div><div id="mode" class="value">loading</div></div>
-        <div class="metric"><div class="label">HP / EP</div><div id="vitals" class="value">loading</div></div>
-        <div class="metric"><div class="label">Region</div><div id="region" class="value">loading</div></div>
-        <div class="metric"><div class="label">Visible</div><div id="visible" class="value">loading</div></div>
-        <div class="metric"><div class="label">Inventory</div><div id="inventory" class="value">loading</div></div>
-      </div>
-      <div class="metric"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
-      <div class="metric"><div class="label">Readiness</div><div id="readiness" class="value">loading</div></div>
-      <div class="metric"><div class="label">Wallets</div><div id="wallets" class="value">loading</div></div>
-      <div class="metric"><div class="label">Memory DB</div><div id="memory" class="value">loading</div></div>
-      <div class="metric"><div class="label">Writable</div><div id="writable" class="value">loading</div></div>
-      <div class="metric"><div class="label">Configured Env</div><div id="env" class="value">loading</div></div>
-      <a id="open-feed" class="button" href="{initial_feed_url or spectate_base_url}" target="_blank" rel="noreferrer">Open Spectate</a>
-    </aside>
     <section class="frame">
       <iframe id="feed" {initial_frame_attrs} title="Claw Royale live game feed"></iframe>
     </section>
+    <details class="owner-panel">
+      <summary>Owner Controls</summary>
+      <div class="panel-body">
+        <div class="grid">
+          <div class="metric"><div class="label">Service</div><div id="service" class="value">loading</div></div>
+          <div class="metric"><div class="label">Current Game</div><div id="game" class="value">unknown</div></div>
+          <div class="metric"><div class="label">Runtime</div><div id="runtime-state" class="value">loading</div></div>
+          <div class="metric"><div class="label">Mode</div><div id="mode" class="value">loading</div></div>
+          <div class="metric"><div class="label">HP / EP</div><div id="vitals" class="value">loading</div></div>
+          <div class="metric"><div class="label">Region</div><div id="region" class="value">loading</div></div>
+          <div class="metric"><div class="label">Visible</div><div id="visible" class="value">loading</div></div>
+          <div class="metric"><div class="label">Inventory</div><div id="inventory" class="value">loading</div></div>
+        </div>
+        <div class="metric wide"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Yield</div><div id="yield" class="value">loading</div></div>
+        <form id="owner-form" class="owner-form">
+          <div class="label">Message / Command To Hellion</div>
+          <textarea id="owner-message" maxlength="1000" placeholder="Say it plainly. Example: prioritize free games until balance reaches 500."></textarea>
+          <div class="form-row">
+            <input id="owner-pin" type="password" placeholder="CERBERUS_PIN">
+            <button type="submit">Send</button>
+          </div>
+          <div id="owner-status" class="hint">Private owner channel. Stored on the Render disk.</div>
+        </form>
+        <div class="metric wide"><div class="label">Recent Owner Messages</div><div id="owner-log" class="owner-log">loading</div></div>
+        <div class="metric wide"><div class="label">Readiness</div><div id="readiness" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Wallets</div><div id="wallets" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Memory DB</div><div id="memory" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Writable</div><div id="writable" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Configured Env</div><div id="env" class="value">loading</div></div>
+      </div>
+    </details>
   </main>
   <script>
     const params = new URLSearchParams(window.location.search);
@@ -439,6 +472,21 @@ def dashboard_html(query: str = "") -> bytes:
       frame.src = "about:blank";
       frame.srcdoc = "<body style=\\"margin:0;background:#080a0d;color:#cbd5e1;font:14px Arial,sans-serif;padding:24px;box-sizing:border-box\\"><h2 style=\\"color:#f4f7fb;margin:0 0 12px;font-size:18px\\">Runtime not live</h2><p style=\\"margin:0 0 12px\\">The spectate iframe needs a rotated Claw Royale game ID at <code>/games/spect/{{gameId}}</code>.</p><ul style=\\"margin:0;padding-left:20px;line-height:1.6\\">" + list + "</ul></body>";
     }}
+    function esc(text) {{
+      return String(text ?? "").replace(/[&<>"]/g, (c) => ({{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}}[c]));
+    }}
+    function renderOwnerMessages(messages) {{
+      const log = document.getElementById("owner-log");
+      if (!messages || !messages.length) {{
+        log.textContent = "none";
+        return;
+      }}
+      log.innerHTML = messages.slice().reverse().map((msg) => (
+        "<div class='owner-msg'><strong>" + esc(msg.kind || "message") + "</strong><br>" +
+        esc(msg.text || msg.message || "") +
+        "<div class='hint'>" + esc(msg.created_at || "") + "</div></div>"
+      )).join("");
+    }}
     function refreshFeed(gameId = lastGame) {{
       const frame = document.getElementById("feed");
       const url = targetUrl(gameId);
@@ -470,11 +518,13 @@ def dashboard_html(query: str = "") -> bytes:
       document.getElementById("visible").textContent = "agents " + (snap.visible_agents ?? 0) + ", monsters " + (snap.visible_monsters ?? 0) + ", items " + (snap.visible_items ?? 0);
       document.getElementById("inventory").textContent = String(snap.inventory_count ?? 0);
       document.getElementById("last-action").textContent = [lastAction.type, lastAction.targetId || lastAction.regionId || lastAction.itemId, lastAction.reason].filter(Boolean).join(" | ") || "none";
+      document.getElementById("yield").textContent = "games " + (runtime.games_completed ?? 0) + ", last +" + (runtime.last_balance_delta ?? 0) + ", avg/game " + (runtime.average_balance_delta_per_game ?? 0) + ", target games/day " + (runtime.games_needed_for_1000_per_day || "?");
       document.getElementById("readiness").textContent = "id " + !!readiness.identity + ", wallet " + !!readiness.walletAddress + ", sc " + !!readiness.scWallet + ", paid " + !!readiness.paidReady + ", balance " + (account.balance ?? "?");
       document.getElementById("wallets").textContent = "owner " + (wallets.owner_eoa || "unset") + "; agent " + (wallets.agent_eoa || "unset") + "; molty " + (wallets.molty_wallet || "unset");
       document.getElementById("memory").textContent = (mem.items || 0) + " items, " + (mem.bytes || 0) + " bytes";
       document.getElementById("writable").textContent = data.memory_writable ? "yes" : "no";
       document.getElementById("env").textContent = Object.entries(data.env || {{}}).filter(([,v]) => v).map(([k]) => k).join(", ") || "none";
+      renderOwnerMessages(data.owner_messages || []);
       if (selectedGame && selectedGame !== lastGame) {{
         lastGame = selectedGame;
         refreshFeed(lastGame);
@@ -488,6 +538,34 @@ def dashboard_html(query: str = "") -> bytes:
         showRuntimeFallback(blockers);
       }}
     }}
+    document.getElementById("owner-form").addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      const text = document.getElementById("owner-message").value.trim();
+      const pin = document.getElementById("owner-pin").value;
+      const status = document.getElementById("owner-status");
+      if (!text) {{
+        status.textContent = "Write a message first.";
+        return;
+      }}
+      status.textContent = "Sending...";
+      try {{
+        const res = await fetch("/admin/owner-message", {{
+          method: "POST",
+          headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
+          body: JSON.stringify({{text, kind: "owner_command"}})
+        }});
+        const data = await res.json();
+        if (!res.ok || !data.ok) {{
+          status.textContent = "Failed: " + (data.error || res.status);
+          return;
+        }}
+        document.getElementById("owner-message").value = "";
+        status.textContent = "Sent.";
+        renderOwnerMessages(data.owner_messages || []);
+      }} catch (err) {{
+        status.textContent = "Failed: " + err;
+      }}
+    }});
     loadStats();
     setInterval(loadStats, 15000);
   </script>
@@ -637,6 +715,26 @@ class CerberusHandler(BaseHTTPRequestHandler):
                 self._send({"ok": True, "chat": append_stream_chat(message)})
             except Exception as exc:
                 self._send({"ok": False, "error": str(exc)[:240]}, status=500)
+            return
+        if parsed.path == "/admin/owner-message":
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            try:
+                payload = self._read_json()
+            except Exception as exc:
+                payload = {"_body_error": str(exc)[:240]}
+            pin = self.headers.get("X-Cerberus-Pin", "") or str(payload.get("pin") or "")
+            if not self._pin_authorized(pin):
+                self._send({"ok": False, "error": "invalid_pin", "body_error": payload.get("_body_error", "")}, status=401)
+                return
+            text = scrub_scalar(payload.get("text") or payload.get("message") or "", limit=1000)
+            if not text:
+                self._send({"ok": False, "error": "empty_message"}, status=400)
+                return
+            kind = scrub_scalar(payload.get("kind") or "owner_message", limit=40)
+            message = {"kind": kind, "text": text, "created_at": utc_now()}
+            self._send({"ok": True, "owner_messages": append_owner_message(message)})
             return
         if parsed.path == "/admin/leave-current-game":
             if not self._authorized():

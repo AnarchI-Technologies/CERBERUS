@@ -31,6 +31,10 @@ def hellion_voice_lab_file() -> Path:
     return memory_dir() / "hellion_voice_lab.json"
 
 
+def owner_messages_file() -> Path:
+    return memory_dir() / "owner_messages.json"
+
+
 def read_json(path: Path) -> dict[str, Any]:
     try:
         if path.exists():
@@ -91,6 +95,24 @@ def append_stream_chat(message: dict[str, Any], *, limit: int = 50) -> list[dict
     messages = messages[-limit:]
     try:
         write_json(stream_chat_file(), {"messages": messages, "updated_at": int(time.time())})
+    except Exception:
+        return messages
+    return messages
+
+
+def owner_messages(limit: int = 25) -> list[dict[str, Any]]:
+    messages = read_json(owner_messages_file()).get("messages", [])
+    if not isinstance(messages, list):
+        return []
+    return [item for item in messages if isinstance(item, dict)][-limit:]
+
+
+def append_owner_message(message: dict[str, Any], *, limit: int = 25) -> list[dict[str, Any]]:
+    messages = owner_messages(limit=limit)
+    messages.append(message)
+    messages = messages[-limit:]
+    try:
+        write_json(owner_messages_file(), {"messages": messages, "updated_at": int(time.time())})
     except Exception:
         return messages
     return messages

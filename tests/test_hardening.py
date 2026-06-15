@@ -2199,6 +2199,33 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(messages[-1]["message"], "still alive")
 
+    def test_owner_messages_persist_under_memory_dir(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                messages = runtime_state.append_owner_message(
+                    {"kind": "owner_command", "text": "prioritize profitable games"}
+                )
+                reloaded = runtime_state.owner_messages()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(messages[-1]["text"], "prioritize profitable games")
+        self.assertEqual(reloaded[-1]["kind"], "owner_command")
+
+    def test_dashboard_is_game_first_with_collapsible_owner_controls(self) -> None:
+        html = render_app.dashboard_html().decode("utf-8")
+
+        self.assertIn('class="owner-panel"', html)
+        self.assertIn('id="owner-form"', html)
+        self.assertIn('fetch("/admin/owner-message"', html)
+        self.assertIn("overflow: hidden", html)
+        self.assertNotIn("<aside>", html)
+
     def test_render_readiness_reports_memory_write_failure_without_crashing(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         old_store = render_app.LongTermMemoryStore
