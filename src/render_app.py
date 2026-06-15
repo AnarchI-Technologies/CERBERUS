@@ -33,8 +33,10 @@ from claw_config import active_claw_version, claw_api_base  # noqa: E402
 from claw_runtime import run_forever as run_claw_runtime  # noqa: E402
 from env_loader import hydrate_env  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
-from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, utc_now  # noqa: E402
+from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now  # noqa: E402
+from owner_command_cortex import acknowledge_owner_command  # noqa: E402
 from runtime_state import (
+    append_hellion_owner_response,
     append_owner_message,
     append_stream_chat,
     claw_runtime_status_file,
@@ -482,7 +484,8 @@ def dashboard_html(query: str = "") -> bytes:
         return;
       }}
       log.innerHTML = messages.slice().reverse().map((msg) => (
-        "<div class='owner-msg'><strong>" + esc(msg.kind || "message") + "</strong><br>" +
+        "<div class='owner-msg'><strong>" + esc(msg.author || msg.kind || "message") + "</strong>" +
+        (msg.status ? " <span class='hint'>[" + esc(msg.status) + "]</span>" : "") + "<br>" +
         esc(msg.text || msg.message || "") +
         "<div class='hint'>" + esc(msg.created_at || "") + "</div></div>"
       )).join("");
@@ -733,8 +736,22 @@ class CerberusHandler(BaseHTTPRequestHandler):
                 self._send({"ok": False, "error": "empty_message"}, status=400)
                 return
             kind = scrub_scalar(payload.get("kind") or "owner_message", limit=40)
-            message = {"kind": kind, "text": text, "created_at": utc_now()}
-            self._send({"ok": True, "owner_messages": append_owner_message(message)})
+            created_at = utc_now()
+            message = {
+                "id": stable_hash({"text": text, "created_at": created_at}, length=18),
+                "kind": kind,
+                "author": "Owner",
+                "text": text,
+                "created_at": created_at,
+            }
+            append_owner_message(message)
+            ack = acknowledge_owner_command(message)
+            messages = append_hellion_owner_response(
+                ack["text"],
+                command_id=message["id"],
+                status=ack["status"],
+            )
+            self._send({"ok": True, "owner_messages": messages, "ack": ack})
             return
         if parsed.path == "/admin/leave-current-game":
             if not self._authorized():

@@ -32,6 +32,7 @@ import render_env_export
 import env_doctor
 import memory_system
 import profit_simulator
+import owner_command_cortex
 from identity_bootstrap import (
     ensure_agentmail,
     ensure_claw_account,
@@ -903,6 +904,65 @@ class HardeningTests(unittest.TestCase):
             )
 
         self.assertEqual(seen["owner_messages"][0]["text"], "prioritize value")
+
+    def test_owner_command_acknowledges_agreement_and_ignores_hellion_replies(self) -> None:
+        command = {"kind": "owner_command", "text": "heal and prioritize value"}
+        ack = owner_command_cortex.acknowledge_owner_command(command)
+        directive = owner_command_cortex.latest_directive(
+            [
+                command,
+                {"kind": "hellion_response", "author": "Hellion", "text": "I heard you."},
+            ]
+        )
+
+        self.assertEqual(ack["status"], "agreed")
+        self.assertIn("high-priority owner intent", ack["text"])
+        self.assertEqual(directive, command)
+
+    def test_owner_command_tick_writes_hellion_execution_response(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                memory = CompactMemoryStore(
+                    path=Path(tmp) / "memory.json",
+                    encrypted_path=Path(tmp) / "memory.vault.json",
+                ).load()
+                dossiers = AgentDossierStore(
+                    path=Path(tmp) / "dossiers.json",
+                    encrypted_path=Path(tmp) / "dossiers.vault.json",
+                ).load()
+                action = cerberus_tick(
+                    {
+                        "canAct": True,
+                        "view": {
+                            "self": {
+                                "id": "me",
+                                "hp": 72,
+                                "maxHp": 100,
+                                "ep": 4,
+                                "inventory": [{"id": "med-1", "typeId": "medkit"}],
+                            },
+                            "currentRegion": {"id": "r1"},
+                        },
+                    },
+                    memory_store=memory,
+                    dossier_store=dossiers,
+                    owner_command_messages=[
+                        {"id": "cmd-1", "kind": "owner_command", "text": "heal now"}
+                    ],
+                )
+                responses = runtime_state.owner_messages()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(action["type"], "use_item")
+        self.assertEqual(responses[-1]["kind"], "hellion_response")
+        self.assertEqual(responses[-1]["command_id"], "cmd-1")
+        self.assertEqual(responses[-1]["status"], "executing")
 
     def test_profit_simulator_reports_required_game_pacing_for_target(self) -> None:
         report = profit_simulator.simulate(games_per_day=61, target_per_day=1000)

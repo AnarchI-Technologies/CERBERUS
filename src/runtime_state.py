@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from memory_system import DEFAULT_MEMORY_DIR
+from memory_system import DEFAULT_MEMORY_DIR, utc_now
 
 
 def memory_dir() -> Path:
@@ -116,6 +116,39 @@ def append_owner_message(message: dict[str, Any], *, limit: int = 25) -> list[di
     except Exception:
         return messages
     return messages
+
+
+def append_hellion_owner_response(
+    text: str,
+    *,
+    command_id: str = "",
+    status: str = "heard",
+    limit: int = 25,
+) -> list[dict[str, Any]]:
+    return append_owner_message(
+        {
+            "kind": "hellion_response",
+            "author": "Hellion",
+            "text": text,
+            "status": status,
+            "command_id": command_id,
+            "created_at": utc_now(),
+        },
+        limit=limit,
+    )
+
+
+def last_hellion_response_for_command(command_id: str) -> dict[str, Any]:
+    if not command_id:
+        return {}
+    for message in reversed(owner_messages()):
+        if (
+            isinstance(message, dict)
+            and message.get("kind") == "hellion_response"
+            and message.get("command_id") == command_id
+        ):
+            return message
+    return {}
 
 
 def hellion_voice_lab() -> dict[str, Any]:

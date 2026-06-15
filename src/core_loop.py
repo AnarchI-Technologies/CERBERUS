@@ -30,9 +30,10 @@ from knowledge_base import KnowledgeBase
 from longterm_memory import LongTermMemoryStore
 from memory_system import CompactMemoryStore
 from memory_cortex import MemoryCortex
-from owner_command_cortex import OwnerCommandCortex
+from owner_command_cortex import OwnerCommandCortex, action_response_for_owner_command, latest_directive
 from progression_cortex import ProgressionCortex
 from runtime_state import owner_messages as load_owner_messages
+from runtime_state import append_hellion_owner_response, last_hellion_response_for_command
 from social_cortex import SocialCortex
 from threat_engine import ThreatCortex
 from turn_state_model import TurnState
@@ -171,6 +172,35 @@ def _remember_longterm_or_warn(
         )
 
 
+def _respond_to_owner_command_or_warn(
+    action: dict[str, Any],
+    owner_directives: list[dict[str, Any]] | None,
+) -> None:
+    directive = latest_directive(owner_directives or [])
+    if not directive:
+        return
+    command_id = str(directive.get("id") or "")
+    if not command_id:
+        return
+    last_response = last_hellion_response_for_command(command_id)
+    if str(last_response.get("status") or "") in {"executing", "blocked", "overridden", "heard_unmapped"}:
+        return
+    try:
+        response = action_response_for_owner_command(directive, action)
+        append_hellion_owner_response(
+            response["text"],
+            command_id=command_id,
+            status=response["status"],
+        )
+        action.setdefault("_side_effects", []).append(
+            {"type": "owner_command_response", "command_id": command_id, "status": response["status"]}
+        )
+    except Exception as exc:
+        action.setdefault("_warnings", []).append(
+            {"type": "save_error", "store": "owner_messages", "error": str(exc)[:240]}
+        )
+
+
 def cerberus_tick(
     state: dict[str, Any],
     *,
@@ -235,6 +265,7 @@ def cerberus_tick(
     )
     action = normalize_action(action)
     action = normalize_action(legalize_action(action, turn_state))
+    _respond_to_owner_command_or_warn(action, owner_directives)
 
     memory.remember_turn(state, action=action)
     _save_or_warn(action, "memory", memory)
