@@ -73,6 +73,30 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
 
         self.assertFalse(claw_runtime.wants_action(payload, claw_runtime.unwrap_snapshot(payload), gameplay_ready=True))
 
+    def test_agent_view_alias_fields_trigger_action(self) -> None:
+        payload = {
+            "type": "agent_view",
+            "gameId": "game-1",
+            "status": "running",
+            "canAct": True,
+            "view": {"agent": {"id": "me", "hp": 100, "ep": 10}, "region": {"id": "r1"}},
+        }
+
+        self.assertTrue(claw_runtime.wants_action(payload, claw_runtime.unwrap_snapshot(payload), gameplay_ready=True))
+
+    def test_free_mode_auto_upgrades_to_ready_onchain_paid_room(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
+        welcome = {
+            "type": "welcome",
+            "decision": "ASK_ENTRY_TYPE",
+            "readiness": {"paidRoom": {"ok": True, "mode": {"offchain": False, "onchain": True}}},
+        }
+
+        self.assertEqual(
+            claw_runtime.hello_frame(config, welcome),
+            {"type": "hello", "entryType": "paid", "mode": "onchain"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

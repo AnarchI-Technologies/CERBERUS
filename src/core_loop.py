@@ -24,6 +24,7 @@ from combat_decider import CombatCortex
 from combat_decider import target_in_attack_range
 from decision_engine import make_plan as build_plan
 from decision_engine import active_fallback_action
+from decision_engine import has_usable_turn_facts
 from ep_economy_engine import EconomyCortex
 from free_action_abuse import FreeActionCortex
 from knowledge_base import KnowledgeBase
@@ -229,6 +230,14 @@ def cerberus_tick(
         owner_directives = load_owner_messages()
     knowledge = KnowledgeBase().load()
     turn_state = TurnState.from_snapshot(state)
+    if not has_usable_turn_facts(turn_state):
+        action = {"type": "rest", "reason": "waiting for usable live turn facts"}
+        _respond_to_owner_command_or_warn(action, owner_directives)
+        memory.remember_turn(state, action=action)
+        _save_or_warn(action, "memory", memory)
+        _save_or_warn(action, "dossiers", dossiers)
+        _remember_longterm_or_warn(action, longterm, turn_state)
+        return action
     perception = _call(observe_fn, turn_state, turn_state)
     threats = _call(threat_scan, [], perception)
     opportunities = _call(opportunity_scan, [], perception)

@@ -29,6 +29,17 @@ TAUNT_TERMS = ("taunt", "talk", "say", "trash talk", "wisecrack", "mock")
 BROADCAST_TERMS = ("broadcast", "announce", "public thought", "spectator", "spectators")
 PROFIT_TERMS = ("profit", "yield", "premium", "earn", "earning", "farm")
 PERSONA_TERMS = ("persona", "tone", "sarcastic", "witty", "voice", "style")
+DIAGNOSTIC_TERMS = (
+    "balance hasnt changed",
+    "balance hasn't changed",
+    "what is going on",
+    "why",
+    "stuck",
+    "not earning",
+    "not making",
+    "runtime",
+    "diagnose",
+)
 
 
 class OwnerCommandCortex:
@@ -276,6 +287,8 @@ def command_categories(text: str) -> list[str]:
         categories.append("profit")
     if any(term in normalized for term in PERSONA_TERMS):
         categories.append("persona")
+    if any(term in normalized for term in DIAGNOSTIC_TERMS):
+        categories.append("diagnostic")
     return categories
 
 
@@ -292,8 +305,8 @@ def acknowledge_owner_command(message: dict[str, Any]) -> dict[str, str]:
             "status": "heard_context",
             "text": "I heard you. That does not map to a deterministic action yet, but I will keep it as owner context instead of pretending certainty.",
         }
-    context_only = [item for item in categories if item in {"profit", "persona"}]
-    executable = [item for item in categories if item not in {"profit", "persona"}]
+    context_only = [item for item in categories if item in {"profit", "persona", "diagnostic"}]
+    executable = [item for item in categories if item not in {"profit", "persona", "diagnostic"}]
     if context_only and not executable:
         return {
             "status": "heard_context",
@@ -314,7 +327,7 @@ def action_response_for_owner_command(command: dict[str, Any], action_payload: d
             "status": "heard_context",
             "text": "I heard the command, but it did not map to a deterministic action family yet.",
         }
-    executable = [item for item in categories if item not in {"profit", "persona"}]
+    executable = [item for item in categories if item not in {"profit", "persona", "diagnostic"}]
     if not executable:
         return {
             "status": "heard_context",

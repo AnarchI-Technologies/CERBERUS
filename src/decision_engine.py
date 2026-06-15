@@ -13,6 +13,20 @@ from memory_system import CompactMemoryStore
 from turn_state_model import TurnState
 
 
+def has_usable_turn_facts(state: TurnState) -> bool:
+    return bool(
+        state.self.id
+        or state.current_region.id
+        or state.connected_regions
+        or state.visible_regions
+        or state.visible_agents
+        or state.visible_monsters
+        or state.visible_items
+        or state.current_region.items
+        or state.inventory
+    )
+
+
 @dataclass(slots=True)
 class ArbiterDecision:
     action: dict[str, Any]
@@ -65,6 +79,8 @@ class Arbiter:
 
 
 def active_fallback_action(state: TurnState) -> dict[str, Any]:
+    if not has_usable_turn_facts(state):
+        return rest_action("waiting for usable live turn facts")
     if not state.can_take_main_action:
         return rest_action("waiting for main-action cooldown")
     if state.self.ep <= 0:

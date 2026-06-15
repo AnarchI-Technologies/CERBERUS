@@ -85,6 +85,37 @@ class HardeningTests(unittest.TestCase):
         self.assertFalse(state.current_region.is_death_zone)
         self.assertTrue(state.alert_active)
 
+    def test_parser_preserves_visible_monster_kind_when_type_is_species(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "ep": 5},
+                    "currentRegion": {"id": "r1"},
+                    "visibleMonsters": [{"id": "wolf-1", "type": "Wolf", "hp": 20}],
+                }
+            }
+        )
+
+        self.assertEqual(state.visible_monsters[0].kind, "monster")
+
+    def test_parser_accepts_live_snapshot_aliases(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "gameId": "g1",
+                "view": {
+                    "agent": {"id": "me", "hp": 88, "ep": 4},
+                    "region": {"id": "r7", "name": "Chapel"},
+                    "monsters": [{"id": "guardian-1", "type": "Guardian", "hp": 80}],
+                    "items": [{"id": "dagger-1", "typeId": "dagger"}],
+                },
+            }
+        )
+
+        self.assertEqual(state.self.id, "me")
+        self.assertEqual(state.current_region.id, "r7")
+        self.assertEqual(state.visible_monsters[0].kind, "monster")
+        self.assertEqual(state.visible_items[0]["id"], "dagger-1")
+
     def test_tick_survives_non_dict_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = CompactMemoryStore(
@@ -99,6 +130,23 @@ class HardeningTests(unittest.TestCase):
             action = cerberus_tick("broken", memory_store=memory, dossier_store=dossiers)
 
         self.assertEqual(action["type"], "rest")
+
+    def test_tick_rests_on_hollow_live_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.json",
+                encrypted_path=Path(tmp) / "memory.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+
+            action = cerberus_tick({"gameId": "g1", "view": {}}, memory_store=memory, dossier_store=dossiers)
+
+        self.assertEqual(action["type"], "rest")
+        self.assertIn("usable live turn facts", action["reason"])
+
 
     def test_corrupt_memory_file_loads_empty_with_warning(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2451,6 +2499,34 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(messages[-1]["text"], "prioritize profitable games")
         self.assertEqual(reloaded[-1]["kind"], "owner_command")
+
+    def test_owner_balance_alarm_gets_runtime_diagnostic_response(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.update_claw_runtime_status(
+                    state="playing",
+                    mode="free",
+                    games_completed=85,
+                    average_balance_delta_per_game=0.08,
+                    account={"balance": 46, "readiness": {"paidReady": False}},
+                    join_readiness={"paidRoom": {"ok": True, "mode": {"onchain": True}}},
+                    last_error="COOLDOWN_ACTIVE",
+                )
+                response = render_app.diagnostic_owner_response(
+                    {"kind": "owner_command", "text": "balance hasn't changed, what is going on"}
+                )
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertIsNotNone(response)
+        self.assertEqual(response["status"], "diagnostic")
+        self.assertIn("balance=46", response["text"])
+        self.assertIn("games=85", response["text"])
 
     def test_dashboard_is_game_first_with_collapsible_owner_controls(self) -> None:
         html = render_app.dashboard_html().decode("utf-8")

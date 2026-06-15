@@ -34,7 +34,7 @@ from claw_runtime import run_forever as run_claw_runtime  # noqa: E402
 from env_loader import hydrate_env  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now  # noqa: E402
-from owner_command_cortex import acknowledge_owner_command  # noqa: E402
+from owner_command_cortex import acknowledge_owner_command, command_categories, directive_text  # noqa: E402
 from runtime_state import (
     append_hellion_owner_response,
     append_owner_message,
@@ -174,6 +174,31 @@ def stats() -> dict[str, Any]:
         "longterm_memory": ready.get("longterm_memory", {}),
         "owner_messages": owner_messages(),
         "env": ready.get("env", {}),
+    }
+
+
+def diagnostic_owner_response(message: dict[str, Any]) -> dict[str, str] | None:
+    categories = command_categories(directive_text(message))
+    if "diagnostic" not in categories:
+        return None
+    runtime = read_json(claw_runtime_status_file())
+    account = runtime.get("account", {}) if isinstance(runtime.get("account"), dict) else {}
+    readiness = account.get("readiness", {}) if isinstance(account.get("readiness"), dict) else {}
+    bits = [
+        f"state={runtime.get('state') or 'unknown'}",
+        f"mode={runtime.get('mode') or 'unknown'}",
+        f"balance={account.get('balance', '?')}",
+        f"games={runtime.get('games_completed', 0)}",
+        f"avg/game={runtime.get('average_balance_delta_per_game', 0)}",
+        f"paidReady={bool(readiness.get('paidReady'))}",
+        f"onchainReady={bool(((runtime.get('join_readiness') or {}).get('paidRoom') or {}).get('mode', {}).get('onchain')) if isinstance(runtime.get('join_readiness'), dict) else False}",
+    ]
+    last_error = str(runtime.get("last_error") or "").strip()
+    if last_error:
+        bits.append(f"last_error={last_error[:160]}")
+    return {
+        "status": "diagnostic",
+        "text": "I heard you. Runtime diagnosis: " + "; ".join(bits) + ".",
     }
 
 
@@ -745,7 +770,7 @@ class CerberusHandler(BaseHTTPRequestHandler):
                 "created_at": created_at,
             }
             append_owner_message(message)
-            ack = acknowledge_owner_command(message)
+            ack = diagnostic_owner_response(message) or acknowledge_owner_command(message)
             messages = append_hellion_owner_response(
                 ack["text"],
                 command_id=message["id"],
