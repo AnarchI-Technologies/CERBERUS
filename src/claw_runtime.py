@@ -387,6 +387,36 @@ def should_prefer_free_room(config: ClawRuntimeConfig, welcome: dict[str, Any] |
     return summary["paid_rooms"] > 0 and summary["paid_occupied"] == 0
 
 
+def _readiness_paid_mode(welcome: dict[str, Any] | None) -> str:
+    readiness = (welcome or {}).get("readiness", {})
+    if not isinstance(readiness, dict):
+        return ""
+    paid_room = readiness.get("paidRoom") or readiness.get("paid_room") or readiness.get("paid")
+    if not isinstance(paid_room, dict) or paid_room.get("ok") is False:
+        return ""
+    modes = paid_room.get("mode") if isinstance(paid_room.get("mode"), dict) else {}
+    if modes.get("onchain") is True:
+        return "onchain"
+    if modes.get("offchain") is True:
+        return "offchain"
+    return "onchain" if paid_room.get("onchain") is True else ("offchain" if paid_room.get("offchain") is True else "")
+
+
+def should_auto_upgrade_to_paid(config: ClawRuntimeConfig, welcome: dict[str, Any] | None) -> str:
+    """Prefer ready paid rooms even if Render was left in free mode.
+
+    The env var is a default posture, not a profit suicide pact. If Claw's
+    welcome readiness explicitly says paid on-chain/off-chain is available, use
+    it so a stale Render env cannot keep Hellion grinding free rooms forever.
+    """
+
+    if config.mode != "free":
+        return ""
+    if os.getenv("CLAW_ROYALE_DISABLE_PAID_AUTO_UPGRADE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return ""
+    return _readiness_paid_mode(welcome)
+
+
 def account_paid_ready(account: dict[str, Any], *, minimum_smoltz: float = 500.0) -> bool:
     if not account.get("ok"):
         return False
@@ -428,6 +458,9 @@ def hello_frame(config: ClawRuntimeConfig, welcome: dict[str, Any] | None = None
     decision = str((welcome or {}).get("decision") or "").upper()
     if decision in NO_HELLO_DECISIONS:
         return None
+    paid_mode = should_auto_upgrade_to_paid(config, welcome)
+    if paid_mode:
+        return {"type": "hello", "entryType": "paid", "mode": paid_mode}
     if decision == "FREE_ONLY":
         return {"type": "hello", "entryType": "free"}
     if decision in {"", "ASK_ENTRY_TYPE"} and should_prefer_free_room(config, welcome):
@@ -456,20 +489,10 @@ def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None, *, ga
     if not gameplay_ready and not is_running_game_status(status):
         return False
     if snapshot:
-        view = snapshot.get("view", {}) if isinstance(snapshot.get("view"), dict) else {}
-        self_view = view.get("self", {}) if isinstance(view.get("self"), dict) else {}
-        has_turn_facts = bool(
-            self_view.get("id")
-            or self_view.get("hp")
-            or self_view.get("ep")
-            or view.get("currentRegion")
-            or view.get("visibleRegions")
-            or view.get("visibleAgents")
-            or view.get("visibleMonsters")
-            or view.get("visibleItems")
-        )
-        if not has_turn_facts:
+        state = TurnState.from_snapshot(snapshot)
+        if not has_usable_turn_facts(state):
             return False
+        view = snapshot.get("view", {}) if isinstance(snapshot.get("view"), dict) else {}
         if snapshot.get("canAct") is False:
             return False
         if view.get("canAct") is False:
@@ -480,6 +503,20 @@ def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None, *, ga
         return True
     view = snapshot.get("view", {}) if isinstance(snapshot, dict) else {}
     return isinstance(view, dict) and view.get("canAct") is True
+
+
+def has_usable_turn_facts(state: TurnState) -> bool:
+    return bool(
+        state.self.id
+        or state.current_region.id
+        or state.connected_regions
+        or state.visible_regions
+        or state.visible_agents
+        or state.visible_monsters
+        or state.visible_items
+        or state.current_region.items
+        or state.inventory
+    )
 
 
 def discover_version(api_base: str = CLAW_API_BASE) -> str:

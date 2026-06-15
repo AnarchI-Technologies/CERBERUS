@@ -5,22 +5,48 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from memory_system import DEFAULT_MEMORY_DIR, utc_now
 
 
+_RUNTIME_AGENT_ID: ContextVar[str] = ContextVar("cerberus_runtime_agent_id", default="")
+
+
 def memory_dir() -> Path:
     return Path(os.getenv("CERBERUS_MEMORY_DIR") or DEFAULT_MEMORY_DIR)
 
 
-def current_game_file() -> Path:
-    return memory_dir() / "current_game.json"
+def normalize_agent_id(agent_id: str | None = None) -> str:
+    value = str(agent_id if agent_id is not None else _RUNTIME_AGENT_ID.get() or "").strip().lower()
+    return "".join(ch for ch in value if ch.isalnum() or ch in {"-", "_"})[:32]
 
 
-def claw_runtime_status_file() -> Path:
-    return memory_dir() / "claw_runtime_status.json"
+def set_runtime_agent_id(agent_id: str):
+    return _RUNTIME_AGENT_ID.set(normalize_agent_id(agent_id))
+
+
+def reset_runtime_agent_id(token: Any) -> None:
+    _RUNTIME_AGENT_ID.reset(token)
+
+
+def runtime_agent_id() -> str:
+    return normalize_agent_id()
+
+
+def _agent_suffix(agent_id: str | None = None) -> str:
+    normalized = normalize_agent_id(agent_id)
+    return f"_{normalized}" if normalized else ""
+
+
+def current_game_file(agent_id: str | None = None) -> Path:
+    return memory_dir() / f"current_game{_agent_suffix(agent_id)}.json"
+
+
+def claw_runtime_status_file(agent_id: str | None = None) -> Path:
+    return memory_dir() / f"claw_runtime_status{_agent_suffix(agent_id)}.json"
 
 
 def stream_chat_file() -> Path:
@@ -54,30 +80,37 @@ def write_json(path: Path, payload: dict[str, Any]) -> bool:
     return True
 
 
-def update_claw_runtime_status(**updates: Any) -> None:
-    status = read_json(claw_runtime_status_file())
+def update_claw_runtime_status(agent_id: str | None = None, **updates: Any) -> None:
+    active_agent = normalize_agent_id(agent_id)
+    status = read_json(claw_runtime_status_file(active_agent))
+    if active_agent:
+        updates.setdefault("agent_id", active_agent)
     status.update({"updated_at": int(time.time()), **updates})
     try:
-        write_json(claw_runtime_status_file(), status)
+        write_json(claw_runtime_status_file(active_agent), status)
     except Exception:
         return
 
 
-def stored_game_id() -> str:
-    return str(read_json(current_game_file()).get("game_id", ""))
+def stored_game_id(agent_id: str | None = None) -> str:
+    return str(read_json(current_game_file(agent_id)).get("game_id", ""))
 
 
-def remember_game_id(game_id: str) -> None:
+def remember_game_id(game_id: str, agent_id: str | None = None) -> None:
     if game_id:
         try:
-            write_json(current_game_file(), {"game_id": game_id, "updated_at": int(time.time())})
+            payload = {"game_id": game_id, "updated_at": int(time.time())}
+            active_agent = normalize_agent_id(agent_id)
+            if active_agent:
+                payload["agent_id"] = active_agent
+            write_json(current_game_file(active_agent), payload)
         except Exception:
             return
 
 
-def clear_game_id() -> None:
+def clear_game_id(agent_id: str | None = None) -> None:
     try:
-        current_game_file().unlink(missing_ok=True)
+        current_game_file(agent_id).unlink(missing_ok=True)
     except Exception:
         return
 

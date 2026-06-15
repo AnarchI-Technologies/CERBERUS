@@ -183,7 +183,7 @@ def _respond_to_owner_command_or_warn(
     if not command_id:
         return
     last_response = last_hellion_response_for_command(command_id)
-    if str(last_response.get("status") or "") in {"executing", "blocked", "overridden", "heard_unmapped"}:
+    if str(last_response.get("status") or "") in {"executing", "blocked", "overridden", "heard_unmapped", "heard_context"}:
         return
     try:
         response = action_response_for_owner_command(directive, action)

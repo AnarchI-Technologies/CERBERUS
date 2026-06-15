@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from combat_decider import target_in_attack_range, target_score
 from cortex_types import CortexResult, action, rest_action
 from free_action_abuse import best_ground_weapon, equipped_weapon, weapon_bonus_for_item
 from turn_state_model import TurnState
@@ -20,6 +21,14 @@ WEAPON_TERMS = ("weapon", "equip", "sharper", "dagger", "sword", "katana", "snip
 AVOID_TERMS = ("avoid fight", "avoid combat", "do not fight", "don't fight", "stop fighting")
 REST_BLOCK_TERMS = ("do not rest", "don't rest", "stop resting")
 SCOUT_TERMS = ("scout", "explore", "move")
+ATTACK_TERMS = ("attack", "fight", "kill", "hunt", "smash", "destroy", "aggressive", "pressure")
+GUARDIAN_TERMS = ("guardian", "monster")
+DEFENSIVE_TERMS = ("defensive", "survive", "safe", "safety", "stay alive", "preserve hp")
+RUIN_TERMS = ("ruin", "progress", "progression", "objective")
+TAUNT_TERMS = ("taunt", "talk", "say", "trash talk", "wisecrack", "mock")
+BROADCAST_TERMS = ("broadcast", "announce", "public thought", "spectator", "spectators")
+PROFIT_TERMS = ("profit", "yield", "premium", "earn", "earning", "farm")
+PERSONA_TERMS = ("persona", "tone", "sarcastic", "witty", "voice", "style")
 
 
 class OwnerCommandCortex:
@@ -102,6 +111,56 @@ class OwnerCommandCortex:
                     )
                     break
 
+        if any(term in text for term in DEFENSIVE_TERMS):
+            defensive = defensive_action(state)
+            if defensive:
+                results.append(
+                    CortexResult(
+                        cortex=self.name,
+                        intent="owner_requested_defensive_posture",
+                        score=97,
+                        risk=1,
+                        priority=97,
+                        veto=True,
+                        action=defensive,
+                        reason="owner directive: defensive survival posture",
+                        source_facts=["F|owner.private_command", "F|safety.survival"],
+                    )
+                )
+
+        if any(term in text for term in ATTACK_TERMS):
+            target = best_attack_target(state, guardian_only=any(term in text for term in GUARDIAN_TERMS))
+            if target:
+                target_type = "monster" if target.kind == "monster" else "agent"
+                results.append(
+                    CortexResult(
+                        cortex=self.name,
+                        intent="owner_requested_attack_pressure",
+                        score=94,
+                        risk=max(5, target.atk * 0.7),
+                        priority=94,
+                        action=action("attack", targetId=target.id, targetType=target_type),
+                        reason=f"owner directive: attack pressure on {target_type} {target.name or target.id[:8]}",
+                        source_facts=["F|owner.private_command", "F|combat.attack"],
+                    )
+                )
+
+        if any(term in text for term in RUIN_TERMS):
+            ruin_action = progression_action(state)
+            if ruin_action:
+                results.append(
+                    CortexResult(
+                        cortex=self.name,
+                        intent="owner_requested_progression",
+                        score=89,
+                        risk=8,
+                        priority=89,
+                        action=ruin_action,
+                        reason="owner directive: prioritize ruin/progression objective",
+                        source_facts=["F|owner.private_command", "F|progression.ruin"],
+                    )
+                )
+
         if "rest" in text and not any(term in text for term in REST_BLOCK_TERMS):
             results.append(
                 CortexResult(
@@ -133,6 +192,25 @@ class OwnerCommandCortex:
                         )
                     )
                     break
+
+        if any(term in text for term in TAUNT_TERMS + BROADCAST_TERMS):
+            message = taunt_message(directive)
+            if any(term in text for term in BROADCAST_TERMS) and state.has_broadcast_channel:
+                social_action = action("broadcast", message=message)
+            else:
+                social_action = action("talk", message=message)
+            results.append(
+                CortexResult(
+                    cortex=self.name,
+                    intent="owner_requested_public_voice",
+                    score=80,
+                    risk=0,
+                    priority=80,
+                    action=social_action,
+                    reason="owner directive: speak publicly without exposing private strategy",
+                    source_facts=["F|owner.private_command", "F|social.sanitized"],
+                )
+            )
 
         if results:
             for result in results:
@@ -178,10 +256,26 @@ def command_categories(text: str) -> list[str]:
         categories.append("value")
     if any(term in normalized for term in AVOID_TERMS):
         categories.append("avoid_combat")
+    if any(term in normalized for term in DEFENSIVE_TERMS):
+        categories.append("defensive")
+    if any(term in normalized for term in ATTACK_TERMS):
+        categories.append("attack")
+    if any(term in normalized for term in GUARDIAN_TERMS):
+        categories.append("guardian")
+    if any(term in normalized for term in RUIN_TERMS):
+        categories.append("progression")
     if "rest" in normalized and not any(term in normalized for term in REST_BLOCK_TERMS):
         categories.append("rest")
     if any(term in normalized for term in SCOUT_TERMS):
         categories.append("scout")
+    if any(term in normalized for term in TAUNT_TERMS):
+        categories.append("taunt")
+    if any(term in normalized for term in BROADCAST_TERMS):
+        categories.append("broadcast")
+    if any(term in normalized for term in PROFIT_TERMS):
+        categories.append("profit")
+    if any(term in normalized for term in PERSONA_TERMS):
+        categories.append("persona")
     return categories
 
 
@@ -195,8 +289,15 @@ def acknowledge_owner_command(message: dict[str, Any]) -> dict[str, str]:
         }
     if not categories:
         return {
-            "status": "heard_unmapped",
-            "text": "I heard you. I do not have a deterministic handler for that command yet, so I will keep it as context instead of pretending certainty.",
+            "status": "heard_context",
+            "text": "I heard you. That does not map to a deterministic action yet, but I will keep it as owner context instead of pretending certainty.",
+        }
+    context_only = [item for item in categories if item in {"profit", "persona"}]
+    executable = [item for item in categories if item not in {"profit", "persona"}]
+    if context_only and not executable:
+        return {
+            "status": "heard_context",
+            "text": f"I heard you. I agree with the direction and will treat it as standing context: {', '.join(context_only)}.",
         }
     label = ", ".join(categories)
     return {
@@ -210,8 +311,14 @@ def action_response_for_owner_command(command: dict[str, Any], action_payload: d
     action_type = str(action_payload.get("type") or "unknown")
     if not categories:
         return {
-            "status": "heard_unmapped",
+            "status": "heard_context",
             "text": "I heard the command, but it did not map to a deterministic action family yet.",
+        }
+    executable = [item for item in categories if item not in {"profit", "persona"}]
+    if not executable:
+        return {
+            "status": "heard_context",
+            "text": f"I heard you and agree with the direction. Holding this as context: {', '.join(categories)}.",
         }
     if action_payload.get("_rejected_action"):
         return {
@@ -227,6 +334,72 @@ def action_response_for_owner_command(command: dict[str, Any], action_payload: d
         "status": "overridden",
         "text": f"I heard you. I agree with the command, but a higher-priority safety or legality rule chose {action_type} this tick.",
     }
+
+
+def best_attack_target(state: TurnState, *, guardian_only: bool = False):
+    candidates = []
+    if not guardian_only:
+        candidates.extend(
+            agent
+            for agent in state.visible_agents
+            if agent.is_alive and agent.id != state.self.id and target_in_attack_range(state, agent)
+        )
+    candidates.extend(
+        monster
+        for monster in state.visible_monsters
+        if monster.is_alive
+        and target_in_attack_range(state, monster)
+        and (not guardian_only or "guardian" in f"{monster.name} {monster.id}".lower())
+    )
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: target_score(state, item), reverse=True)[0]
+
+
+def defensive_action(state: TurnState) -> dict[str, Any] | None:
+    heal = state.best_heal_item()
+    if heal and (state.is_low_hp or state.self.hp <= int(state.self.max_hp * 0.75)):
+        return action("use_item", itemId=heal.get("id"))
+    for region in state.connected_safe_regions():
+        region_id = region.get("id") if isinstance(region, dict) else ""
+        if region_id:
+            return action("move", regionId=region_id)
+    if state.self.ep <= 1:
+        return rest_action("owner directive: defensive recovery")
+    return None
+
+
+def progression_action(state: TurnState) -> dict[str, Any] | None:
+    terrain = state.current_region.terrain.lower()
+    name = state.current_region.name.lower()
+    if state.can_take_main_action and state.self.ep > 0 and ("ruin" in terrain or "ruin" in name or state.ruins):
+        return action("explore")
+    for region in state.connected_safe_regions():
+        label = f"{region.get('name', '')} {region.get('terrain', '')} {region.get('id', '')}".lower() if isinstance(region, dict) else str(region).lower()
+        region_id = region.get("id") if isinstance(region, dict) else str(region)
+        if region_id and ("ruin" in label or not state.current_region.id):
+            return action("move", regionId=region_id)
+    return None
+
+
+def taunt_message(command: dict[str, Any]) -> str:
+    raw = str(command.get("text") or command.get("message") or "")
+    for marker in ("say ", "talk ", "taunt ", "broadcast ", "announce "):
+        index = raw.lower().find(marker)
+        if index >= 0:
+            candidate = raw[index + len(marker) :].strip(" :\"'")
+            if candidate:
+                return sanitize_public_message(candidate)
+    return "Hellion heard the owner. The arena may now update its emergency plans."
+
+
+def sanitize_public_message(text: str) -> str:
+    blocked = ("private key", "api key", "secret", "wallet key", "mnemonic", "password", "pin")
+    out = " ".join(str(text).replace("\r", " ").replace("\n", " ").split())
+    for term in blocked:
+        out = out.replace(term, "[private]")
+        out = out.replace(term.title(), "[private]")
+    return out[:200]
 
 
 def best_weapon_action(state: TurnState) -> dict[str, Any] | None:

@@ -54,6 +54,23 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _first_dict(*values: Any) -> dict[str, Any]:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _first_list(*values: Any) -> list[Any]:
+    for value in values:
+        if isinstance(value, list):
+            return value
+    for value in values:
+        if value is not None:
+            return _as_list(value)
+    return []
+
+
 @dataclass(slots=True)
 class RegionState:
     id: str = ""
@@ -120,8 +137,22 @@ class TurnState:
     def from_snapshot(cls, snapshot: dict[str, Any]) -> "TurnState":
         snapshot = _as_dict(snapshot)
         view = _as_dict(snapshot.get("view", snapshot))
-        self_raw = _as_dict(view.get("self", {}))
-        region_raw = _as_dict(view.get("currentRegion", {}))
+        self_raw = _first_dict(
+            view.get("self"),
+            view.get("agent"),
+            view.get("me"),
+            view.get("player"),
+            snapshot.get("self"),
+            snapshot.get("agent"),
+        )
+        region_raw = _first_dict(
+            view.get("currentRegion"),
+            view.get("region"),
+            view.get("current_region"),
+            view.get("location"),
+            snapshot.get("currentRegion"),
+            snapshot.get("region"),
+        )
 
         state = cls(
             game_id=str(snapshot.get("gameId") or view.get("gameId") or ""),
@@ -141,11 +172,27 @@ class TurnState:
                 or view.get("adjacentRegions")
                 or view.get("exits")
             ),
-            visible_regions=[r for r in _as_list(view.get("visibleRegions")) if isinstance(r, dict)],
-            visible_agents=[parse_agent(a) for a in _as_list(view.get("visibleAgents")) if isinstance(a, dict)],
-            visible_monsters=[parse_agent(m, kind="monster") for m in _as_list(view.get("visibleMonsters")) if isinstance(m, dict)],
-            visible_items=[i for i in _as_list(view.get("visibleItems") or region_raw.get("items")) if isinstance(i, dict)],
-            inventory=[i for i in _as_list(self_raw.get("inventory")) if isinstance(i, dict)],
+            visible_regions=[
+                r
+                for r in _first_list(view.get("visibleRegions"), view.get("regions"), snapshot.get("visibleRegions"))
+                if isinstance(r, dict)
+            ],
+            visible_agents=[
+                parse_agent(a)
+                for a in _first_list(view.get("visibleAgents"), view.get("agents"), snapshot.get("visibleAgents"))
+                if isinstance(a, dict)
+            ],
+            visible_monsters=[
+                parse_agent(m, kind="monster")
+                for m in _first_list(view.get("visibleMonsters"), view.get("monsters"), snapshot.get("visibleMonsters"))
+                if isinstance(m, dict)
+            ],
+            visible_items=[
+                i
+                for i in _first_list(view.get("visibleItems"), region_raw.get("items"), view.get("items"), snapshot.get("visibleItems"))
+                if isinstance(i, dict)
+            ],
+            inventory=[i for i in _first_list(self_raw.get("inventory"), view.get("inventory")) if isinstance(i, dict)],
             pending_deathzones=[dz for dz in _as_list(view.get("pendingDeathzones")) if isinstance(dz, dict)],
             recent_logs=_as_list(view.get("recentLogs")),
             recent_messages=[m for m in _as_list(view.get("recentMessages")) if isinstance(m, dict)],
@@ -253,6 +300,8 @@ def parse_region(raw: dict[str, Any]) -> RegionState:
 
 def parse_agent(raw: dict[str, Any], *, kind: str = "agent") -> AgentState:
     raw = _as_dict(raw)
+    raw_kind = str(raw.get("kind") or "").lower()
+    parsed_kind = raw_kind if raw_kind in {"agent", "monster"} else kind
     return AgentState(
         id=str(raw.get("id") or raw.get("agentId") or ""),
         name=str(raw.get("name") or raw.get("agentName") or ""),
@@ -264,6 +313,6 @@ def parse_agent(raw: dict[str, Any], *, kind: str = "agent") -> AgentState:
         defense=_as_int(raw.get("def") or raw.get("defense"), 5),
         is_alive=_as_bool(raw.get("isAlive"), True),
         region_id=str(raw.get("regionId") or raw.get("currentRegionId") or ""),
-        kind=str(raw.get("kind") or raw.get("type") or kind),
+        kind=parsed_kind,
         raw=raw,
     )

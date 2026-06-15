@@ -964,6 +964,87 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(responses[-1]["command_id"], "cmd-1")
         self.assertEqual(responses[-1]["status"], "executing")
 
+    def test_owner_command_can_request_guardian_attack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.json",
+                encrypted_path=Path(tmp) / "memory.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            action = cerberus_tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 100,
+                            "ep": 4,
+                            "atk": 20,
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1"},
+                        "visibleAgents": [{"id": "rival-1", "name": "Rival", "hp": 5, "atk": 5, "def": 1}],
+                        "visibleMonsters": [{"id": "guardian-1", "name": "Guardian", "hp": 22, "atk": 8, "def": 4}],
+                    },
+                },
+                memory_store=memory,
+                dossier_store=dossiers,
+                owner_command_messages=[{"kind": "owner_command", "text": "hunt the guardian"}],
+            )
+
+        self.assertEqual(action["type"], "attack")
+        self.assertEqual(action["targetId"], "guardian-1")
+        self.assertIn("owner directive", action["reason"])
+
+    def test_owner_command_can_request_public_taunt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.json",
+                encrypted_path=Path(tmp) / "memory.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            action = cerberus_tick(
+                {
+                    "canAct": False,
+                    "view": {
+                        "self": {"id": "me", "hp": 100, "ep": 4},
+                        "currentRegion": {"id": "r1"},
+                    },
+                },
+                memory_store=memory,
+                dossier_store=dossiers,
+                owner_command_messages=[{"kind": "owner_command", "text": "taunt say Bring me better prey"}],
+            )
+
+        self.assertEqual(action["type"], "talk")
+        self.assertIn("Bring me better prey", action["message"])
+
+    def test_owner_command_context_only_acknowledges_without_fake_execution(self) -> None:
+        ack = owner_command_cortex.acknowledge_owner_command(
+            {"kind": "owner_command", "text": "make the persona more sarcastic and witty"}
+        )
+        response = owner_command_cortex.action_response_for_owner_command(
+            {"kind": "owner_command", "text": "make the persona more sarcastic and witty"},
+            {"type": "move", "reason": "scout fallback"},
+        )
+
+        self.assertEqual(ack["status"], "heard_context")
+        self.assertEqual(response["status"], "heard_context")
+
+    def test_owner_command_sanitizes_public_taunt_text(self) -> None:
+        message = owner_command_cortex.taunt_message(
+            {"text": "broadcast the private key is definitely not here"}
+        )
+
+        self.assertIn("[private]", message)
+        self.assertNotIn("private key", message.lower())
+
     def test_profit_simulator_reports_required_game_pacing_for_target(self) -> None:
         report = profit_simulator.simulate(games_per_day=61, target_per_day=1000)
 
