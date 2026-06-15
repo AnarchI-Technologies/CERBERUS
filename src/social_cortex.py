@@ -116,13 +116,18 @@ class SocialCortex:
             side_effects.extend(self._message_effects(message))
 
         if side_effects:
+            # Adjust priority: social interactions are less important if we are dying
+            base_priority = 30
+            if state.self.hp and state.self.hp < 25:
+                base_priority = 5
+
             results.append(
                 CortexResult(
                     cortex=self.name,
                     intent="social_side_effects",
                     score=18,
                     risk=2,
-                    priority=30,
+                    priority=base_priority,
                     action=None,
                     reason="MoltyBook/follow/dossier side effects prepared",
                     side_effects=side_effects,

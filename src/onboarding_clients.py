@@ -66,7 +66,11 @@ class ClawRoyaleClient:
             timeout=kwargs.pop("timeout", 45),
             **kwargs,
         )
-        payload = _json_or_text(response)
+        try:
+            payload = _json_or_text(response)
+        except Exception:
+            payload = {"error": "failed_to_parse_response", "status": response.status_code}
+
         if not 200 <= response.status_code < 300:
             message = payload.get("error", payload) if isinstance(payload, dict) else payload
             raise OnboardingAPIError("claw_royale", response.status_code, str(message), payload)
