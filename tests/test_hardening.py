@@ -810,6 +810,100 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["type"], "attack")
         self.assertEqual(action["targetId"], "guardian-1")
 
+    def test_owner_command_can_request_heal_before_low_hp_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.json",
+                encrypted_path=Path(tmp) / "memory.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            action = cerberus_tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 72,
+                            "maxHp": 100,
+                            "ep": 4,
+                            "inventory": [{"id": "med-1", "typeId": "medkit"}],
+                        },
+                        "currentRegion": {"id": "r1"},
+                    },
+                },
+                memory_store=memory,
+                dossier_store=dossiers,
+                owner_command_messages=[{"kind": "owner_command", "text": "heal now before you get cute"}],
+            )
+
+        self.assertEqual(action["type"], "use_item")
+        self.assertEqual(action["itemId"], "med-1")
+        self.assertIn("owner directive", action["reason"])
+
+    def test_owner_command_can_avoid_fighting_when_safe_move_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.json",
+                encrypted_path=Path(tmp) / "memory.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            action = cerberus_tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 100,
+                            "ep": 4,
+                            "atk": 24,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1", "connections": [{"id": "r2"}]},
+                        "visibleAgents": [{"id": "rival-1", "name": "Rival", "hp": 12, "atk": 8, "def": 2}],
+                    },
+                },
+                memory_store=memory,
+                dossier_store=dossiers,
+                owner_command_messages=[{"kind": "owner_command", "text": "avoid fights and reposition"}],
+            )
+
+        self.assertEqual(action["type"], "move")
+        self.assertEqual(action["regionId"], "r2")
+        self.assertIn("owner directive", action["reason"])
+
+    def test_owner_command_context_is_passed_to_custom_planner(self) -> None:
+        seen = {}
+
+        def planner(**kwargs):  # type: ignore[no-untyped-def]
+            seen["owner_messages"] = kwargs.get("owner_messages")
+            return {"action": {"type": "rest", "reason": "planner stub"}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.json",
+                encrypted_path=Path(tmp) / "memory.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            cerberus_tick(
+                {"view": {"self": {"id": "me", "hp": 100, "ep": 3}, "currentRegion": {"id": "r1"}}},
+                memory_store=memory,
+                dossier_store=dossiers,
+                make_plan=planner,
+                owner_command_messages=[{"kind": "owner_command", "text": "prioritize value"}],
+            )
+
+        self.assertEqual(seen["owner_messages"][0]["text"], "prioritize value")
+
     def test_profit_simulator_reports_required_game_pacing_for_target(self) -> None:
         report = profit_simulator.simulate(games_per_day=61, target_per_day=1000)
 

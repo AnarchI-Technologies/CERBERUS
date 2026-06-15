@@ -30,7 +30,9 @@ from knowledge_base import KnowledgeBase
 from longterm_memory import LongTermMemoryStore
 from memory_system import CompactMemoryStore
 from memory_cortex import MemoryCortex
+from owner_command_cortex import OwnerCommandCortex
 from progression_cortex import ProgressionCortex
+from runtime_state import owner_messages as load_owner_messages
 from social_cortex import SocialCortex
 from threat_engine import ThreatCortex
 from turn_state_model import TurnState
@@ -175,6 +177,7 @@ def cerberus_tick(
     memory_store: CompactMemoryStore | None = None,
     dossier_store: AgentDossierStore | None = None,
     longterm_store: LongTermMemoryStore | None = None,
+    owner_command_messages: list[dict[str, Any]] | None = None,
     observe_fn: Callable[[dict[str, Any]], Any] | None = None,
     threat_scan: Callable[[Any], Any] | None = None,
     opportunity_scan: Callable[[Any], Any] | None = None,
@@ -191,6 +194,9 @@ def cerberus_tick(
     longterm = longterm_store
     if longterm is None and memory_store is None and dossier_store is None:
         longterm = LongTermMemoryStore()
+    owner_directives = owner_command_messages
+    if owner_directives is None and memory_store is None and dossier_store is None:
+        owner_directives = load_owner_messages()
     knowledge = KnowledgeBase().load()
     turn_state = TurnState.from_snapshot(state)
     perception = _call(observe_fn, turn_state, turn_state)
@@ -208,9 +214,11 @@ def cerberus_tick(
         opportunities=opportunities,
         memory=memory.agent_context(),
         memory_store=memory,
+        owner_messages=owner_directives or [],
         knowledge=knowledge,
         cortexes=[
             ThreatCortex(),
+            OwnerCommandCortex(),
             FreeActionCortex(),
             ProgressionCortex(),
             CombatCortex(),
