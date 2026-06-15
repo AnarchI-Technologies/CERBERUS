@@ -457,6 +457,59 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("action=pickup", rows[0]["text"])
         self.assertNotIn("private", rows[0]["text"].lower())
 
+    def test_tick_learns_from_success_failure_and_other_agent_outcomes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            isolated.tick(
+                {
+                    "turn": 12,
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 72, "ep": 3},
+                        "currentRegion": {"id": "r1", "name": "Arena Ring", "terrain": "Plain"},
+                        "recentMessages": [{"agentId": "ally-1", "message": "ruin strategy: leave before alert spikes"}],
+                    },
+                    "events": [
+                        {"type": "agent_kill", "data": {"killerId": "me", "victimId": "enemy-1", "victimName": "Rival"}},
+                        {"type": "agent_kill", "data": {"killerId": "enemy-2", "killerName": "Hunter", "victimId": "me"}},
+                        {"type": "agent_kill", "data": {"killerId": "enemy-3", "killerName": "Closer", "victimId": "enemy-4", "victimName": "Runner"}},
+                        {"type": "relic_acquired", "data": {"agentId": "me", "contentType": "relic_red"}},
+                    ],
+                }
+            )
+
+            lessons = isolated.memory.data["lessons"]
+            dossiers = isolated.dossiers.records
+
+        self.assertTrue(any("success: eliminated Rival" in lesson for lesson in lessons))
+        self.assertTrue(any("failure: Hunter eliminated us" in lesson for lesson in lessons))
+        self.assertTrue(any("observed: Closer eliminated Runner" in lesson for lesson in lessons))
+        self.assertTrue(any("secured relic_red" in lesson for lesson in lessons))
+        self.assertEqual(dossiers["enemy-1"].killed_by_us, 1)
+        self.assertEqual(dossiers["enemy-2"].killed_us, 1)
+        self.assertIn("beat_Runner@Arena Ring", dossiers["enemy-3"].social_notes)
+
+    def test_tick_persists_validated_strategy_into_compact_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            isolated.tick(
+                {
+                    "turn": 8,
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 80, "ep": 4},
+                        "currentRegion": {"id": "r1", "name": "Ruin Gate", "terrain": "Ruin"},
+                        "recentMessages": [{"agentId": "ally-1", "message": "Ruin strategy: leave before alert spikes and keep an exit open."}],
+                    },
+                }
+            )
+
+            lessons = isolated.memory.data["lessons"]
+            dossier = isolated.dossiers.records["ally-1"]
+
+        self.assertTrue(any("validated strat from ally-1" in lesson for lesson in lessons))
+        self.assertTrue(any(note.startswith("validated:") for note in dossier.social_notes))
+
     def test_cannot_act_blocks_main_actions_but_free_equip_still_works(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             isolated = self._isolated(tmp)
@@ -1211,6 +1264,46 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("_side_effects", action)
         self.assertTrue(any(effect.get("type") == "moltybook_draft" for effect in action["_side_effects"]))
         self.assertTrue(any(effect.get("type") == "game_free_action" for effect in action["_side_effects"]))
+
+    def test_runtime_action_result_learning_persists_outcome_and_lesson(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                status = {
+                    "current_game_id": "game-7",
+                    "last_action": {"type": "move", "regionId": "r2", "reason": "escape pressure"},
+                    "last_snapshot": {
+                        "game_id": "game-7",
+                        "agent_id": "me",
+                        "turn": 14,
+                        "hp": 44,
+                        "max_hp": 100,
+                        "ep": 2,
+                        "max_ep": 10,
+                        "atk": 19,
+                        "defense": 7,
+                        "alive": True,
+                        "region_id": "r1",
+                        "region_name": "Storm Hall",
+                        "terrain": "Storm",
+                        "death_zone": False,
+                        "alert_gauge": 6,
+                    },
+                }
+                claw_runtime.record_action_result_learning({"type": "action_result", "success": False, "error": "TARGET_BLOCKED"}, status=status)
+                reloaded = CompactMemoryStore().load()
+
+            turns = reloaded.data["turns"]
+            lessons = reloaded.data["lessons"]
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertTrue(any("A|type=move" in turn and "O|ok=False" in turn for turn in turns))
+        self.assertTrue(any("action_result: move failed with TARGET_BLOCKED" in lesson for lesson in lessons))
 
     def test_isolated_instance_survives_randomized_high_intensity_churn(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")

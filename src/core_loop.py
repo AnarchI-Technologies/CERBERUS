@@ -173,6 +173,112 @@ def _remember_longterm_or_warn(
         )
 
 
+def _event_data(event: dict[str, Any]) -> dict[str, Any]:
+    return event.get("data") if isinstance(event.get("data"), dict) else event
+
+
+def _remember_event_learning_or_warn(
+    action: dict[str, Any],
+    memory: CompactMemoryStore,
+    dossiers: AgentDossierStore,
+    state: TurnState,
+) -> None:
+    region = state.current_region.name or state.current_region.id or "unknown_region"
+    try:
+        for event in state.events:
+            event_type = str(event.get("type") or event.get("eventType") or "").lower()
+            data = _event_data(event)
+            killer = str(data.get("killerId") or data.get("attackerId") or "")
+            killer_name = str(data.get("killerName") or data.get("attackerName") or killer[:8] or "unknown")
+            victim = str(data.get("victimId") or data.get("agentId") or data.get("targetId") or "")
+            victim_name = str(data.get("victimName") or data.get("targetName") or victim[:8] or "unknown")
+
+            if any(term in event_type for term in ("kill", "death", "eliminated")) and killer and victim:
+                if killer == state.self.id and victim != state.self.id:
+                    dossiers.add_social_note(victim, f"lost_to_us@{region}"[:180])
+                    memory.remember_lesson(
+                        "combat",
+                        f"success: eliminated {victim_name} in {region}; press advantage when hp and EP stay stable",
+                        source=f"event:{event_type}",
+                        confidence="0.82",
+                    )
+                elif victim == state.self.id and killer != state.self.id:
+                    dossiers.record_killed_us(killer, name=killer_name)
+                    dossiers.add_social_note(killer, f"killed_us@{region}"[:180])
+                    memory.remember_lesson(
+                        "combat",
+                        f"failure: {killer_name} eliminated us in {region}; respect their pressure and leave earlier",
+                        source=f"event:{event_type}",
+                        confidence="0.91",
+                    )
+                elif killer != victim:
+                    dossiers.observe_agent(killer, name=killer_name, tendency="finishes_low_targets")
+                    dossiers.observe_agent(victim, name=victim_name, tendency="dies_under_pressure")
+                    dossiers.add_social_note(killer, f"beat_{victim_name}@{region}"[:180])
+                    dossiers.add_social_note(victim, f"lost_to_{killer_name}@{region}"[:180])
+                    memory.remember_lesson(
+                        "opponents",
+                        f"observed: {killer_name} eliminated {victim_name} in {region}",
+                        source=f"event:{event_type}",
+                        confidence="0.73",
+                    )
+                continue
+
+            actor = str(data.get("agentId") or data.get("ownerId") or data.get("playerId") or "")
+            item_name = str(
+                data.get("itemType")
+                or data.get("typeId")
+                or data.get("contentType")
+                or data.get("itemName")
+                or "loot"
+            )
+            if event_type in {"relic_acquired", "pack_acquired"} and actor:
+                domain = "progression"
+                if actor == state.self.id:
+                    memory.remember_lesson(
+                        domain,
+                        f"success: secured {item_name} in {region}; convert claim into safe extraction",
+                        source=f"event:{event_type}",
+                        confidence="0.77",
+                    )
+                else:
+                    dossiers.observe_agent(actor, name=str(data.get("agentName") or actor[:8]), tendency=f"collects_{item_name}")
+                    memory.remember_lesson(
+                        domain,
+                        f"observed: another agent secured {item_name} in {region}",
+                        source=f"event:{event_type}",
+                        confidence="0.68",
+                    )
+                continue
+
+            if event_type in {"relic_dropped", "pack_dropped", "relic_discarded", "pack_discarded"} and actor == state.self.id:
+                memory.remember_lesson(
+                    "progression",
+                    f"failure: lost {item_name} in {region}; do not overstay contested loot",
+                    source=f"event:{event_type}",
+                    confidence="0.85",
+                )
+
+        for effect in action.get("_side_effects", []):
+            if not isinstance(effect, dict):
+                continue
+            if effect.get("type") == "validated_strategy_soundbite":
+                agent_id = str(effect.get("agentId") or "")
+                marker = str(effect.get("marker") or "")
+                if agent_id and marker:
+                    dossiers.add_social_note(agent_id, f"validated:{marker[:48]}")
+                    memory.remember_lesson(
+                        "opponents",
+                        f"validated strat from {agent_id}: {marker[:120]}",
+                        source="social:validated_strategy",
+                        confidence=str(effect.get("confidence") or "0.7"),
+                    )
+    except Exception as exc:
+        action.setdefault("_warnings", []).append(
+            {"type": "save_error", "store": "learning", "error": str(exc)[:240]}
+        )
+
+
 def _respond_to_owner_command_or_warn(
     action: dict[str, Any],
     owner_directives: list[dict[str, Any]] | None,
@@ -275,6 +381,7 @@ def cerberus_tick(
     action = normalize_action(action)
     action = normalize_action(legalize_action(action, turn_state))
     _respond_to_owner_command_or_warn(action, owner_directives)
+    _remember_event_learning_or_warn(action, memory, dossiers, turn_state)
 
     memory.remember_turn(state, action=action)
     _save_or_warn(action, "memory", memory)
