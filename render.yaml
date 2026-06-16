@@ -53,5 +53,5 @@ services:
         sync: false
     disk:
       name: cerberus-data
-      mountPath: /var/data
-      sizeGB: 1
+      mountPath: /var/data/.cerberus
+      sizeGB: 5

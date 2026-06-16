@@ -130,19 +130,19 @@ It defines a small Python web service with:
 - `/tick` for guarded JSON turn requests
 - an optional always-on Claw Royale runtime worker when `CLAW_ROYALE_RUNTIME_ENABLED=true`
 
-The service uses a 1 GB persistent disk mounted at:
-
-```text
-/var/data
-```
-
-The default Render memory directory is:
+The service uses a 5 GB persistent disk mounted at:
 
 ```text
 /var/data/.cerberus
 ```
 
-That path should live on the mounted Render disk. Compact memory, long-term
+The default Render memory directory is the disk mount itself:
+
+```text
+/var/data/.cerberus
+```
+
+That path must match the mounted Render disk. Compact memory, long-term
 SQLite memory, current-game state, stream chat, voice-lab state, and runtime
 status all resolve through `CERBERUS_MEMORY_DIR`.
 
