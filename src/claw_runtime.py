@@ -23,6 +23,7 @@ from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, recon
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
 from env_loader import hydrate_env
+from game_map import build_live_map
 from memory_system import CompactMemoryStore
 from onboarding_clients import ClawRoyaleClient
 from runtime_state import (
@@ -897,6 +898,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 game_status=status,
                 gameplay_ready=gameplay_ready,
                 last_snapshot=snapshot_summary(snapshot),
+                live_map=build_live_map(snapshot),
             )
             if snapshot and wants_action(payload, snapshot, gameplay_ready=gameplay_ready):
                 action = cerberus_tick(snapshot)

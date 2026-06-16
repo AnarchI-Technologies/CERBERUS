@@ -32,6 +32,8 @@ import x_oauth
 import runtime_state
 import render_env_export
 import env_doctor
+import game_map
+import launch_doctor
 import memory_system
 import profit_simulator
 import owner_command_cortex
@@ -2674,6 +2676,39 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(summary["visible_agents"], 1)
         self.assertEqual(summary["visible_monsters"], 1)
 
+    def test_live_game_map_models_hex_contents_and_route_hints(self) -> None:
+        payload = game_map.build_live_map(
+            {
+                "gameId": "game-1",
+                "turn": 7,
+                "view": {
+                    "self": {"id": "me", "hp": 90, "ep": 4, "atk": 20},
+                    "currentRegion": {
+                        "id": "r1",
+                        "name": "Center",
+                        "terrain": "Plain",
+                        "items": [
+                            {"id": "cash-1", "typeId": "smoltz_bundle"},
+                            {"id": "dagger-1", "typeId": "dagger"},
+                        ],
+                        "interactables": [{"id": "shop-1", "type": "shop"}],
+                        "connections": [{"id": "ruin-1", "terrain": "Ruin"}],
+                    },
+                    "visibleRegions": [{"id": "ruin-1", "name": "Old Vault", "terrain": "Ruin"}],
+                    "visibleAgents": [{"id": "rival-1", "name": "Rival", "hp": 30, "atk": 8}],
+                    "visibleMonsters": [{"id": "guardian-1", "name": "Guardian", "hp": 40, "atk": 12}],
+                },
+            }
+        )
+
+        current = next(item for item in payload["hexes"] if item["is_current"])
+        self.assertTrue(payload["ok"])
+        self.assertIn("H", current["contents"])
+        self.assertIn("W", current["contents"])
+        self.assertIn("M", current["contents"])
+        self.assertIn("G", current["contents"])
+        self.assertTrue(any(hint["type"] == "loot" for hint in payload["routes"]))
+
     def test_render_stats_includes_public_wallets(self) -> None:
         old_values = {key: os.environ.get(key) for key in ("CERBERUS_AGENT_EOA_ADDRESS", "CERBERUS_OWNER_EOA_ADDRESS", "CERBERUS_MOLTY_WALLET_ADDRESS")}
         try:
@@ -2689,6 +2724,39 @@ class HardeningTests(unittest.TestCase):
                     os.environ[key] = value
 
         self.assertEqual(payload["public_wallets"]["owner_eoa"], "0x" + "2" * 40)
+
+    def test_dashboard_is_vector_map_command_center(self) -> None:
+        html = render_app.dashboard_html().decode("utf-8")
+
+        self.assertIn('id="game-map"', html)
+        self.assertIn('id="owner-form"', html)
+        self.assertIn('id="paid-ready"', html)
+        self.assertIn('id="healthz"', html)
+        self.assertNotIn("<iframe id=\"feed\"", html)
+
+    def test_owner_command_understands_map_paid_and_leave_context(self) -> None:
+        categories = owner_command_cortex.command_categories(
+            "force refresh the live hex map, diagnose paid ready blockers, and leave stale room"
+        )
+
+        self.assertIn("map", categories)
+        self.assertIn("paid_mode", categories)
+        self.assertIn("leave_game", categories)
+        self.assertIn("diagnostic", categories)
+
+    def test_profit_simulator_reports_policy_gaps_and_extended_scenarios(self) -> None:
+        report = profit_simulator.simulate(games_per_day=61, target_per_day=1000)
+
+        self.assertIn("gap_smoltz_per_day", report)
+        self.assertIn("policy_gaps", report)
+        self.assertTrue(any(row["scenario"] == "deathzone_escape_with_loot" for row in report["scenarios"]))
+
+    def test_launch_doctor_report_includes_map_and_profit_sections(self) -> None:
+        report = launch_doctor.launch_report()
+
+        self.assertIn("runtime", report)
+        self.assertIn("profit", report)
+        self.assertIn("live_map_ok", report["runtime"])
 
     def test_claw_runtime_hello_frame_follows_unified_join_docs(self) -> None:
         paid = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
@@ -2941,16 +3009,18 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("balance=46", response["text"])
         self.assertIn("games=85", response["text"])
 
-    def test_dashboard_is_game_first_with_collapsible_owner_controls(self) -> None:
+    def test_dashboard_is_game_map_command_center(self) -> None:
         html = render_app.dashboard_html().decode("utf-8")
 
-        self.assertIn('class="owner-panel"', html)
+        self.assertIn('id="game-map"', html)
         self.assertIn('id="owner-form"', html)
+        self.assertIn('id="paid-ready"', html)
+        self.assertIn('id="healthz"', html)
         self.assertIn('fetch("/admin/owner-message"', html)
         self.assertIn('fetch("/admin/suggested-edits"', html)
         self.assertIn('id="suggested-edits"', html)
         self.assertIn("overflow: hidden", html)
-        self.assertNotIn("<aside>", html)
+        self.assertIn("<aside", html)
 
     def test_render_root_serves_dashboard_and_healthz_stays_json(self) -> None:
         sent = []

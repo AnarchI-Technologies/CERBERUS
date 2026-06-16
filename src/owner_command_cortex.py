@@ -16,19 +16,23 @@ from turn_state_model import TurnState
 
 
 VALUE_TERMS = ("moltz", "smoltz", "relic", "pack", "loot", "value", "pickup", "pick up")
-HEAL_TERMS = ("heal", "medkit", "bandage")
-WEAPON_TERMS = ("weapon", "equip", "sharper", "dagger", "sword", "katana", "sniper")
+HEAL_TERMS = ("heal", "medkit", "bandage", "recover", "patch up", "use health", "stay healthy")
+WEAPON_TERMS = ("weapon", "equip", "sharper", "dagger", "sword", "katana", "sniper", "arm yourself", "best weapon")
 AVOID_TERMS = ("avoid fight", "avoid combat", "do not fight", "don't fight", "stop fighting")
 REST_BLOCK_TERMS = ("do not rest", "don't rest", "stop resting")
-SCOUT_TERMS = ("scout", "explore", "move")
-ATTACK_TERMS = ("attack", "fight", "kill", "hunt", "smash", "destroy", "aggressive", "pressure")
+SCOUT_TERMS = ("scout", "explore", "move", "rotate", "path", "map", "look around", "find route")
+ATTACK_TERMS = ("attack", "fight", "kill", "hunt", "smash", "destroy", "aggressive", "pressure", "push")
 GUARDIAN_TERMS = ("guardian", "monster")
-DEFENSIVE_TERMS = ("defensive", "survive", "safe", "safety", "stay alive", "preserve hp")
+DEFENSIVE_TERMS = ("defensive", "survive", "safe", "safety", "stay alive", "preserve hp", "do not die", "risk off")
 RUIN_TERMS = ("ruin", "progress", "progression", "objective")
 TAUNT_TERMS = ("taunt", "talk", "say", "trash talk", "wisecrack", "mock")
 BROADCAST_TERMS = ("broadcast", "announce", "public thought", "spectator", "spectators")
-PROFIT_TERMS = ("profit", "yield", "premium", "earn", "earning", "farm")
+PROFIT_TERMS = ("profit", "yield", "premium", "earn", "earning", "farm", "bankroll", "paid game", "paid games", "grind")
 PERSONA_TERMS = ("persona", "tone", "sarcastic", "witty", "voice", "style")
+MAP_TERMS = ("map", "game map", "hex", "hexes", "heartbeat", "refresh map", "live state")
+LEAVE_TERMS = ("leave room", "leave game", "exit room", "stale room", "stuck room", "forfeit", "surrender")
+PAID_TERMS = ("paid ready", "paid game", "paid games", "premium", "force paid", "join paid")
+FREE_TERMS = ("free game", "free games", "force free", "join free")
 DIAGNOSTIC_TERMS = (
     "balance hasnt changed",
     "balance hasn't changed",
@@ -39,6 +43,10 @@ DIAGNOSTIC_TERMS = (
     "not making",
     "runtime",
     "diagnose",
+    "blocker",
+    "blockers",
+    "healthz",
+    "readiness",
 )
 
 
@@ -287,6 +295,14 @@ def command_categories(text: str) -> list[str]:
         categories.append("profit")
     if any(term in normalized for term in PERSONA_TERMS):
         categories.append("persona")
+    if any(term in normalized for term in MAP_TERMS):
+        categories.append("map")
+    if any(term in normalized for term in LEAVE_TERMS):
+        categories.append("leave_game")
+    if any(term in normalized for term in PAID_TERMS):
+        categories.append("paid_mode")
+    if any(term in normalized for term in FREE_TERMS):
+        categories.append("free_mode")
     if any(term in normalized for term in DIAGNOSTIC_TERMS):
         categories.append("diagnostic")
     return categories
@@ -305,8 +321,12 @@ def acknowledge_owner_command(message: dict[str, Any]) -> dict[str, str]:
             "status": "heard_context",
             "text": "I heard you. That does not map to a deterministic action yet, but I will keep it as owner context instead of pretending certainty.",
         }
-    context_only = [item for item in categories if item in {"profit", "persona", "diagnostic"}]
-    executable = [item for item in categories if item not in {"profit", "persona", "diagnostic"}]
+    context_only = [
+        item
+        for item in categories
+        if item in {"profit", "persona", "diagnostic", "map", "leave_game", "paid_mode", "free_mode"}
+    ]
+    executable = [item for item in categories if item not in set(context_only)]
     if context_only and not executable:
         return {
             "status": "heard_context",
@@ -327,7 +347,8 @@ def action_response_for_owner_command(command: dict[str, Any], action_payload: d
             "status": "heard_context",
             "text": "I heard the command, but it did not map to a deterministic action family yet.",
         }
-    executable = [item for item in categories if item not in {"profit", "persona", "diagnostic"}]
+    context_only = {"profit", "persona", "diagnostic", "map", "leave_game", "paid_mode", "free_mode"}
+    executable = [item for item in categories if item not in context_only]
     if not executable:
         return {
             "status": "heard_context",

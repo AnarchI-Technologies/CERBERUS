@@ -65,7 +65,7 @@ def baseline_scenarios() -> list[ProfitScenario]:
         ProfitScenario(
             name="weapon_before_guardian",
             weight=2.0,
-            reward_by_action={"pickup:dagger-1": 8.0, "attack:guardian-1": 20.0},
+            reward_by_action={"pickup:dagger-1": 20.0, "attack:guardian-1": -8.0},
             state={
                 "canAct": True,
                 "view": {
@@ -102,6 +102,58 @@ def baseline_scenarios() -> list[ProfitScenario]:
                 },
             },
         ),
+        ProfitScenario(
+            name="heal_before_profitable_fight",
+            weight=2.0,
+            reward_by_action={"use_item:med-1": 10.0, "attack:rival-1": -12.0},
+            state={
+                "canAct": True,
+                "view": {
+                    "self": {
+                        "id": "me",
+                        "hp": 42,
+                        "maxHp": 100,
+                        "ep": 4,
+                        "atk": 24,
+                        "inventory": [{"id": "med-1", "typeId": "medkit"}],
+                        "equippedWeapon": {"typeId": "katana"},
+                    },
+                    "currentRegion": {"id": "r1"},
+                    "visibleAgents": [{"id": "rival-1", "name": "Rival", "hp": 22, "atk": 18, "def": 3}],
+                },
+            },
+        ),
+        ProfitScenario(
+            name="deathzone_escape_with_loot",
+            weight=3.0,
+            reward_by_action={"move:safe-1": 18.0, "pickup:cash-3": -20.0, "rest": -30.0},
+            state={
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 74, "ep": 3, "inventory": [{"id": "relic-1", "typeId": "relic_red"}]},
+                    "currentRegion": {
+                        "id": "danger-1",
+                        "isDeathZone": True,
+                        "items": [{"id": "cash-3", "typeId": "smoltz_bundle"}],
+                        "connections": [{"id": "safe-1"}],
+                    },
+                    "visibleRegions": [{"id": "safe-1", "terrain": "Plain"}],
+                },
+            },
+        ),
+        ProfitScenario(
+            name="safe_ruin_rotation",
+            weight=2.0,
+            reward_by_action={"move:ruin-1": 14.0, "explore": 8.0},
+            state={
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 100, "ep": 4, "inventory": []},
+                    "currentRegion": {"id": "r1", "connections": [{"id": "ruin-1", "terrain": "Ruin"}]},
+                    "visibleRegions": [{"id": "ruin-1", "terrain": "Ruin", "name": "Old Vault"}],
+                },
+            },
+        ),
     ]
 
 
@@ -133,6 +185,11 @@ def simulate(*, games_per_day: int = 50, target_per_day: float = 1000.0) -> dict
         action = decide_for_scenario(scenario)
         key = action_key(action)
         reward = scenario.reward_by_action.get(key, 0.0)
+        best_key, best_reward = max(
+            scenario.reward_by_action.items(),
+            key=lambda item: item[1],
+            default=("", 0.0),
+        )
         weighted_total += reward * scenario.weight
         weight_sum += scenario.weight
         rows.append(
@@ -140,8 +197,11 @@ def simulate(*, games_per_day: int = 50, target_per_day: float = 1000.0) -> dict
                 "scenario": scenario.name,
                 "action": key,
                 "reward": reward,
+                "best_action": best_key,
+                "best_reward": best_reward,
                 "weight": scenario.weight,
                 "reason": action.get("reason", ""),
+                "missed_best": reward < best_reward,
             }
         )
 
@@ -160,6 +220,18 @@ def simulate(*, games_per_day: int = 50, target_per_day: float = 1000.0) -> dict
         "expected_smoltz_per_day": round(expected_per_day, 3),
         "target_met": expected_per_day >= target_per_day,
         "required_games_for_target": required_games,
+        "gap_smoltz_per_day": round(max(0.0, target_per_day - expected_per_day), 3),
+        "policy_gaps": [
+            {
+                "scenario": row["scenario"],
+                "action": row["action"],
+                "reason": row["reason"],
+                "best_action": row["best_action"],
+                "best_reward": row["best_reward"],
+            }
+            for row in rows
+            if row["missed_best"]
+        ],
         "scenarios": rows,
     }
 

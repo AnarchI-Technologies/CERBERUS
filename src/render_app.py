@@ -32,6 +32,7 @@ from core_loop import cerberus_tick  # noqa: E402
 from claw_config import active_claw_version, claw_api_base  # noqa: E402
 from claw_runtime import run_forever as run_claw_runtime  # noqa: E402
 from env_loader import hydrate_env  # noqa: E402
+from game_map import build_live_map  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now  # noqa: E402
 from owner_command_cortex import acknowledge_owner_command, command_categories, directive_text  # noqa: E402
@@ -158,12 +159,14 @@ def stats() -> dict[str, Any]:
     ready = readiness()
     game_id = runtime_stored_game_id()
     runtime_status = read_json(claw_runtime_status_file())
+    runtime_map = runtime_status.get("live_map") if isinstance(runtime_status.get("live_map"), dict) else {}
     return {
         "ok": ready.get("ok", False),
         "service": "cerberus",
         "current_game_id": game_id,
         "spectate_url": spectate_url(game_id) if game_id else "",
         "claw_runtime": runtime_status,
+        "live_map": runtime_map,
         "public_wallets": {
             "agent_eoa": os.getenv("CERBERUS_AGENT_EOA_ADDRESS", ""),
             "owner_eoa": os.getenv("CERBERUS_OWNER_EOA_ADDRESS", ""),
@@ -398,16 +401,18 @@ def dashboard_html(query: str = "") -> bytes:
     body {{ margin: 0; background: #05070a; color: #f4f7fb; overflow: hidden; }}
     header {{ height: 52px; padding: 10px 14px; border-bottom: 1px solid #2a3140; display: flex; gap: 12px; align-items: center; justify-content: space-between; background: #0f1115; }}
     h1 {{ font-size: 18px; margin: 0; font-weight: 700; }}
-    main {{ position: relative; height: calc(100vh - 52px); overflow: hidden; }}
-    iframe {{ width: 100%; height: 100%; border: 0; background: #080a0d; }}
+    main {{ height: calc(100vh - 52px); overflow: hidden; display: grid; grid-template-rows: 44px 1fr 42px; }}
     .top-actions {{ display: flex; gap: 8px; align-items: center; }}
     .button, button {{ background: #e8edf7; color: #0f1115; border: 0; border-radius: 6px; padding: 8px 10px; text-decoration: none; cursor: pointer; font-size: 13px; }}
-    .frame {{ height: 100%; width: 100%; }}
-    details.owner-panel {{ position: absolute; top: 12px; right: 12px; width: min(430px, calc(100vw - 24px)); max-height: calc(100% - 24px); overflow: auto; border: 1px solid rgba(255,255,255,.18); border-radius: 8px; background: rgba(13,17,24,.96); box-shadow: 0 18px 60px rgba(0,0,0,.45); }}
-    details.owner-panel:not([open]) {{ width: auto; overflow: visible; }}
-    summary {{ list-style: none; cursor: pointer; padding: 10px 12px; font-weight: 700; border-bottom: 1px solid transparent; }}
-    details[open] summary {{ border-bottom-color: rgba(255,255,255,.12); }}
-    summary::-webkit-details-marker {{ display: none; }}
+    .banner {{ display: flex; gap: 14px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #273041; background: #0b1018; overflow: hidden; white-space: nowrap; }}
+    .bottom-banner {{ border-top: 1px solid #273041; border-bottom: 0; }}
+    .pill {{ border: 1px solid #2d384c; border-radius: 999px; padding: 5px 9px; background: #151b26; font-size: 12px; }}
+    .workbench {{ min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 390px; }}
+    .map-wrap {{ min-width: 0; min-height: 0; position: relative; background: #070a0f; overflow: hidden; }}
+    .map-toolbar {{ position: absolute; left: 12px; top: 12px; z-index: 2; display: flex; gap: 8px; align-items: center; }}
+    .map-status {{ position: absolute; left: 12px; bottom: 12px; z-index: 2; max-width: min(680px, calc(100% - 24px)); border: 1px solid #2a3140; border-radius: 8px; background: rgba(12,16,23,.92); padding: 9px 11px; color: #cbd5e1; font-size: 13px; }}
+    svg#game-map {{ width: 100%; height: 100%; display: block; background: radial-gradient(circle at 50% 40%, #121925 0, #070a0f 65%); }}
+    .map-side {{ border-left: 1px solid #273041; background: #0d121b; min-height: 0; overflow: auto; }}
     .panel-body {{ padding: 12px; }}
     .metric {{ border: 1px solid #2a3140; border-radius: 6px; padding: 9px; background: #151923; min-width: 0; }}
     .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }}
@@ -421,24 +426,34 @@ def dashboard_html(query: str = "") -> bytes:
     .owner-log {{ max-height: 160px; overflow: auto; display: grid; gap: 8px; }}
     .owner-msg {{ border: 1px solid #2a3140; border-radius: 6px; padding: 8px; background: #10151f; font-size: 13px; line-height: 1.35; }}
     .hint {{ color: #98a2b3; font-size: 12px; margin-top: 4px; }}
+    @media (max-width: 900px) {{ .workbench {{ grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 44vh; }} .map-side {{ border-left: 0; border-top: 1px solid #273041; }} }}
     @media (max-width: 700px) {{ header {{ height: 48px; }} main {{ height: calc(100vh - 48px); }} h1 {{ font-size: 16px; }} .top-actions .button {{ display: none; }} }}
   </style>
 </head>
 <body>
   <header>
     <h1>Hellion Dashboard</h1>
-    <div class="top-actions">
-      <a id="open-feed" class="button" href="{initial_feed_url or spectate_base_url}" target="_blank" rel="noreferrer">Open Spectate</a>
-      <button onclick="refreshFeed()">Refresh Feed</button>
-    </div>
+    <div class="top-actions"><button onclick="forceRefreshMap()">Force Refresh Map</button></div>
   </header>
   <main>
-    <section class="frame">
-      <iframe id="feed" {initial_frame_attrs} title="Claw Royale live game feed"></iframe>
+    <section class="banner">
+      <span class="pill" id="paid-ready">paid ready loading</span>
+      <span id="top-balance">balance loading</span>
+      <span id="top-wallets">wallets loading</span>
+      <span id="top-blockers">blockers loading</span>
     </section>
-    <details class="owner-panel">
-      <summary>Owner Controls</summary>
-      <div class="panel-body">
+    <section class="workbench">
+      <div class="map-wrap">
+        <div class="map-toolbar">
+          <button type="button" onclick="zoomMap(1.12)">Zoom In</button>
+          <button type="button" onclick="zoomMap(0.88)">Zoom Out</button>
+          <button type="button" onclick="centerMap()">Center Hellion</button>
+        </div>
+        <svg id="game-map" role="img" aria-label="Live Claw Royale vector map"></svg>
+        <div id="map-status" class="map-status">Waiting for live game heartbeat...</div>
+      </div>
+      <aside class="map-side">
+        <div class="panel-body">
         <div class="grid">
           <div class="metric"><div class="label">Service</div><div id="service" class="value">loading</div></div>
           <div class="metric"><div class="label">Current Game</div><div id="game" class="value">unknown</div></div>
@@ -449,9 +464,6 @@ def dashboard_html(query: str = "") -> bytes:
           <div class="metric"><div class="label">Visible</div><div id="visible" class="value">loading</div></div>
           <div class="metric"><div class="label">Inventory</div><div id="inventory" class="value">loading</div></div>
         </div>
-        <div class="metric wide"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Yield</div><div id="yield" class="value">loading</div></div>
         <form id="owner-form" class="owner-form">
           <div class="label">Message / Command To Hellion</div>
           <textarea id="owner-message" maxlength="1000" placeholder="Say it plainly. Example: prioritize free games until balance reaches 500."></textarea>
@@ -462,6 +474,10 @@ def dashboard_html(query: str = "") -> bytes:
           <div id="owner-status" class="hint">Private owner channel. Stored on the Render disk.</div>
         </form>
         <div class="metric wide"><div class="label">Recent Owner Messages</div><div id="owner-log" class="owner-log">loading</div></div>
+        <div class="metric wide"><div class="label">Route / Loot Hints</div><div id="route-hints" class="owner-log">loading</div></div>
+        <div class="metric wide"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Yield</div><div id="yield" class="value">loading</div></div>
         <div class="metric wide">
           <div class="label">Hellion Suggested Edits</div>
           <div class="form-row" style="margin:6px 0 8px">
@@ -476,17 +492,20 @@ def dashboard_html(query: str = "") -> bytes:
         <div class="metric wide"><div class="label">Writable</div><div id="writable" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Configured Env</div><div id="env" class="value">loading</div></div>
       </div>
-    </details>
+      </aside>
+    </section>
+    <section class="banner bottom-banner">
+      <span class="pill" id="healthz">healthz loading</span>
+      <span id="heartbeat">heartbeat waiting</span>
+      <span id="bottom-vitals">vitals loading</span>
+      <span id="bottom-memory">memory loading</span>
+    </section>
   </main>
   <script>
     const params = new URLSearchParams(window.location.search);
     let lastGame = params.get("gameId") || params.get("game_id") || {json.dumps(initial_game_id)};
-    let loadedFeedUrl = "";
-    const feedUrl = {json.dumps(feed_url)};
-    const spectateBaseUrl = {json.dumps(spectate_base_url)};
-    function targetUrl(gameId) {{
-      return gameId ? spectateBaseUrl + "/" + encodeURIComponent(gameId) : "";
-    }}
+    let mapZoom = 1;
+    let lastMap = null;
     function runtimeBlockers(data) {{
       const blockers = [];
       if (!data.ok) blockers.push("service readiness failed");
@@ -507,11 +526,8 @@ def dashboard_html(query: str = "") -> bytes:
       return blockers;
     }}
     function showRuntimeFallback(blockers) {{
-      const frame = document.getElementById("feed");
       const details = blockers.length ? blockers : ["no active spectate game ID available"];
-      const list = details.map((item) => "<li>" + item.replace(/[&<>]/g, (c) => ({{"&":"&amp;","<":"&lt;",">":"&gt;"}}[c])) + "</li>").join("");
-      frame.src = "about:blank";
-      frame.srcdoc = "<body style=\\"margin:0;background:#080a0d;color:#cbd5e1;font:14px Arial,sans-serif;padding:24px;box-sizing:border-box\\"><h2 style=\\"color:#f4f7fb;margin:0 0 12px;font-size:18px\\">Runtime not live</h2><p style=\\"margin:0 0 12px\\">The spectate iframe needs a rotated Claw Royale game ID at <code>/games/spect/{{gameId}}</code>.</p><ul style=\\"margin:0;padding-left:20px;line-height:1.6\\">" + list + "</ul></body>";
+      document.getElementById("map-status").innerHTML = "<strong>Runtime not live</strong><br>" + details.map(esc).join("<br>");
     }}
     function esc(text) {{
       return String(text ?? "").replace(/[&<>"]/g, (c) => ({{"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}}[c]));
@@ -541,14 +557,74 @@ def dashboard_html(query: str = "") -> bytes:
         esc(edit.symptom || "") + "<br><span class='hint'>" + esc(edit.file || "") + " | " + esc(edit.suggested_change || "") + "</span></div>"
       )).join("") + "<div class='hint'>Recent compact evidence rows: " + esc((evidence || []).length) + "</div>";
     }}
-    function refreshFeed(gameId = lastGame) {{
-      const frame = document.getElementById("feed");
-      const url = targetUrl(gameId);
-      if (!url) return;
-      if (loadedFeedUrl === url) return;
-      loadedFeedUrl = url;
-      frame.src = url + (url.includes("?") ? "&" : "?") + "r=" + Date.now();
-      document.getElementById("open-feed").href = url;
+    function hexPoints(cx, cy, radius) {{
+      const points = [];
+      for (let i = 0; i < 6; i++) {{
+        const angle = Math.PI / 180 * (60 * i - 30);
+        points.push((cx + radius * Math.cos(angle)).toFixed(1) + "," + (cy + radius * Math.sin(angle)).toFixed(1));
+      }}
+      return points.join(" ");
+    }}
+    function renderRouteHints(map) {{
+      const box = document.getElementById("route-hints");
+      const hints = (map && map.routes) || [];
+      if (!hints.length) {{
+        box.textContent = "none";
+        return;
+      }}
+      box.innerHTML = hints.map((hint) => "<div class='owner-msg'><strong>" + esc(hint.type || "hint") + "</strong> " + esc(hint.label || hint.item_id || hint.region_id || "") + "<div class='hint'>score " + esc(hint.score || 0) + "</div></div>").join("");
+    }}
+    function renderMap(map, blockers) {{
+      const svg = document.getElementById("game-map");
+      const status = document.getElementById("map-status");
+      lastMap = map || lastMap;
+      if (!map || !map.ok || !(map.hexes || []).length) {{
+        svg.innerHTML = "";
+        renderRouteHints({{routes: []}});
+        showRuntimeFallback(blockers);
+        return;
+      }}
+      const hexes = map.hexes || [];
+      const xs = hexes.map((h) => Number(h.x || 0));
+      const ys = hexes.map((h) => Number(h.y || 0));
+      const minX = Math.min(...xs) - 150;
+      const minY = Math.min(...ys) - 140;
+      const width = Math.max(500, Math.max(...xs) - minX + 180);
+      const height = Math.max(360, Math.max(...ys) - minY + 160);
+      svg.setAttribute("viewBox", [minX / mapZoom, minY / mapZoom, width / mapZoom, height / mapZoom].join(" "));
+      svg.innerHTML = hexes.map((hex) => {{
+        const x = Number(hex.x || 0);
+        const y = Number(hex.y || 0);
+        const danger = Number(hex.danger || 0);
+        const loot = Number(hex.loot_score || 0);
+        const fill = hex.is_current ? "#123f38" : hex.is_death_zone ? "#3b1118" : hex.is_pending_death_zone ? "#3b2d12" : loot >= 70 ? "#162d20" : "#101722";
+        const stroke = hex.is_current ? "#62f0c7" : hex.recommended ? "#d5f36b" : danger >= 60 ? "#ff6b79" : "#344055";
+        const contents = (hex.contents || []).join(" ");
+        const items = (hex.items || []).slice(0, 3).map((i) => i.label).join(", ");
+        const agents = (hex.agents || []).filter((a) => a.kind !== "self").slice(0, 2).map((a) => a.name + " HP" + a.hp).join(", ");
+        const monsters = (hex.monsters || []).slice(0, 2).map((m) => m.name + " HP" + m.hp).join(", ");
+        return "<g class='hex' tabindex='0'>" +
+          "<polygon points='" + hexPoints(x, y, 42) + "' fill='" + fill + "' stroke='" + stroke + "' stroke-width='2'/>" +
+          "<text x='" + x + "' y='" + (y - 14) + "' text-anchor='middle' fill='#f4f7fb' font-size='12' font-weight='700'>" + esc(hex.name || hex.id) + "</text>" +
+          "<text x='" + x + "' y='" + (y + 4) + "' text-anchor='middle' fill='#cbd5e1' font-size='11'>" + esc(hex.terrain || "terrain ?") + "</text>" +
+          "<text x='" + x + "' y='" + (y + 22) + "' text-anchor='middle' fill='#9fb0c9' font-size='11'>" + esc(contents || "empty") + "</text>" +
+          "<title>" + esc([hex.id, hex.name, hex.terrain, "loot " + loot, "danger " + danger, items, agents, monsters].filter(Boolean).join(" | ")) + "</title>" +
+        "</g>";
+      }}).join("");
+      const focus = hexes.find((h) => h.is_current) || hexes[0];
+      status.innerHTML = "<strong>Live vector map</strong> turn " + esc(map.turn || "?") + " | focused on " + esc(map.focus_agent_id || "Hellion") + " | current " + esc((focus && (focus.name || focus.id)) || "unknown") + " | heartbeat " + esc(map.heartbeat || "");
+      renderRouteHints(map);
+    }}
+    function zoomMap(multiplier) {{
+      mapZoom = Math.max(0.55, Math.min(2.4, mapZoom * multiplier));
+      renderMap(lastMap, []);
+    }}
+    function centerMap() {{
+      mapZoom = 1;
+      renderMap(lastMap, []);
+    }}
+    function forceRefreshMap() {{
+      loadStats();
     }}
     async function loadStats() {{
       const res = await fetch("/stats");
@@ -565,6 +641,7 @@ def dashboard_html(query: str = "") -> bytes:
       const readiness = account.readiness || {{}};
       const wallets = data.public_wallets || {{}};
       const lastAction = runtime.last_action || {{}};
+      const liveMap = data.live_map || runtime.live_map || {{}};
       document.getElementById("runtime-state").textContent = runtime.state || "unknown";
       document.getElementById("mode").textContent = runtime.mode || "unknown";
       document.getElementById("vitals").textContent = ((snap.hp ?? "?") + "/" + (snap.max_hp ?? "?") + " HP, " + (snap.ep ?? "?") + "/" + (snap.max_ep ?? "?") + " EP");
@@ -576,6 +653,15 @@ def dashboard_html(query: str = "") -> bytes:
       document.getElementById("readiness").textContent = "id " + !!readiness.identity + ", wallet " + !!readiness.walletAddress + ", sc " + !!readiness.scWallet + ", paid " + !!readiness.paidReady + ", balance " + (account.balance ?? "?");
       document.getElementById("wallets").textContent = "owner " + (wallets.owner_eoa || "unset") + "; agent " + (wallets.agent_eoa || "unset") + "; molty " + (wallets.molty_wallet || "unset");
       document.getElementById("memory").textContent = (mem.items || 0) + " items, " + (mem.bytes || 0) + " bytes";
+      document.getElementById("paid-ready").textContent = "paid ready " + !!readiness.paidReady;
+      document.getElementById("top-balance").textContent = "balance " + (account.balance ?? "?") + " sMoltz";
+      document.getElementById("top-wallets").textContent = "agent " + (wallets.agent_eoa || "unset") + " | molty " + (wallets.molty_wallet || "unset");
+      document.getElementById("top-blockers").textContent = blockers.length ? blockers.join(" | ") : "no blockers";
+      document.getElementById("healthz").textContent = data.ok ? "healthz 200" : "healthz not ready";
+      document.getElementById("heartbeat").textContent = "heartbeat " + (liveMap.heartbeat || runtime.updated_at || "waiting");
+      document.getElementById("bottom-vitals").textContent = "HP " + (snap.hp ?? "?") + "/" + (snap.max_hp ?? "?") + " EP " + (snap.ep ?? "?") + "/" + (snap.max_ep ?? "?") + " ATK " + (snap.atk ?? "?");
+      document.getElementById("bottom-memory").textContent = "memory " + (mem.items || 0) + " items | writable " + (data.memory_writable ? "yes" : "no");
+      renderMap(liveMap, blockers);
       const autonomy = data.autonomy || {{}};
       document.getElementById("autonomy-counts").textContent = "suggestions " + (autonomy.suggested_edits || 0) + ", evidence " + (autonomy.match_evidence || 0);
       document.getElementById("writable").textContent = data.memory_writable ? "yes" : "no";
@@ -583,14 +669,9 @@ def dashboard_html(query: str = "") -> bytes:
       renderOwnerMessages(data.owner_messages || []);
       if (selectedGame && selectedGame !== lastGame) {{
         lastGame = selectedGame;
-        refreshFeed(lastGame);
-      }} else if (lastGame) {{
-        refreshFeed(lastGame);
       }} else if (data.current_game_id && data.current_game_id !== lastGame) {{
         lastGame = data.current_game_id;
-        refreshFeed(lastGame);
       }} else if (!data.current_game_id && !lastGame) {{
-        document.getElementById("open-feed").href = spectateBaseUrl;
         showRuntimeFallback(blockers);
       }}
     }}
@@ -883,6 +964,7 @@ class CerberusHandler(BaseHTTPRequestHandler):
             state = payload.get("state", payload)
             remember_current_game(state)
             action = cerberus_tick(state)
+            update_claw_runtime_status(live_map=build_live_map(state))
             self._send({"ok": True, "action": action})
         except Exception as exc:  # keep the service alive; report compactly
             self._send({"ok": False, "error": str(exc)[:500]}, status=500)
