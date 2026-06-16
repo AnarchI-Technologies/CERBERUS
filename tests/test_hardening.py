@@ -2063,6 +2063,52 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(result["tweet_id"], "12345")
         self.assertIn("MOLT-12345", posted["text"])
 
+    def test_moltbook_refresh_claim_from_status_updates_vault(self) -> None:
+        old_identity_vault = moltbook_claim_assistant.IdentityVault
+        old_claim_status = moltbook_claim_assistant.claim_status
+
+        class FakeVault:
+            saved = False
+            instance = None
+
+            def __init__(self):
+                self.data = empty_identity()
+                self.data["moltbook"] = {"api_key": "mb_test"}
+                self.events = []
+                FakeVault.instance = self
+
+            def load(self):  # type: ignore[no-untyped-def]
+                return self
+
+            def require_pin_ready(self):  # type: ignore[no-untyped-def]
+                return None
+
+            def event(self, message, **metadata):  # type: ignore[no-untyped-def]
+                self.events.append({"message": message, **metadata})
+
+            def save(self):  # type: ignore[no-untyped-def]
+                FakeVault.saved = True
+                return Path("identity.vault.json")
+
+        try:
+            moltbook_claim_assistant.IdentityVault = FakeVault  # type: ignore[assignment]
+            moltbook_claim_assistant.claim_status = lambda identity: {
+                "success": True,
+                "status": "pending_claim",
+                "agent": {"id": "agent-7", "name": "hellion-v2"},
+                "claim_url": "https://www.moltbook.com/claim/new",
+            }
+
+            result = moltbook_claim_assistant.refresh_claim_from_status()
+        finally:
+            moltbook_claim_assistant.IdentityVault = old_identity_vault
+            moltbook_claim_assistant.claim_status = old_claim_status
+
+        self.assertTrue(FakeVault.saved)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["claim_url"], "https://www.moltbook.com/claim/new")
+        self.assertEqual(FakeVault.instance.data["moltbook"]["agent_id"], "agent-7")
+
     def test_moltbook_inbox_claim_short_circuits_without_inbox(self) -> None:
         claims = extract_moltbook_claims({"messages": []})
         self.assertEqual(claims["claim_urls"], [])
@@ -2073,6 +2119,27 @@ class HardeningTests(unittest.TestCase):
             moltbook_claim_assistant.inbox_claim(identity),
             {"claim_urls": [], "urls": [], "codes": []},
         )
+
+    def test_moltbook_inbox_claim_reports_agentmail_error_without_crashing(self) -> None:
+        old_client = moltbook_claim_assistant.AgentMailClient
+
+        class FailingAgentMailClient:
+            def __init__(self, api_key: str):  # type: ignore[no-untyped-def]
+                self.api_key = api_key
+
+            def list_messages(self, inbox_id: str, limit: int = 20):  # type: ignore[no-untyped-def]
+                raise OnboardingAPIError("agentmail", 403, "Forbidden")
+
+        try:
+            moltbook_claim_assistant.AgentMailClient = FailingAgentMailClient
+            identity = empty_identity()
+            identity["agentmail"] = {"api_key": "am_test", "inbox_id": "inbox-test"}
+            claims = moltbook_claim_assistant.inbox_claim(identity)
+        finally:
+            moltbook_claim_assistant.AgentMailClient = old_client
+
+        self.assertEqual(claims["claim_urls"], [])
+        self.assertIn("agentmail API error 403", claims["error"])
 
     def test_moltbook_status_reports_missing_key_and_api_errors(self) -> None:
         self.assertEqual(

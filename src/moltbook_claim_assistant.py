@@ -70,14 +70,17 @@ def stored_claim(identity: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def inbox_claim(identity: dict[str, Any], limit: int = 20) -> dict[str, list[str]]:
+def inbox_claim(identity: dict[str, Any], limit: int = 20) -> dict[str, Any]:
     mail = identity.get("agentmail", {})
     inbox_id = mail.get("inbox_id") or mail.get("email")
     api_key = mail.get("api_key") or ""
     if not inbox_id:
         return {"claim_urls": [], "urls": [], "codes": []}
-    messages = AgentMailClient(api_key=api_key).list_messages(str(inbox_id), limit=limit)
-    return extract_moltbook_claims(messages)
+    try:
+        messages = AgentMailClient(api_key=api_key).list_messages(str(inbox_id), limit=limit)
+        return extract_moltbook_claims(messages)
+    except OnboardingAPIError as exc:
+        return {"claim_urls": [], "urls": [], "codes": [], "error": str(exc)}
 
 
 def claim_status(identity: dict[str, Any]) -> dict[str, Any]:
@@ -88,6 +91,38 @@ def claim_status(identity: dict[str, Any]) -> dict[str, Any]:
         return MoltbookClient(api_key=api_key).status()
     except OnboardingAPIError as exc:
         return {"ok": False, "reason": str(exc)}
+
+
+def refresh_claim_from_status() -> dict[str, Any]:
+    vault = IdentityVault().load()
+    vault.require_pin_ready()
+    identity = vault.data
+    status = claim_status(identity)
+    moltbook = identity.setdefault("moltbook", {})
+    claim_url = str(status.get("claim_url") or status.get("claimUrl") or "")
+    verification_code = str(status.get("verification_code") or status.get("verificationCode") or "")
+    agent = status.get("agent") if isinstance(status.get("agent"), dict) else {}
+    if claim_url:
+        moltbook["claim_url"] = claim_url
+    if verification_code:
+        moltbook["verification_code"] = verification_code
+    if status.get("status"):
+        moltbook["status"] = str(status.get("status"))
+    if agent.get("id"):
+        moltbook["agent_id"] = str(agent.get("id"))
+    if agent.get("name"):
+        moltbook["public_name"] = str(agent.get("name"))
+    moltbook["last_claim_status"] = status
+    vault.event("Refreshed Moltbook claim status", claim_url=claim_url, status=moltbook.get("status", ""))
+    vault.save()
+    return {
+        "ok": bool(claim_url),
+        "claim_url": claim_url,
+        "verification_code": verification_code,
+        "status": moltbook.get("status", ""),
+        "agent_id": moltbook.get("agent_id", ""),
+        "raw_status": status,
+    }
 
 
 def print_claim_packet(identity: dict[str, Any], *, include_inbox: bool = False) -> None:
@@ -163,7 +198,7 @@ def claim_with_x_oauth(*, include_inbox: bool = False, check_status: bool = True
 
 def _cli() -> int:
     parser = argparse.ArgumentParser(description="Help Hellion complete Moltbook claim workflow")
-    parser.add_argument("command", choices=("packet", "inbox", "status", "tweet", "claim"), nargs="?", default="packet")
+    parser.add_argument("command", choices=("packet", "inbox", "status", "refresh", "tweet", "claim"), nargs="?", default="packet")
     parser.add_argument("--include-inbox", action="store_true", help="Read AgentMail for claim links/codes")
     parser.add_argument("--no-status", action="store_true", help="Skip Moltbook status check after claim tweet")
     args = parser.parse_args()
@@ -173,10 +208,13 @@ def _cli() -> int:
         print_claim_packet(identity, include_inbox=args.include_inbox)
         return 0
     if args.command == "inbox":
-        print(extract_moltbook_claims(inbox_claim(identity)))
+        print(inbox_claim(identity))
         return 0
     if args.command == "status":
         print(claim_status(identity))
+        return 0
+    if args.command == "refresh":
+        print(refresh_claim_from_status())
         return 0
     if args.command == "tweet":
         print(post_verification(identity, include_inbox=args.include_inbox))
