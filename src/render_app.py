@@ -758,7 +758,10 @@ class CerberusHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
-        if parsed.path in {"/", "/healthz"}:
+        if parsed.path == "/":
+            self._send_html(dashboard_html(parsed.query))
+            return
+        if parsed.path == "/healthz":
             self._send({"ok": True, "service": "cerberus"})
             return
         if parsed.path == "/ready":

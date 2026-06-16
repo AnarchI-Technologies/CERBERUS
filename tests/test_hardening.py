@@ -2810,6 +2810,26 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("overflow: hidden", html)
         self.assertNotIn("<aside>", html)
 
+    def test_render_root_serves_dashboard_and_healthz_stays_json(self) -> None:
+        sent = []
+
+        class FakeHandler(render_app.CerberusHandler):
+            def __init__(self, path):  # type: ignore[no-untyped-def]
+                self.path = path
+
+            def _send_html(self, body, *, status=200):  # type: ignore[no-untyped-def]
+                sent.append(("html", status, body))
+
+            def _send(self, body, *, status=200):  # type: ignore[no-untyped-def]
+                sent.append(("json", status, body))
+
+        FakeHandler("/").do_GET()
+        FakeHandler("/healthz").do_GET()
+
+        self.assertEqual(sent[0][0], "html")
+        self.assertIn(b"Hellion Dashboard", sent[0][2])
+        self.assertEqual(sent[1], ("json", 200, {"ok": True, "service": "cerberus"}))
+
     def test_render_readiness_reports_memory_write_failure_without_crashing(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         old_store = render_app.LongTermMemoryStore
