@@ -41,11 +41,13 @@ from runtime_state import (
     append_stream_chat,
     claw_runtime_status_file,
     hellion_voice_lab,
+    match_evidence,
     owner_messages,
     read_json,
     remember_game_id,
     stream_chat_messages,
     stored_game_id as runtime_stored_game_id,
+    suggested_edits,
     update_claw_runtime_status,
 )  # noqa: E402
 from stream_dashboard_cortex import StreamDashboardCortex, chat_message  # noqa: E402
@@ -172,6 +174,10 @@ def stats() -> dict[str, Any]:
         "memory_error": ready.get("memory_error", ""),
         "longterm_memory_error": ready.get("longterm_memory_error", ""),
         "longterm_memory": ready.get("longterm_memory", {}),
+        "autonomy": {
+            "suggested_edits": len(suggested_edits()),
+            "match_evidence": len(match_evidence()),
+        },
         "owner_messages": owner_messages(),
         "env": ready.get("env", {}),
     }
@@ -456,6 +462,14 @@ def dashboard_html(query: str = "") -> bytes:
           <div id="owner-status" class="hint">Private owner channel. Stored on the Render disk.</div>
         </form>
         <div class="metric wide"><div class="label">Recent Owner Messages</div><div id="owner-log" class="owner-log">loading</div></div>
+        <div class="metric wide">
+          <div class="label">Hellion Suggested Edits</div>
+          <div class="form-row" style="margin:6px 0 8px">
+            <div id="autonomy-counts" class="hint">locked</div>
+            <button type="button" onclick="loadSuggestedEdits()">Load Bin</button>
+          </div>
+          <div id="suggested-edits" class="owner-log">Enter owner PIN, then load.</div>
+        </div>
         <div class="metric wide"><div class="label">Readiness</div><div id="readiness" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Wallets</div><div id="wallets" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Memory DB</div><div id="memory" class="value">loading</div></div>
@@ -515,6 +529,18 @@ def dashboard_html(query: str = "") -> bytes:
         "<div class='hint'>" + esc(msg.created_at || "") + "</div></div>"
       )).join("");
     }}
+    function renderSuggestedEdits(edits, evidence) {{
+      const box = document.getElementById("suggested-edits");
+      if (!edits || !edits.length) {{
+        box.textContent = "none";
+        return;
+      }}
+      box.innerHTML = edits.slice().reverse().map((edit) => (
+        "<div class='owner-msg'><strong>" + esc(edit.title || edit.detector || "suggestion") + "</strong>" +
+        " <span class='hint'>[" + esc(edit.priority || "review") + " seen " + esc(edit.seen_count || 1) + "x]</span><br>" +
+        esc(edit.symptom || "") + "<br><span class='hint'>" + esc(edit.file || "") + " | " + esc(edit.suggested_change || "") + "</span></div>"
+      )).join("") + "<div class='hint'>Recent compact evidence rows: " + esc((evidence || []).length) + "</div>";
+    }}
     function refreshFeed(gameId = lastGame) {{
       const frame = document.getElementById("feed");
       const url = targetUrl(gameId);
@@ -550,6 +576,8 @@ def dashboard_html(query: str = "") -> bytes:
       document.getElementById("readiness").textContent = "id " + !!readiness.identity + ", wallet " + !!readiness.walletAddress + ", sc " + !!readiness.scWallet + ", paid " + !!readiness.paidReady + ", balance " + (account.balance ?? "?");
       document.getElementById("wallets").textContent = "owner " + (wallets.owner_eoa || "unset") + "; agent " + (wallets.agent_eoa || "unset") + "; molty " + (wallets.molty_wallet || "unset");
       document.getElementById("memory").textContent = (mem.items || 0) + " items, " + (mem.bytes || 0) + " bytes";
+      const autonomy = data.autonomy || {{}};
+      document.getElementById("autonomy-counts").textContent = "suggestions " + (autonomy.suggested_edits || 0) + ", evidence " + (autonomy.match_evidence || 0);
       document.getElementById("writable").textContent = data.memory_writable ? "yes" : "no";
       document.getElementById("env").textContent = Object.entries(data.env || {{}}).filter(([,v]) => v).map(([k]) => k).join(", ") || "none";
       renderOwnerMessages(data.owner_messages || []);
@@ -594,6 +622,26 @@ def dashboard_html(query: str = "") -> bytes:
         status.textContent = "Failed: " + err;
       }}
     }});
+    async function loadSuggestedEdits() {{
+      const pin = document.getElementById("owner-pin").value;
+      const box = document.getElementById("suggested-edits");
+      box.textContent = "Loading...";
+      try {{
+        const res = await fetch("/admin/suggested-edits", {{
+          method: "POST",
+          headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
+          body: JSON.stringify({{limit: 50}})
+        }});
+        const data = await res.json();
+        if (!res.ok || !data.ok) {{
+          box.textContent = "Failed: " + (data.error || res.status);
+          return;
+        }}
+        renderSuggestedEdits(data.suggested_edits || [], data.match_evidence || []);
+      }} catch (err) {{
+        box.textContent = "Failed: " + err;
+      }}
+    }}
     loadStats();
     setInterval(loadStats, 15000);
   </script>
@@ -743,6 +791,31 @@ class CerberusHandler(BaseHTTPRequestHandler):
                 self._send({"ok": True, "chat": append_stream_chat(message)})
             except Exception as exc:
                 self._send({"ok": False, "error": str(exc)[:240]}, status=500)
+            return
+        if parsed.path == "/admin/suggested-edits":
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            try:
+                payload = self._read_json()
+            except Exception as exc:
+                payload = {"_body_error": str(exc)[:240]}
+            pin = self.headers.get("X-Cerberus-Pin", "") or str(payload.get("pin") or "")
+            if not self._pin_authorized(pin):
+                self._send({"ok": False, "error": "invalid_pin", "body_error": payload.get("_body_error", "")}, status=401)
+                return
+            limit_raw = payload.get("limit", 50)
+            try:
+                limit = max(1, min(100, int(limit_raw)))
+            except (TypeError, ValueError):
+                limit = 50
+            self._send(
+                {
+                    "ok": True,
+                    "suggested_edits": suggested_edits(limit=limit),
+                    "match_evidence": match_evidence(limit=min(25, limit)),
+                }
+            )
             return
         if parsed.path == "/admin/owner-message":
             if not self._authorized():

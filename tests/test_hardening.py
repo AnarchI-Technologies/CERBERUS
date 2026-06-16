@@ -1399,6 +1399,8 @@ class HardeningTests(unittest.TestCase):
                 }
                 claw_runtime.record_action_result_learning({"type": "action_result", "success": False, "error": "TARGET_BLOCKED"}, status=status)
                 reloaded = CompactMemoryStore().load()
+                suggestions = runtime_state.suggested_edits()
+                evidence = runtime_state.match_evidence()
 
             turns = reloaded.data["turns"]
             lessons = reloaded.data["lessons"]
@@ -1410,6 +1412,49 @@ class HardeningTests(unittest.TestCase):
 
         self.assertTrue(any("A|type=move" in turn and "O|ok=False" in turn for turn in turns))
         self.assertTrue(any("action_result: move failed with TARGET_BLOCKED" in lesson for lesson in lessons))
+        self.assertTrue(any(edit.get("detector") == "runtime.target_blocked" for edit in suggestions))
+        self.assertTrue(any(item.get("outcome", {}).get("message") == "TARGET_BLOCKED" for item in evidence))
+
+    def test_retained_death_lesson_changes_next_turn_policy(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                memory = CompactMemoryStore().load()
+                memory.remember_lesson(
+                    "combat",
+                    "failure: Rival eliminated us in Storm Hall; leave earlier and heal earlier",
+                    source="event:death",
+                    confidence="0.95",
+                )
+                action = cerberus_tick(
+                    {
+                        "canAct": True,
+                        "view": {
+                            "self": {
+                                "id": "me",
+                                "hp": 64,
+                                "maxHp": 100,
+                                "ep": 4,
+                                "inventory": [{"id": "med-1", "typeId": "medkit"}],
+                                "equippedWeapon": {"typeId": "katana"},
+                            },
+                            "currentRegion": {"id": "r1", "name": "Storm Hall"},
+                            "visibleMonsters": [{"id": "guardian-1", "kind": "monster", "hp": 30, "atk": 8, "def": 2, "regionId": "r1"}],
+                        },
+                    },
+                    memory_store=memory,
+                    dossier_store=AgentDossierStore(),
+                )
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(action["type"], "use_item")
+        self.assertEqual(action["itemId"], "med-1")
+        self.assertIn("retained lesson", action["reason"])
 
     def test_isolated_instance_survives_randomized_high_intensity_churn(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")
@@ -2699,6 +2744,33 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(messages[-1]["text"], "prioritize profitable games")
         self.assertEqual(reloaded[-1]["kind"], "owner_command")
 
+    def test_autonomy_suggestions_persist_under_memory_dir(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.append_match_evidence({"kind": "turn_observation", "outcome": {"message": "TARGET_BLOCKED"}})
+                runtime_state.append_suggested_edit(
+                    {
+                        "detector": "runtime.target_blocked",
+                        "title": "Add blocked target penalty",
+                        "file": "src/decision_engine.py",
+                        "symptom": "target blocked",
+                        "suggested_change": "penalize repeated blocked target",
+                        "priority": "high",
+                    }
+                )
+                evidence = runtime_state.match_evidence()
+                edits = runtime_state.suggested_edits()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(evidence[-1]["outcome"]["message"], "TARGET_BLOCKED")
+        self.assertEqual(edits[-1]["detector"], "runtime.target_blocked")
+
     def test_owner_balance_alarm_gets_runtime_diagnostic_response(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         try:
@@ -2733,6 +2805,8 @@ class HardeningTests(unittest.TestCase):
         self.assertIn('class="owner-panel"', html)
         self.assertIn('id="owner-form"', html)
         self.assertIn('fetch("/admin/owner-message"', html)
+        self.assertIn('fetch("/admin/suggested-edits"', html)
+        self.assertIn('id="suggested-edits"', html)
         self.assertIn("overflow: hidden", html)
         self.assertNotIn("<aside>", html)
 

@@ -19,6 +19,7 @@ for folder in (ROOT / "src", ROOT / "data"):
         sys.path.insert(0, path)
 
 from agent_dossiers import AgentDossierStore
+from autonomy_suggestions import record_autonomy_observation
 from claw_contract import KNOWN_ACTION_TYPES, REQUIRED_ACTION_FIELDS
 from combat_decider import CombatCortex
 from combat_decider import target_in_attack_range
@@ -28,6 +29,7 @@ from decision_engine import has_usable_turn_facts
 from ep_economy_engine import EconomyCortex
 from free_action_abuse import FreeActionCortex
 from knowledge_base import KnowledgeBase
+from learned_policy_cortex import LearnedPolicyCortex
 from longterm_memory import LongTermMemoryStore
 from memory_system import CompactMemoryStore
 from memory_cortex import MemoryCortex
@@ -322,6 +324,15 @@ def _respond_to_owner_command_or_warn(
         )
 
 
+def _record_autonomy_or_warn(action: dict[str, Any], state: TurnState | dict[str, Any]) -> None:
+    try:
+        record_autonomy_observation(state, action)
+    except Exception as exc:
+        action.setdefault("_warnings", []).append(
+            {"type": "save_error", "store": "autonomy_observations", "error": str(exc)[:240]}
+        )
+
+
 def cerberus_tick(
     state: dict[str, Any],
     *,
@@ -353,6 +364,7 @@ def cerberus_tick(
     if not has_usable_turn_facts(turn_state):
         action = {"type": "rest", "reason": "waiting for usable live turn facts"}
         _respond_to_owner_command_or_warn(action, owner_directives)
+        _record_autonomy_or_warn(action, turn_state)
         memory.remember_turn(state, action=action)
         _save_or_warn(action, "memory", memory)
         _save_or_warn(action, "dossiers", dossiers)
@@ -378,6 +390,7 @@ def cerberus_tick(
         cortexes=[
             ThreatCortex(),
             OwnerCommandCortex(),
+            LearnedPolicyCortex(),
             FreeActionCortex(),
             UtilityCortex(),
             ProgressionCortex(),
@@ -398,6 +411,7 @@ def cerberus_tick(
     _respond_to_owner_command_or_warn(action, owner_directives)
     _remember_settlement_or_warn(action, state, memory)
     _remember_event_learning_or_warn(action, memory, dossiers, turn_state)
+    _record_autonomy_or_warn(action, turn_state)
 
     memory.remember_turn(state, action=action)
     _save_or_warn(action, "memory", memory)

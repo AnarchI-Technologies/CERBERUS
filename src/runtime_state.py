@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-from memory_system import DEFAULT_MEMORY_DIR, utc_now
+from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now
 
 
 _RUNTIME_AGENT_ID: ContextVar[str] = ContextVar("cerberus_runtime_agent_id", default="")
@@ -59,6 +59,14 @@ def hellion_voice_lab_file() -> Path:
 
 def owner_messages_file() -> Path:
     return memory_dir() / "owner_messages.json"
+
+
+def match_evidence_file() -> Path:
+    return memory_dir() / "match_evidence.json"
+
+
+def suggested_edits_file() -> Path:
+    return memory_dir() / "suggested_edits.json"
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -149,6 +157,87 @@ def append_owner_message(message: dict[str, Any], *, limit: int = 25) -> list[di
     except Exception:
         return messages
     return messages
+
+
+def _scrub_mapping(payload: dict[str, Any], *, text_limit: int = 220) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {}
+    for key, value in payload.items():
+        safe_key = scrub_scalar(key, limit=48)
+        if not safe_key:
+            continue
+        if isinstance(value, dict):
+            cleaned[safe_key] = _scrub_mapping(value, text_limit=text_limit)
+        elif isinstance(value, list):
+            cleaned[safe_key] = [
+                _scrub_mapping(item, text_limit=text_limit) if isinstance(item, dict) else scrub_scalar(item, limit=text_limit)
+                for item in value[:12]
+            ]
+        elif isinstance(value, bool) or value is None:
+            cleaned[safe_key] = value
+        elif isinstance(value, (int, float)):
+            cleaned[safe_key] = value
+        else:
+            cleaned[safe_key] = scrub_scalar(value, limit=text_limit)
+    return cleaned
+
+
+def match_evidence(limit: int = 200) -> list[dict[str, Any]]:
+    entries = read_json(match_evidence_file()).get("entries", [])
+    if not isinstance(entries, list):
+        return []
+    return [item for item in entries if isinstance(item, dict)][-max(1, limit):]
+
+
+def append_match_evidence(entry: dict[str, Any], *, limit: int = 1500) -> list[dict[str, Any]]:
+    entries = match_evidence(limit=limit)
+    cleaned = _scrub_mapping(entry, text_limit=260)
+    cleaned.setdefault("created_at", utc_now())
+    entries.append(cleaned)
+    entries = entries[-max(1, limit):]
+    try:
+        write_json(match_evidence_file(), {"entries": entries, "updated_at": int(time.time())})
+    except Exception:
+        return entries
+    return entries
+
+
+def suggested_edits(limit: int = 100) -> list[dict[str, Any]]:
+    edits = read_json(suggested_edits_file()).get("edits", [])
+    if not isinstance(edits, list):
+        return []
+    return [item for item in edits if isinstance(item, dict)][-max(1, limit):]
+
+
+def append_suggested_edit(edit: dict[str, Any], *, limit: int = 100) -> list[dict[str, Any]]:
+    edits = suggested_edits(limit=limit)
+    cleaned = _scrub_mapping(edit, text_limit=320)
+    signature = stable_hash(
+        {
+            "title": cleaned.get("title", ""),
+            "file": cleaned.get("file", ""),
+            "detector": cleaned.get("detector", ""),
+            "symptom": cleaned.get("symptom", ""),
+        },
+        length=18,
+    )
+    existing = next((item for item in edits if item.get("id") == signature), None)
+    if existing is not None:
+        existing["last_seen_at"] = utc_now()
+        existing["seen_count"] = int(existing.get("seen_count") or 1) + 1
+        existing["latest_evidence"] = cleaned.get("evidence", {})
+    else:
+        cleaned.setdefault("status", "open")
+        cleaned.setdefault("created_at", utc_now())
+        cleaned.setdefault("last_seen_at", cleaned["created_at"])
+        cleaned.setdefault("seen_count", 1)
+        cleaned["id"] = signature
+        edits.append(cleaned)
+    edits = edits[-max(1, limit):]
+    try:
+        write_json(suggested_edits_file(), {"edits": edits, "updated_at": int(time.time())})
+    except Exception:
+        return edits
+    return edits
 
 
 def append_hellion_owner_response(

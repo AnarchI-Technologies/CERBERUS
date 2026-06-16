@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 import websockets
 
+from autonomy_suggestions import record_autonomy_observation
 from claw_contract import JOIN_DECISIONS, THOUGHT_MAX_CHARS
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
@@ -669,14 +670,19 @@ def record_action_result_learning(payload: dict[str, Any], *, status: dict[str, 
     accepted = not error_text and success_raw is not False
     code = payload.get("code") or payload.get("status") or payload.get("errorCode") or ""
     action_type = str(last_action.get("type") or "unknown")
+    outcome = {
+        "ok": accepted,
+        "code": code or ("accepted" if accepted else "rejected"),
+        "message": error_text,
+        "error": error_text,
+    }
 
     store = CompactMemoryStore().load()
     store.remember_turn(
         _status_snapshot_to_compact_state(status),
         action=last_action,
         outcome={
-            "ok": accepted,
-            "code": code or ("accepted" if accepted else "rejected"),
+            **outcome,
             "hp": payload.get("hp") or payload.get("currentHp") or snapshot.get("hp"),
             "ep": payload.get("ep") or payload.get("currentEp") or snapshot.get("ep"),
         },
@@ -697,6 +703,10 @@ def record_action_result_learning(payload: dict[str, Any], *, status: dict[str, 
             confidence="0.9",
         )
     store.save()
+    try:
+        record_autonomy_observation(_status_snapshot_to_compact_state(status), last_action, outcome=outcome, runtime=status)
+    except Exception:
+        return
 
 
 def _balance_float(value: Any) -> float:
@@ -927,6 +937,15 @@ async def run_forever(config: ClawRuntimeConfig | None = None) -> None:
             status["candidate_paths"] = paths
             status["updated_at"] = int(time.time())
             write_json(claw_runtime_status_file(), status)
+            try:
+                record_autonomy_observation(
+                    _status_snapshot_to_compact_state(status),
+                    {"type": "rest", "reason": "runtime reconnect after websocket exception"},
+                    outcome={"ok": False, "code": "runtime_exception", "message": str(exc)[:500]},
+                    runtime=status,
+                )
+            except Exception:
+                pass
             await asyncio.sleep(delay)
 
 
