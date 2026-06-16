@@ -169,6 +169,7 @@ def make_plan(
     opportunities: Any = None,
     memory: str = "",
     memory_store: CompactMemoryStore | None = None,
+    dossier_store: Any = None,
     owner_messages: list[dict[str, Any]] | None = None,
     knowledge: KnowledgeBase | None = None,
     cortexes: list[Cortex] | None = None,
@@ -181,6 +182,8 @@ def make_plan(
         "opportunities": opportunities or [],
         "memory": memory or store.agent_context(),
         "memory_store": store,
+        "dossier_store": dossier_store,
+        "dossiers": dossier_store,
         "owner_messages": owner_messages or [],
         "knowledge": kb,
     }

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from claw_contract import ERROR_CODES
 from runtime_state import append_match_evidence, append_suggested_edit
 from turn_state_model import TurnState
 
@@ -97,6 +98,7 @@ def suggested_edits_from_observation(
     warnings = action.get("_warnings") if isinstance(action.get("_warnings"), list) else []
     outcome = outcome if isinstance(outcome, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
+    outcome_code = _text(outcome.get("code") or outcome.get("errorCode") or outcome.get("status"), 80).upper()
     outcome_text = _text(outcome.get("message") or outcome.get("error") or outcome.get("code"), 320).lower()
     runtime_error = _text(runtime.get("last_error"), 320).lower()
     suggestions: list[dict[str, Any]] = []
@@ -175,6 +177,59 @@ def suggested_edits_from_observation(
                 "symptom": "Paid join failed before gameplay started.",
                 "suggested_change": "Recheck account balance, identity, and game mode before retry; fall back to free rooms when paid readiness is false.",
                 "priority": "critical",
+                "evidence": evidence,
+            }
+        )
+
+    # Mapping specific ERROR_CODES to suggested architectural repairs
+    if outcome_code == "INSUFFICIENT_EP":
+        suggestions.append(
+            {
+                "detector": "contract.insufficient_ep",
+                "title": "Predictive EP cost validation in Economy Cortex",
+                "file": "src/ep_economy_engine.py",
+                "symptom": f"Server rejected action: {ERROR_CODES.get('INSUFFICIENT_EP')}",
+                "suggested_change": "Incorporate action_cost() check into cortex evaluation to avoid sending actions that exceed current EP.",
+                "priority": "high",
+                "evidence": evidence,
+            }
+        )
+
+    if outcome_code == "NO_IDENTITY":
+        suggestions.append(
+            {
+                "detector": "contract.no_identity",
+                "title": "Automated ERC-8004 identity attachment",
+                "file": "src/claw_identity_token.py",
+                "symptom": f"Server rejected join: {ERROR_CODES.get('NO_IDENTITY')}",
+                "suggested_change": "Trigger sync_identity_status() during preflight if identity_ready is false in the vault.",
+                "priority": "critical",
+                "evidence": evidence,
+            }
+        )
+
+    if outcome_code == "VERSION_MISMATCH":
+        suggestions.append(
+            {
+                "detector": "contract.version_mismatch",
+                "title": "Force version reconciliation on socket close",
+                "file": "src/claw_config.py",
+                "symptom": f"Server rejected handshake: {ERROR_CODES.get('VERSION_MISMATCH')}",
+                "suggested_change": "Call reconcile_claw_version() immediately when a 426 or VERSION_MISMATCH code is observed.",
+                "priority": "high",
+                "evidence": evidence,
+            }
+        )
+
+    if outcome_code == "RATE_LIMITED":
+        suggestions.append(
+            {
+                "detector": "contract.rate_limited",
+                "title": "Throttle non-essential social messages",
+                "file": "src/social_cortex.py",
+                "symptom": f"Server connection throttled: {ERROR_CODES.get('RATE_LIMITED')}",
+                "suggested_change": "Introduce a local cooldown for talk/whisper actions that shared the 120 msg/min budget with cooldown actions.",
+                "priority": "medium",
                 "evidence": evidence,
             }
         )

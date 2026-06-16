@@ -85,36 +85,67 @@ def normalize_action(action: Any) -> dict[str, Any]:
     return action
 
 
-def legalize_action(action: dict[str, Any], state: TurnState) -> dict[str, Any]:
-    action_type = str(action.get("type") or "")
-    if action_type == "attack":
-        target_id = str(action.get("targetId") or "")
-        candidates = [*state.visible_agents, *state.visible_monsters]
-        target = next((item for item in candidates if item.id == target_id and item.is_alive), None)
-        if target is None:
-            fallback = active_fallback_action(state)
-            fallback["reason"] = "blocked invalid attack target; " + str(fallback.get("reason") or "")
-            fallback["_rejected_action"] = {key: action.get(key) for key in ("type", "targetId", "targetType", "reason")}
-            return fallback
-        if not target_in_attack_range(state, target):
-            fallback = active_fallback_action(state)
-            fallback["reason"] = "blocked out-of-range attack; " + str(fallback.get("reason") or "")
-            fallback["_rejected_action"] = {key: action.get(key) for key in ("type", "targetId", "targetType", "reason")}
-            return fallback
-    if action_type == "explore":
-        terrain = state.current_region.terrain.lower()
-        name = state.current_region.name.lower()
-        if "ruin" not in terrain and "ruin" not in name and not state.ruins and state.connected_safe_regions():
-            fallback = active_fallback_action(state)
-            if fallback.get("type") == "explore":
-                fallback = {"type": "move", "regionId": state.connected_safe_regions()[0]["id"], "reason": "blocked non-ruin explore; move to scout instead"}
-            fallback["_rejected_action"] = {key: action.get(key) for key in ("type", "reason")}
-            return fallback
-    if action_type == "interact" and state.is_in_death_zone:
+def _block(state: TurnState, action_to_reject: dict[str, Any], reason: str) -> dict[str, Any]:
+    fallback = active_fallback_action(state)
+    fallback["reason"] = f"blocked {reason}; {fallback.get('reason', '')}"
+    fallback["_rejected_action"] = {k: action_to_reject.get(k) for k in ("type", "targetId", "targetType", "reason")}
+    return fallback
+
+
+def _validate_attack(action: dict[str, Any], state: TurnState) -> dict[str, Any] | None:
+    target_id = str(action.get("targetId") or "")
+    candidates = [*state.visible_agents, *state.visible_monsters]
+    target = next((item for item in candidates if item.id == target_id and item.is_alive), None)
+    if target is None:
+        return _block(state, action, "invalid attack target")
+    if not target_in_attack_range(state, target):
+        return _block(state, action, "out-of-range attack")
+    return None
+
+
+def _validate_explore(action: dict[str, Any], state: TurnState) -> dict[str, Any] | None:
+    terrain = state.current_region.terrain.lower()
+    name = state.current_region.name.lower()
+    if "ruin" not in terrain and "ruin" not in name and not state.ruins and state.connected_safe_regions():
         fallback = active_fallback_action(state)
-        fallback["reason"] = "blocked death-zone interact; " + str(fallback.get("reason") or "")
-        fallback["_rejected_action"] = {key: action.get(key) for key in ("type", "targetId", "reason")}
+        if fallback.get("type") == "explore":
+            fallback = {"type": "move", "regionId": state.connected_safe_regions()[0]["id"], "reason": "blocked non-ruin explore; move to scout instead"}
+        fallback["_rejected_action"] = {key: action.get(key) for key in ("type", "reason")}
         return fallback
+    return None
+
+
+def _validate_interact(action: dict[str, Any], state: TurnState) -> dict[str, Any] | None:
+    if state.is_in_death_zone:
+        return _block(state, action, "death-zone interact")
+    return None
+
+
+def _validate_use_item(action: dict[str, Any], state: TurnState) -> dict[str, Any] | None:
+    if state.self.hp >= state.self.max_hp:
+        item_id = str(action.get("itemId") or "")
+        # Check inventory for the item to confirm it's a healing item
+        item = next((i for i in state.inventory if i.get("id") == item_id), None)
+        if item:
+            label = str(item.get("typeId") or item.get("name") or "").lower()
+            if any(term in label for term in ("medkit", "bandage")):
+                return _block(state, action, "wasteful healing at full hp")
+    return None
+
+
+VALIDATORS: dict[str, Callable[[dict[str, Any], TurnState], dict[str, Any] | None]] = {
+    "attack": _validate_attack,
+    "explore": _validate_explore,
+    "interact": _validate_interact,
+    "use_item": _validate_use_item,
+}
+
+
+def legalize_action(action: dict[str, Any], state: TurnState) -> dict[str, Any]:
+    validator = VALIDATORS.get(str(action.get("type") or ""))
+    if validator:
+        validated = validator(action, state)
+        return validated if validated is not None else action
     return action
 
 
@@ -385,6 +416,7 @@ def cerberus_tick(
         opportunities=opportunities,
         memory=memory.agent_context(),
         memory_store=memory,
+        dossier_store=dossiers,
         owner_messages=owner_directives or [],
         knowledge=knowledge,
         cortexes=[

@@ -4,6 +4,9 @@ Combat Cortex.
 
 from __future__ import annotations
 
+from typing import Any
+
+from agent_dossiers import AgentDossierStore
 from cortex_types import CortexResult, action
 from turn_state_model import AgentState, TurnState
 
@@ -58,14 +61,25 @@ def expected_damage(state: TurnState, target: AgentState) -> float:
     return max(1.0, state.self.atk + bonus - target.defense * 0.5)
 
 
-def target_score(state: TurnState, target: AgentState) -> float:
+def target_score(state: TurnState, target: AgentState, dossiers: AgentDossierStore | None = None) -> float:
     damage = expected_damage(state, target)
     lethal = damage >= max(1, target.hp)
     hp_factor = max(0, 50 - target.hp)
     label = f"{target.name} {target.id}".lower()
     guardian_value = 25 if target.kind == "monster" and "guardian" in label else 0
     monster_value = 8 if target.kind == "monster" else 0
-    return damage + hp_factor + guardian_value + monster_value + (35 if lethal else 0)
+
+    score = damage + hp_factor + guardian_value + monster_value + (35 if lethal else 0)
+
+    if dossiers and target.kind != "monster":
+        record = dossiers.records.get(target.id)
+        if record and any("moltz" in str(t).lower() for t in record.observed_tendencies):
+            if target.hp and target.hp <= 40:
+                score *= 1.45
+            else:
+                score *= 1.2
+
+    return score
 
 
 def is_worth_attacking(state: TurnState, target: AgentState) -> bool:
@@ -80,10 +94,18 @@ def is_worth_attacking(state: TurnState, target: AgentState) -> bool:
 class CombatCortex:
     name = "combat"
 
-    def evaluate(self, state: TurnState, context: dict) -> list[CortexResult]:
+    def evaluate(self, state: TurnState, context: dict[str, Any]) -> list[CortexResult]:
         results: list[CortexResult] = []
         if not state.can_take_main_action or state.self.ep < 1 or state.alert_active or state.is_low_hp:
             return results
+
+        # Load dossiers from context or disk to apply Prime Directive multipliers
+        dossiers = context.get("dossiers") or context.get("dossier_store")
+        if not dossiers:
+            try:
+                dossiers = AgentDossierStore().load()
+            except Exception:
+                dossiers = None
 
         targets = [
             agent
@@ -102,8 +124,8 @@ class CombatCortex:
         if not targets:
             return results
 
-        target = sorted(targets, key=lambda item: target_score(state, item), reverse=True)[0]
-        score = target_score(state, target)
+        target = sorted(targets, key=lambda item: target_score(state, item, dossiers), reverse=True)[0]
+        score = target_score(state, target, dossiers)
         risk = max(5.0, target.atk * 0.7)
         target_type = "monster" if target.kind == "monster" else "agent"
 

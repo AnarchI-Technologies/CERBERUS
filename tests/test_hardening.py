@@ -5,6 +5,7 @@ import os
 import random
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -23,6 +24,7 @@ import claw_identity_token
 import claw_config
 import claw_runtime
 import claw_signing
+import cross_spinal_cord
 import stream_dashboard_cortex
 import moltbook_claim_assistant
 import render_app
@@ -48,6 +50,8 @@ from identity_bootstrap import (
 from isolated_runtime import IsolatedCerberusInstance
 from identity_vault import DEFAULT_PUBLIC_NAME, DEFAULT_V2_PUBLIC_NAME, empty_identity
 from knowledge_base import KnowledgeBase
+from ep_economy_engine import EconomyCortex
+from decision_engine import make_plan
 from longterm_memory import LongTermMemoryStore
 from memory_system import CompactMemoryStore
 from moltbook_claim_assistant import extract_moltbook_claims, stored_claim, verification_text
@@ -905,6 +909,77 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(action["type"], "pickup")
         self.assertEqual(action["itemId"], "cash-1")
+
+    def test_economy_uses_passed_dossiers_for_moltz_carrier_opportunity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.json",
+                encrypted_path=Path(tmp) / "memory.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            dossiers.observe_agent("carrier-1", name="Carrier", tendency="collects_smoltz")
+            plan = make_plan(
+                state={
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 100,
+                            "ep": 4,
+                            "atk": 28,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1"},
+                        "visibleAgents": [{"id": "carrier-1", "name": "Carrier", "hp": 34, "atk": 6, "def": 2, "regionId": "r1"}],
+                    },
+                },
+                memory_store=memory,
+                dossier_store=dossiers,
+                cortexes=[EconomyCortex()],
+            )
+
+        self.assertEqual(plan["action"]["type"], "attack")
+        self.assertEqual(plan["action"]["targetId"], "carrier-1")
+        self.assertEqual(plan["winner"]["intent"], "hunt_moltz_carrier")
+
+    def test_economy_does_not_hunt_moltz_carrier_without_ep(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.json",
+                encrypted_path=Path(tmp) / "memory.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            dossiers.observe_agent("carrier-1", name="Carrier", tendency="collects_smoltz")
+            plan = make_plan(
+                state={
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 100,
+                            "ep": 0,
+                            "atk": 28,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1"},
+                        "visibleAgents": [{"id": "carrier-1", "name": "Carrier", "hp": 34, "atk": 6, "def": 2, "regionId": "r1"}],
+                    },
+                },
+                memory_store=memory,
+                dossier_store=dossiers,
+                cortexes=[EconomyCortex()],
+            )
+
+        self.assertEqual(plan["action"]["type"], "rest")
+        self.assertIn("EP empty", plan["action"]["reason"])
 
     def test_combat_skips_low_damage_guardian_chipping(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2829,6 +2904,52 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(sent[0][0], "html")
         self.assertIn(b"Hellion Dashboard", sent[0][2])
         self.assertEqual(sent[1], ("json", 200, {"ok": True, "service": "cerberus"}))
+
+    def test_cross_spinal_cord_reports_side_effect_results_and_uses_moltbook_key(self) -> None:
+        old_identity = sys.modules.get("identity_vault")
+        old_moltybook = sys.modules.get("moltybook_client")
+        calls = []
+
+        class FakeVault:
+            data = {"moltbook": {"api_key": "mb-test"}}
+
+            def load(self):  # type: ignore[no-untyped-def]
+                return self
+
+        class FakeClient:
+            def __init__(self, api_key="", enabled=False):  # type: ignore[no-untyped-def]
+                self.api_key = api_key
+                self.enabled = enabled
+
+            def post_draft(self, draft):  # type: ignore[no-untyped-def]
+                calls.append((self.api_key, self.enabled, draft))
+                return {"ok": True, "posted": True}
+
+        sys.modules["identity_vault"] = types.SimpleNamespace(IdentityVault=FakeVault)  # type: ignore[assignment]
+        sys.modules["moltybook_client"] = types.SimpleNamespace(MoltyBookClient=FakeClient)  # type: ignore[assignment]
+        try:
+            result = cross_spinal_cord._process_moltybook(
+                {"type": "moltybook_draft", "content": "Hellion heard the bell."}
+            )
+        finally:
+            if old_identity is None:
+                sys.modules.pop("identity_vault", None)
+            else:
+                sys.modules["identity_vault"] = old_identity
+            if old_moltybook is None:
+                sys.modules.pop("moltybook_client", None)
+            else:
+                sys.modules["moltybook_client"] = old_moltybook
+
+        self.assertEqual(result, {"ok": True, "posted": True})
+        self.assertEqual(calls[0][0], "mb-test")
+        self.assertTrue(calls[0][1])
+
+    def test_cross_spinal_cord_unimplemented_forge_swap_is_reported(self) -> None:
+        result = cross_spinal_cord._process_forge_swap({"type": "forge_swap"})
+
+        self.assertFalse(result["ok"])
+        self.assertIn(result["reason"], {"missing_agent_private_key", "not_implemented", "forge_swap_side_effect_failed"})
 
     def test_render_readiness_reports_memory_write_failure_without_crashing(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
