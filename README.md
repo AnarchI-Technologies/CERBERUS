@@ -210,10 +210,25 @@ check the Runtime Blockers panel first; it reports whether the worker is
 disabled, reconnecting, blocked on a paid-join signature frame, or waiting for
 Claw Royale to send the next active game snapshot.
 
+The owner dashboard also exposes the current intent, recent action audit,
+stuck-state doctor, stale paid-room memory, deployment/disk status, and
+suggested-edit review controls. Suggested edits are review-only by default:
+approve, reject, or archive them from the private dashboard after entering
+`CERBERUS_PIN`.
+
 `/stats` also reports `claw_runtime.games_completed`,
 `last_balance_delta`, `total_balance_delta`,
 `average_balance_delta_per_game`, and `games_needed_for_1000_per_day` after the
 runtime observes account balances across completed games.
+
+Paid-room safety defaults:
+
+- `CLAW_ROYALE_FREE_FALLBACK_ENABLED=true` lets Hellion choose a viable free
+  room when paid rooms are empty or unsafe.
+- `CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS=true` prevents paying into empty paid
+  rooms unless explicitly disabled.
+- paid waiting games from account status are remembered as stale room IDs and
+  shown on the dashboard so Hellion does not keep rejoining the same trap.
 
 If Claw publishes a new WebSocket URL, set `CLAW_ROYALE_WS_PATHS` to a
 comma-separated list of paths or full `wss://` URLs. The runtime rotates through
