@@ -36,6 +36,7 @@ from game_map import build_live_map  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now  # noqa: E402
 from owner_command_cortex import acknowledge_owner_command, command_categories, directive_text  # noqa: E402
+from profit_simulator import simulate as profit_simulate  # noqa: E402
 from runtime_state import (
     append_hellion_owner_response,
     append_owner_message,
@@ -48,7 +49,9 @@ from runtime_state import (
     remember_game_id,
     stream_chat_messages,
     stored_game_id as runtime_stored_game_id,
+    stale_paid_rooms,
     suggested_edits,
+    update_suggested_edit_status,
     update_claw_runtime_status,
 )  # noqa: E402
 from stream_dashboard_cortex import StreamDashboardCortex, chat_message  # noqa: E402
@@ -131,6 +134,24 @@ def readiness() -> dict[str, Any]:
     return checks
 
 
+def deployment_info(ready: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]:
+    memory = ready.get("longterm_memory") if isinstance(ready.get("longterm_memory"), dict) else {}
+    return {
+        "render_service": os.getenv("RENDER_SERVICE_NAME", ""),
+        "render_instance": os.getenv("RENDER_INSTANCE_ID", ""),
+        "git_commit": os.getenv("RENDER_GIT_COMMIT", ""),
+        "python": sys.version.split()[0],
+        "sqlite": sqlite3.sqlite_version,
+        "memory_dir": ready.get("memory_dir", ""),
+        "memory_writable": bool(ready.get("memory_writable")),
+        "longterm_path": memory.get("path", ""),
+        "longterm_items": memory.get("items", 0),
+        "longterm_bytes": memory.get("bytes", 0),
+        "configured_claw_version": runtime.get("configured_version") or os.getenv("CLAW_ROYALE_VERSION", ""),
+        "live_claw_version": runtime.get("live_version") or active_claw_version(),
+    }
+
+
 def extract_game_id(state: dict[str, Any]) -> str:
     view = state.get("view", {}) if isinstance(state, dict) else {}
     current_game = view.get("currentGame", {}) if isinstance(view, dict) else {}
@@ -160,6 +181,10 @@ def stats() -> dict[str, Any]:
     game_id = runtime_stored_game_id()
     runtime_status = read_json(claw_runtime_status_file())
     runtime_map = runtime_status.get("live_map") if isinstance(runtime_status.get("live_map"), dict) else {}
+    profit = profit_simulate(games_per_day=int(runtime_status.get("games_completed_24h") or 61), target_per_day=1000)
+    launch_blockers = runtimeBlockers_server(ready, runtime_status)
+    doctor = stuck_state_doctor(ready, runtime_status, launch_blockers, profit)
+    deployment = deployment_info(ready, runtime_status)
     return {
         "ok": ready.get("ok", False),
         "service": "cerberus",
@@ -177,13 +202,94 @@ def stats() -> dict[str, Any]:
         "memory_error": ready.get("memory_error", ""),
         "longterm_memory_error": ready.get("longterm_memory_error", ""),
         "longterm_memory": ready.get("longterm_memory", {}),
+        "deployment": deployment,
         "autonomy": {
             "suggested_edits": len(suggested_edits()),
             "match_evidence": len(match_evidence()),
+            "stale_paid_rooms": len(stale_paid_rooms()),
+        },
+        "stale_paid_rooms": stale_paid_rooms(limit=20),
+        "launch": {
+            "ok": not launch_blockers and bool(profit.get("target_met")),
+            "blockers": [*launch_blockers, *([] if profit.get("target_met") else [f"profit gap {profit.get('gap_smoltz_per_day')} sMoltz/day"])][:12],
+            "doctor": doctor,
+        },
+        "profit": {
+            "expected_smoltz_per_game": profit.get("expected_smoltz_per_game", 0),
+            "expected_smoltz_per_day": profit.get("expected_smoltz_per_day", 0),
+            "target_met": bool(profit.get("target_met")),
+            "required_games_for_target": profit.get("required_games_for_target", 0),
+            "gap_smoltz_per_day": profit.get("gap_smoltz_per_day", 0),
+            "policy_gaps": profit.get("policy_gaps", [])[:6] if isinstance(profit.get("policy_gaps"), list) else [],
         },
         "owner_messages": owner_messages(),
         "env": ready.get("env", {}),
     }
+
+
+def stuck_state_doctor(
+    ready: dict[str, Any],
+    runtime: dict[str, Any],
+    blockers: list[str],
+    profit: dict[str, Any],
+) -> dict[str, Any]:
+    recommendations: list[str] = []
+    state = str(runtime.get("state") or "unknown")
+    last_error = str(runtime.get("last_error") or "")
+    account = runtime.get("account") if isinstance(runtime.get("account"), dict) else {}
+    current_games = account.get("currentGames") if isinstance(account.get("currentGames"), list) else []
+    if any("paid game waiting for opponents" in blocker for blocker in blockers):
+        recommendations.append("ask Claw support to clear the stale paid waiting game or provide the supported leave/cancel route")
+        recommendations.append("keep CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS=true after redeploy so future empty paid rooms are skipped")
+    if state in {"waiting_for_running_game", "welcomed"} and not current_games:
+        recommendations.append("wait for a running gameplay frame; if this repeats, capture the welcome payload and room summary")
+    if "cooldown" in last_error.lower():
+        recommendations.append("cooldown is active; no main action should be sent until canAct is true")
+    if ready.get("memory_writable") is False:
+        recommendations.append("fix Render disk mount/write access before relying on long-term learning")
+    if not profit.get("target_met"):
+        recommendations.append("increase paid-game completion rate or policy EV; current simulator remains below target")
+    if not recommendations and blockers:
+        recommendations.append("resolve listed launch blockers in order from top to bottom")
+    if not recommendations:
+        recommendations.append("runtime looks launchable; monitor action audit and balance delta")
+    return {
+        "state": state,
+        "summary": blockers[0] if blockers else "no blocking runtime condition detected",
+        "recommendations": recommendations[:6],
+    }
+
+
+def runtimeBlockers_server(ready: dict[str, Any], runtime: dict[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    if not ready.get("ok", False):
+        blockers.append("service readiness failed")
+    env = ready.get("env", {}) if isinstance(ready.get("env"), dict) else {}
+    for key in ("CERBERUS_PIN", "CLAW_ROYALE_API_KEY", "CLAW_ROYALE_ERC8004_ID"):
+        if env.get(key) is False:
+            blockers.append(f"missing {key}")
+    if env.get("CERBERUS_AGENT_EOA_PRIVATE_KEY") is False:
+        blockers.append("missing CERBERUS_AGENT_EOA_PRIVATE_KEY for paid-game signing")
+    if env.get("CLAW_ROYALE_RUNTIME_ENABLED") is False:
+        blockers.append("missing CLAW_ROYALE_RUNTIME_ENABLED=true")
+    if ready.get("memory_writable") is False:
+        blockers.append(f"memory directory is not writable: {ready.get('memory_error') or ready.get('memory_dir') or 'unknown'}")
+    if ready.get("longterm_memory_error"):
+        blockers.append(f"long-term memory error: {ready.get('longterm_memory_error')}")
+    state = str(runtime.get("state") or "")
+    last_error = str(runtime.get("last_error") or "")
+    if state and state not in {"connected", "playing", "action_result"}:
+        blockers.append(f"claw runtime {state}: {last_error or 'no live game yet'}")
+    current_games = []
+    account = runtime.get("account") if isinstance(runtime.get("account"), dict) else {}
+    if isinstance(account.get("currentGames"), list):
+        current_games = [item for item in account["currentGames"] if isinstance(item, dict)]
+    for game in current_games:
+        if str(game.get("entryType") or "").lower() == "paid" and str(game.get("gameStatus") or "").lower() in {"waiting", "queued"}:
+            blockers.append(f"paid game waiting for opponents: {game.get('gameId') or 'unknown'}")
+    if runtime.get("version_reconciled"):
+        blockers.append(f"claw version updated from {runtime.get('configured_version')} to {runtime.get('live_version')}")
+    return blockers[:16]
 
 
 def diagnostic_owner_response(message: dict[str, Any]) -> dict[str, str] | None:
@@ -476,7 +582,11 @@ def dashboard_html(query: str = "") -> bytes:
         <div class="metric wide"><div class="label">Recent Owner Messages</div><div id="owner-log" class="owner-log">loading</div></div>
         <div class="metric wide"><div class="label">Route / Loot Hints</div><div id="route-hints" class="owner-log">loading</div></div>
         <div class="metric wide"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Stuck Doctor</div><div id="stuck-doctor" class="owner-log">loading</div></div>
+        <div class="metric wide"><div class="label">Stale Paid Rooms</div><div id="stale-paid-rooms" class="owner-log">loading</div></div>
+        <div class="metric wide"><div class="label">Current Intent</div><div id="current-intent" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Action Audit</div><div id="action-audit" class="owner-log">loading</div></div>
         <div class="metric wide"><div class="label">Yield</div><div id="yield" class="value">loading</div></div>
         <div class="metric wide">
           <div class="label">Hellion Suggested Edits</div>
@@ -488,6 +598,7 @@ def dashboard_html(query: str = "") -> bytes:
         </div>
         <div class="metric wide"><div class="label">Readiness</div><div id="readiness" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Wallets</div><div id="wallets" class="value">loading</div></div>
+        <div class="metric wide"><div class="label">Deployment / Disk</div><div id="deployment" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Memory DB</div><div id="memory" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Writable</div><div id="writable" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Configured Env</div><div id="env" class="value">loading</div></div>
@@ -508,6 +619,8 @@ def dashboard_html(query: str = "") -> bytes:
     let lastMap = null;
     function runtimeBlockers(data) {{
       const blockers = [];
+      const launch = data.launch || {{}};
+      (launch.blockers || []).forEach((item) => blockers.push(String(item)));
       if (!data.ok) blockers.push("service readiness failed");
       if (!data.current_game_id && !lastGame) blockers.push("no rotated game ID received from /tick yet");
       if (data.memory_writable === false) blockers.push("memory directory is not writable: " + (data.memory_error || data.memory_dir || "unknown"));
@@ -523,7 +636,7 @@ def dashboard_html(query: str = "") -> bytes:
       if (runtime.state && !["connected", "playing"].includes(runtime.state)) {{
         blockers.push("claw runtime " + runtime.state + ": " + (runtime.last_error || "no live game yet"));
       }}
-      return blockers;
+      return Array.from(new Set(blockers));
     }}
     function showRuntimeFallback(blockers) {{
       const details = blockers.length ? blockers : ["no active spectate game ID available"];
@@ -554,7 +667,12 @@ def dashboard_html(query: str = "") -> bytes:
       box.innerHTML = edits.slice().reverse().map((edit) => (
         "<div class='owner-msg'><strong>" + esc(edit.title || edit.detector || "suggestion") + "</strong>" +
         " <span class='hint'>[" + esc(edit.priority || "review") + " seen " + esc(edit.seen_count || 1) + "x]</span><br>" +
-        esc(edit.symptom || "") + "<br><span class='hint'>" + esc(edit.file || "") + " | " + esc(edit.suggested_change || "") + "</span></div>"
+        esc(edit.symptom || "") + "<br><span class='hint'>" + esc(edit.file || "") + " | " + esc(edit.suggested_change || "") + "</span>" +
+        "<div class='form-row' style='grid-template-columns:auto auto auto 1fr;margin-top:8px'>" +
+        "<button type='button' onclick='reviewSuggestedEdit(\\"" + esc(edit.id || "") + "\\",\\"approved\\")'>Approve</button>" +
+        "<button type='button' onclick='reviewSuggestedEdit(\\"" + esc(edit.id || "") + "\\",\\"rejected\\")'>Reject</button>" +
+        "<button type='button' onclick='reviewSuggestedEdit(\\"" + esc(edit.id || "") + "\\",\\"archived\\")'>Archive</button>" +
+        "<span class='hint'>" + esc(edit.status || "open") + "</span></div></div>"
       )).join("") + "<div class='hint'>Recent compact evidence rows: " + esc((evidence || []).length) + "</div>";
     }}
     function hexPoints(cx, cy, radius) {{
@@ -564,6 +682,46 @@ def dashboard_html(query: str = "") -> bytes:
         points.push((cx + radius * Math.cos(angle)).toFixed(1) + "," + (cy + radius * Math.sin(angle)).toFixed(1));
       }}
       return points.join(" ");
+    }}
+    function renderActionAudit(rows) {{
+      const box = document.getElementById("action-audit");
+      if (!rows || !rows.length) {{
+        box.textContent = "none";
+        return;
+      }}
+      box.innerHTML = rows.slice().reverse().slice(0, 12).map((row) => {{
+        const action = row.action || {{}};
+        const outcome = row.outcome || {{}};
+        const target = action.targetId || action.itemId || action.regionId || "";
+        return "<div class='owner-msg'><strong>" + esc(row.kind || "action") + "</strong> " +
+          esc(action.type || "unknown") + (target ? " -> " + esc(target) : "") +
+          "<div class='hint'>" + esc(row.reason || "") + "</div>" +
+          (Object.keys(outcome).length ? "<div class='hint'>outcome " + esc(outcome.code || outcome.message || JSON.stringify(outcome).slice(0, 120)) + "</div>" : "") +
+        "</div>";
+      }}).join("");
+    }}
+    function renderStuckDoctor(doctor) {{
+      const box = document.getElementById("stuck-doctor");
+      if (!doctor) {{
+        box.textContent = "none";
+        return;
+      }}
+      const recs = doctor.recommendations || [];
+      box.innerHTML = "<div class='owner-msg'><strong>" + esc(doctor.state || "runtime") + "</strong><br>" +
+        esc(doctor.summary || "no summary") +
+        (recs.length ? "<div class='hint'>" + recs.map(esc).join("<br>") + "</div>" : "") +
+      "</div>";
+    }}
+    function renderStalePaidRooms(rows) {{
+      const box = document.getElementById("stale-paid-rooms");
+      if (!rows || !rows.length) {{
+        box.textContent = "none";
+        return;
+      }}
+      box.innerHTML = rows.slice().reverse().slice(0, 8).map((row) => (
+        "<div class='owner-msg'><strong>" + esc(row.room_id || "room") + "</strong>" +
+        "<div class='hint'>" + esc(row.reason || "") + " seen " + esc(row.seen_count || 1) + "x</div></div>"
+      )).join("");
     }}
     function renderRouteHints(map) {{
       const box = document.getElementById("route-hints");
@@ -585,6 +743,7 @@ def dashboard_html(query: str = "") -> bytes:
         return;
       }}
       const hexes = map.hexes || [];
+      const byId = Object.fromEntries(hexes.map((h) => [String(h.id || ""), h]));
       const xs = hexes.map((h) => Number(h.x || 0));
       const ys = hexes.map((h) => Number(h.y || 0));
       const minX = Math.min(...xs) - 150;
@@ -592,7 +751,19 @@ def dashboard_html(query: str = "") -> bytes:
       const width = Math.max(500, Math.max(...xs) - minX + 180);
       const height = Math.max(360, Math.max(...ys) - minY + 160);
       svg.setAttribute("viewBox", [minX / mapZoom, minY / mapZoom, width / mapZoom, height / mapZoom].join(" "));
-      svg.innerHTML = hexes.map((hex) => {{
+      const edges = [];
+      const seenEdges = new Set();
+      hexes.forEach((hex) => {{
+        (hex.connections || []).forEach((id) => {{
+          const other = byId[String(id || "")];
+          if (!other) return;
+          const key = [hex.id, other.id].sort().join("::");
+          if (seenEdges.has(key)) return;
+          seenEdges.add(key);
+          edges.push("<line x1='" + Number(hex.x || 0) + "' y1='" + Number(hex.y || 0) + "' x2='" + Number(other.x || 0) + "' y2='" + Number(other.y || 0) + "' stroke='#243044' stroke-width='2' opacity='.75'/>");
+        }});
+      }});
+      const regionMarkup = hexes.map((hex) => {{
         const x = Number(hex.x || 0);
         const y = Number(hex.y || 0);
         const danger = Number(hex.danger || 0);
@@ -604,15 +775,20 @@ def dashboard_html(query: str = "") -> bytes:
         const agents = (hex.agents || []).filter((a) => a.kind !== "self").slice(0, 2).map((a) => a.name + " HP" + a.hp).join(", ");
         const monsters = (hex.monsters || []).slice(0, 2).map((m) => m.name + " HP" + m.hp).join(", ");
         return "<g class='hex' tabindex='0'>" +
+          (hex.is_current ? "<circle cx='" + x + "' cy='" + y + "' r='52' fill='none' stroke='#62f0c7' stroke-width='2' opacity='.55'/>" : "") +
           "<polygon points='" + hexPoints(x, y, 42) + "' fill='" + fill + "' stroke='" + stroke + "' stroke-width='2'/>" +
+          (danger > 0 ? "<circle cx='" + (x + 31) + "' cy='" + (y - 31) + "' r='12' fill='#3b1118' stroke='#ff6b79'/><text x='" + (x + 31) + "' y='" + (y - 27) + "' text-anchor='middle' fill='#ffd9de' font-size='10'>" + Math.min(99, danger) + "</text>" : "") +
+          (loot > 0 ? "<circle cx='" + (x - 31) + "' cy='" + (y - 31) + "' r='12' fill='#162d20' stroke='#d5f36b'/><text x='" + (x - 31) + "' y='" + (y - 27) + "' text-anchor='middle' fill='#f2ffc0' font-size='10'>" + Math.min(99, loot) + "</text>" : "") +
           "<text x='" + x + "' y='" + (y - 14) + "' text-anchor='middle' fill='#f4f7fb' font-size='12' font-weight='700'>" + esc(hex.name || hex.id) + "</text>" +
           "<text x='" + x + "' y='" + (y + 4) + "' text-anchor='middle' fill='#cbd5e1' font-size='11'>" + esc(hex.terrain || "terrain ?") + "</text>" +
           "<text x='" + x + "' y='" + (y + 22) + "' text-anchor='middle' fill='#9fb0c9' font-size='11'>" + esc(contents || "empty") + "</text>" +
           "<title>" + esc([hex.id, hex.name, hex.terrain, "loot " + loot, "danger " + danger, items, agents, monsters].filter(Boolean).join(" | ")) + "</title>" +
         "</g>";
       }}).join("");
+      svg.innerHTML = edges.join("") + regionMarkup;
       const focus = hexes.find((h) => h.is_current) || hexes[0];
-      status.innerHTML = "<strong>Live vector map</strong> turn " + esc(map.turn || "?") + " | focused on " + esc(map.focus_agent_id || "Hellion") + " | current " + esc((focus && (focus.name || focus.id)) || "unknown") + " | heartbeat " + esc(map.heartbeat || "");
+      const summary = map.summary || {{}};
+      status.innerHTML = "<strong>Live vector map</strong> turn " + esc(map.turn || "?") + " | focused on " + esc(map.focus_agent_id || "Hellion") + " | current " + esc((focus && (focus.name || focus.id)) || "unknown") + " | G " + esc(summary.guardians || 0) + " A " + esc(summary.agents || 0) + " loot " + esc(summary.items || 0) + " | heartbeat " + esc(map.heartbeat || "");
       renderRouteHints(map);
     }}
     function zoomMap(multiplier) {{
@@ -634,7 +810,10 @@ def dashboard_html(query: str = "") -> bytes:
       document.getElementById("game").textContent = selectedGame || "unknown";
       const blockers = runtimeBlockers(data);
       document.getElementById("blockers").textContent = blockers.length ? blockers.join("; ") : "none";
+      renderStuckDoctor((data.launch || {{}}).doctor || null);
+      renderStalePaidRooms(data.stale_paid_rooms || []);
       const mem = data.longterm_memory || {{}};
+      const deployment = data.deployment || {{}};
       const runtime = data.claw_runtime || {{}};
       const snap = runtime.last_snapshot || {{}};
       const account = runtime.account || {{}};
@@ -649,9 +828,12 @@ def dashboard_html(query: str = "") -> bytes:
       document.getElementById("visible").textContent = "agents " + (snap.visible_agents ?? 0) + ", monsters " + (snap.visible_monsters ?? 0) + ", items " + (snap.visible_items ?? 0);
       document.getElementById("inventory").textContent = String(snap.inventory_count ?? 0);
       document.getElementById("last-action").textContent = [lastAction.type, lastAction.targetId || lastAction.regionId || lastAction.itemId, lastAction.reason].filter(Boolean).join(" | ") || "none";
+      document.getElementById("current-intent").textContent = runtime.current_intent || [lastAction.type, lastAction.reason].filter(Boolean).join(" | ") || "none";
+      renderActionAudit(runtime.action_audit || []);
       document.getElementById("yield").textContent = "games " + (runtime.games_completed ?? 0) + ", last +" + (runtime.last_balance_delta ?? 0) + ", avg/game " + (runtime.average_balance_delta_per_game ?? 0) + ", target games/day " + (runtime.games_needed_for_1000_per_day || "?");
       document.getElementById("readiness").textContent = "id " + !!readiness.identity + ", wallet " + !!readiness.walletAddress + ", sc " + !!readiness.scWallet + ", paid " + !!readiness.paidReady + ", balance " + (account.balance ?? "?");
       document.getElementById("wallets").textContent = "owner " + (wallets.owner_eoa || "unset") + "; agent " + (wallets.agent_eoa || "unset") + "; molty " + (wallets.molty_wallet || "unset");
+      document.getElementById("deployment").textContent = "commit " + (deployment.git_commit || "unknown").slice(0, 12) + "; claw " + (deployment.live_claw_version || "?") + "; disk " + (deployment.memory_writable ? "writable" : "blocked") + "; db " + (deployment.longterm_items || 0) + " items";
       document.getElementById("memory").textContent = (mem.items || 0) + " items, " + (mem.bytes || 0) + " bytes";
       document.getElementById("paid-ready").textContent = "paid ready " + !!readiness.paidReady;
       document.getElementById("top-balance").textContent = "balance " + (account.balance ?? "?") + " sMoltz";
@@ -719,6 +901,27 @@ def dashboard_html(query: str = "") -> bytes:
           return;
         }}
         renderSuggestedEdits(data.suggested_edits || [], data.match_evidence || []);
+      }} catch (err) {{
+        box.textContent = "Failed: " + err;
+      }}
+    }}
+    async function reviewSuggestedEdit(id, status) {{
+      const pin = document.getElementById("owner-pin").value;
+      const box = document.getElementById("suggested-edits");
+      if (!id) return;
+      box.textContent = "Updating...";
+      try {{
+        const res = await fetch("/admin/suggested-edit-status", {{
+          method: "POST",
+          headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
+          body: JSON.stringify({{id, status}})
+        }});
+        const data = await res.json();
+        if (!res.ok || !data.ok) {{
+          box.textContent = "Failed: " + (data.error || res.status);
+          return;
+        }}
+        renderSuggestedEdits(data.suggested_edits || [], []);
       }} catch (err) {{
         box.textContent = "Failed: " + err;
       }}
@@ -900,6 +1103,25 @@ class CerberusHandler(BaseHTTPRequestHandler):
                     "match_evidence": match_evidence(limit=min(25, limit)),
                 }
             )
+            return
+        if parsed.path == "/admin/suggested-edit-status":
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            try:
+                payload = self._read_json()
+            except Exception as exc:
+                payload = {"_body_error": str(exc)[:240]}
+            pin = self.headers.get("X-Cerberus-Pin", "") or str(payload.get("pin") or "")
+            if not self._pin_authorized(pin):
+                self._send({"ok": False, "error": "invalid_pin", "body_error": payload.get("_body_error", "")}, status=401)
+                return
+            result = update_suggested_edit_status(
+                str(payload.get("id") or ""),
+                str(payload.get("status") or ""),
+                note=str(payload.get("note") or ""),
+            )
+            self._send(result, status=200 if result.get("ok") else 400)
             return
         if parsed.path == "/admin/owner-message":
             if not self._authorized():

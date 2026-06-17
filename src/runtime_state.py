@@ -69,6 +69,10 @@ def suggested_edits_file() -> Path:
     return memory_dir() / "suggested_edits.json"
 
 
+def stale_paid_rooms_file() -> Path:
+    return memory_dir() / "stale_paid_rooms.json"
+
+
 def read_json(path: Path) -> dict[str, Any]:
     try:
         if path.exists():
@@ -238,6 +242,56 @@ def append_suggested_edit(edit: dict[str, Any], *, limit: int = 100) -> list[dic
     except Exception:
         return edits
     return edits
+
+
+def update_suggested_edit_status(edit_id: str, status: str, *, note: str = "", limit: int = 100) -> dict[str, Any]:
+    allowed = {"open", "approved", "rejected", "archived"}
+    normalized = status.strip().lower()
+    if normalized not in allowed:
+        return {"ok": False, "error": "invalid_status", "allowed": sorted(allowed)}
+    edits = suggested_edits(limit=limit)
+    edit = next((item for item in edits if str(item.get("id") or "") == str(edit_id)), None)
+    if edit is None:
+        return {"ok": False, "error": "not_found"}
+    edit["status"] = normalized
+    edit["reviewed_at"] = utc_now()
+    if note:
+        edit["review_note"] = scrub_scalar(note, limit=220)
+    write_json(suggested_edits_file(), {"edits": edits, "updated_at": int(time.time())})
+    return {"ok": True, "edit": edit, "suggested_edits": edits}
+
+
+def stale_paid_rooms(limit: int = 100) -> list[dict[str, Any]]:
+    rows = read_json(stale_paid_rooms_file()).get("rooms", [])
+    if not isinstance(rows, list):
+        return []
+    return [item for item in rows if isinstance(item, dict)][-max(1, limit):]
+
+
+def remember_stale_paid_room(room_id: str, *, reason: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    room_id = scrub_scalar(room_id, limit=80)
+    if not room_id:
+        return stale_paid_rooms(limit=limit)
+    rows = stale_paid_rooms(limit=limit)
+    existing = next((item for item in rows if item.get("room_id") == room_id), None)
+    if existing:
+        existing["last_seen_at"] = utc_now()
+        existing["seen_count"] = int(existing.get("seen_count") or 1) + 1
+        if reason:
+            existing["reason"] = scrub_scalar(reason, limit=180)
+    else:
+        rows.append(
+            {
+                "room_id": room_id,
+                "reason": scrub_scalar(reason, limit=180),
+                "created_at": utc_now(),
+                "last_seen_at": utc_now(),
+                "seen_count": 1,
+            }
+        )
+    rows = rows[-max(1, limit):]
+    write_json(stale_paid_rooms_file(), {"rooms": rows, "updated_at": int(time.time())})
+    return rows
 
 
 def append_hellion_owner_response(

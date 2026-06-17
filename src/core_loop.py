@@ -39,6 +39,7 @@ from runtime_state import owner_messages as load_owner_messages
 from runtime_state import append_hellion_owner_response, last_hellion_response_for_command
 from settlement_memory import remember_settlement_lessons
 from social_cortex import SocialCortex
+from social_runtime import enqueue_social_effects
 from threat_engine import ThreatCortex
 from turn_state_model import TurnState
 from utility_cortex import UtilityCortex
@@ -218,6 +219,23 @@ def _remember_settlement_or_warn(action: dict[str, Any], state: dict[str, Any], 
     except Exception as exc:
         action.setdefault("_warnings", []).append(
             {"type": "save_error", "store": "settlement_memory", "error": str(exc)[:240]}
+        )
+
+
+def _queue_social_side_effects_or_warn(action: dict[str, Any]) -> None:
+    effects = [
+        effect
+        for effect in action.get("_side_effects", [])
+        if isinstance(effect, dict) and str(effect.get("type") or "") in {"moltybook_draft", "moltybook_follow"}
+    ]
+    if not effects:
+        return
+    try:
+        queue = enqueue_social_effects(effects)
+        action.setdefault("_side_effects", []).append({"type": "social_queue_updated", "queued": len(queue)})
+    except Exception as exc:
+        action.setdefault("_warnings", []).append(
+            {"type": "save_error", "store": "social_runtime_queue", "error": str(exc)[:240]}
         )
 
 def _event_data(event: dict[str, Any]) -> dict[str, Any]:
@@ -443,6 +461,7 @@ def cerberus_tick(
     _respond_to_owner_command_or_warn(action, owner_directives)
     _remember_settlement_or_warn(action, state, memory)
     _remember_event_learning_or_warn(action, memory, dossiers, turn_state)
+    _queue_social_side_effects_or_warn(action)
     _record_autonomy_or_warn(action, turn_state)
 
     memory.remember_turn(state, action=action)

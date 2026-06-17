@@ -71,6 +71,17 @@ def _first_list(*values: Any) -> list[Any]:
     return []
 
 
+GUARDIAN_MARKERS = ("guardian", "monster", "npc", "system")
+
+
+def _looks_like_monster(raw: dict[str, Any]) -> bool:
+    label = " ".join(
+        str(raw.get(key) or "")
+        for key in ("id", "agentId", "name", "agentName", "type", "kind", "role", "class", "agentType")
+    ).lower()
+    return any(marker in label for marker in GUARDIAN_MARKERS)
+
+
 @dataclass(slots=True)
 class RegionState:
     id: str = ""
@@ -208,6 +219,7 @@ class TurnState:
         )
         alert_active_raw = view.get("alertActive", self_raw.get("alertActive"))
         state.alert_active = _as_bool(alert_active_raw, state.alert_gauge >= 10)
+        state._normalize_visible_collections()
         state._ingest_events()
         return state
 
@@ -283,6 +295,22 @@ class TurnState:
                 if ruin.id:
                     self.ruins[ruin.id] = ruin
 
+    def _normalize_visible_collections(self) -> None:
+        agents: list[AgentState] = []
+        monsters: list[AgentState] = list(self.visible_monsters)
+        monster_ids = {monster.id for monster in monsters if monster.id}
+        for agent in self.visible_agents:
+            if agent.kind == "monster" or _looks_like_monster(agent.raw):
+                agent.kind = "monster"
+                if not agent.id or agent.id not in monster_ids:
+                    monsters.append(agent)
+                    if agent.id:
+                        monster_ids.add(agent.id)
+            else:
+                agents.append(agent)
+        self.visible_agents = agents
+        self.visible_monsters = monsters
+
 
 def parse_region(raw: dict[str, Any]) -> RegionState:
     raw = _as_dict(raw)
@@ -302,6 +330,8 @@ def parse_agent(raw: dict[str, Any], *, kind: str = "agent") -> AgentState:
     raw = _as_dict(raw)
     raw_kind = str(raw.get("kind") or "").lower()
     parsed_kind = raw_kind if raw_kind in {"agent", "monster"} else kind
+    if _looks_like_monster(raw):
+        parsed_kind = "monster"
     return AgentState(
         id=str(raw.get("id") or raw.get("agentId") or ""),
         name=str(raw.get("name") or raw.get("agentName") or ""),

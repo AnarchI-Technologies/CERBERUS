@@ -24,13 +24,16 @@ from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
 from env_loader import hydrate_env
 from game_map import build_live_map
+from lesson_compiler import compile_lessons
 from memory_system import CompactMemoryStore
 from onboarding_clients import ClawRoyaleClient
 from runtime_state import (
     claw_runtime_status_file,
     clear_game_id,
     read_json,
+    remember_stale_paid_room,
     remember_game_id,
+    stale_paid_rooms,
     stored_game_id,
     update_claw_runtime_status,
     write_json,
@@ -74,6 +77,8 @@ ROOM_COUNT_KEYS = (
     "population",
 )
 ROOM_LIST_COUNT_KEYS = ("agents", "players", "participants", "joinedAgents", "activeAgents")
+GUARDIAN_MARKERS = ("guardian", "monster", "npc", "system")
+ROOM_ID_KEYS = ("gameId", "game_id", "roomId", "room_id", "id", "joinIntentId")
 
 
 @dataclass(frozen=True)
@@ -106,6 +111,35 @@ class ClawRuntimeConfig:
 
 def update_status(**updates: Any) -> None:
     update_claw_runtime_status(**updates)
+
+
+def append_action_audit(entry: dict[str, Any], *, limit: int = 25) -> list[dict[str, Any]]:
+    status = read_json(claw_runtime_status_file())
+    rows = status.get("action_audit") if isinstance(status.get("action_audit"), list) else []
+    cleaned = {
+        "ts": int(time.time()),
+        "kind": str(entry.get("kind") or "runtime")[:32],
+        "action": entry.get("action") if isinstance(entry.get("action"), dict) else {},
+        "outcome": entry.get("outcome") if isinstance(entry.get("outcome"), dict) else {},
+        "reason": str(entry.get("reason") or "")[:240],
+        "state": str(entry.get("state") or status.get("state") or "")[:80],
+    }
+    rows.append(cleaned)
+    rows = rows[-max(1, limit):]
+    update_status(action_audit=rows)
+    return rows
+
+
+def runtime_intent(action: dict[str, Any]) -> str:
+    action_type = str(action.get("type") or "unknown")
+    reason = str(action.get("reason") or "")
+    target = action.get("targetId") or action.get("itemId") or action.get("regionId") or ""
+    parts = [action_type]
+    if target:
+        parts.append(str(target)[:48])
+    if reason:
+        parts.append(reason[:120])
+    return " | ".join(parts)
 
 
 def extract_game_id(payload: Any) -> str:
@@ -312,6 +346,46 @@ def room_entry_type(room: dict[str, Any]) -> str:
     return ""
 
 
+def room_id(room: dict[str, Any]) -> str:
+    for key in ROOM_ID_KEYS:
+        value = str(room.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def stale_paid_room_ids() -> set[str]:
+    return {str(item.get("room_id") or "") for item in stale_paid_rooms(limit=100) if item.get("room_id")}
+
+
+def occupant_looks_guardian(occupant: Any) -> bool:
+    if not isinstance(occupant, dict):
+        return False
+    label = " ".join(
+        str(occupant.get(key) or "")
+        for key in ("name", "agentName", "type", "kind", "role", "class", "id", "agentId")
+    ).lower()
+    return any(marker in label for marker in GUARDIAN_MARKERS)
+
+
+def room_competitor_population(room: dict[str, Any]) -> int | None:
+    for key in ROOM_LIST_COUNT_KEYS:
+        value = room.get(key)
+        if isinstance(value, list):
+            return len([item for item in value if not occupant_looks_guardian(item)])
+    for key in ("playerCount", "playersCount", "humanCount", "humanPlayers", "competitorCount", "agentCompetitorCount"):
+        value = room.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return max(0, value)
+        if isinstance(value, float):
+            return max(0, int(value))
+        if isinstance(value, str) and value.strip().isdigit():
+            return int(value.strip())
+    return room_population(room)
+
+
 def room_population(room: dict[str, Any]) -> int | None:
     for key in ROOM_LIST_COUNT_KEYS:
         value = room.get(key)
@@ -337,22 +411,37 @@ def room_population(room: dict[str, Any]) -> int | None:
 def room_choice_summary(welcome: dict[str, Any] | None) -> dict[str, Any]:
     paid_populations: list[int] = []
     free_populations: list[int] = []
+    paid_competitors: list[int] = []
+    free_competitors: list[int] = []
     unknown_rooms = 0
+    stale_paid_rooms_seen = 0
+    stale_ids = stale_paid_room_ids()
     for room in room_entries(welcome):
         entry_type = room_entry_type(room)
         population = room_population(room)
+        competitors = room_competitor_population(room)
+        if entry_type == "paid" and room_id(room) in stale_ids:
+            stale_paid_rooms_seen += 1
+            continue
         if entry_type == "paid" and population is not None:
             paid_populations.append(population)
+            paid_competitors.append(competitors if competitors is not None else population)
         elif entry_type == "free" and population is not None:
             free_populations.append(population)
+            free_competitors.append(competitors if competitors is not None else population)
         elif entry_type:
             unknown_rooms += 1
     return {
         "paid_rooms": len(paid_populations),
-        "paid_occupied": sum(1 for count in paid_populations if count > 0),
+        "paid_occupied": sum(1 for count in paid_competitors if count > 0),
+        "paid_total_occupants": sum(paid_populations),
+        "paid_competitors": sum(paid_competitors),
         "free_rooms": len(free_populations),
-        "free_occupied": sum(1 for count in free_populations if count > 0),
+        "free_occupied": sum(1 for count in free_competitors if count > 0),
+        "free_total_occupants": sum(free_populations),
+        "free_competitors": sum(free_competitors),
         "unknown_rooms": unknown_rooms,
+        "stale_paid_rooms": stale_paid_rooms_seen,
     }
 
 
@@ -377,18 +466,33 @@ def readiness_blocks_free(welcome: dict[str, Any] | None) -> bool:
 
 
 def free_fallback_enabled() -> bool:
-    return os.getenv("CLAW_ROYALE_FREE_FALLBACK_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("CLAW_ROYALE_FREE_FALLBACK_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def avoid_empty_paid_rooms_enabled() -> bool:
+    return os.getenv("CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def should_prefer_free_room(config: ClawRuntimeConfig, welcome: dict[str, Any] | None) -> bool:
     if not free_fallback_enabled() or config.mode == "free" or readiness_blocks_free(welcome):
         return False
     summary = room_choice_summary(welcome)
-    if summary["free_occupied"] <= 0:
+    readiness = (welcome or {}).get("readiness", {})
+    free_ready = isinstance(readiness, dict) and isinstance(readiness.get("freeRoom"), dict) and readiness["freeRoom"].get("ok") is True
+    if summary["free_occupied"] <= 0 and not free_ready:
         return False
     if summary["paid_rooms"] == 0 and summary["unknown_rooms"] == 0:
         return True
     return summary["paid_rooms"] > 0 and summary["paid_occupied"] == 0
+
+
+def should_avoid_paid_room(config: ClawRuntimeConfig, welcome: dict[str, Any] | None) -> bool:
+    if not avoid_empty_paid_rooms_enabled() or config.mode == "free":
+        return False
+    summary = room_choice_summary(welcome)
+    if summary["paid_rooms"] == 0:
+        return False
+    return summary["paid_occupied"] == 0
 
 
 def _readiness_paid_mode(welcome: dict[str, Any] | None) -> str:
@@ -489,6 +593,10 @@ def hello_frame(config: ClawRuntimeConfig, welcome: dict[str, Any] | None = None
         return {"type": "hello", "entryType": "free"}
     if decision in {"", "ASK_ENTRY_TYPE"} and should_prefer_free_room(config, welcome):
         return {"type": "hello", "entryType": "free"}
+    if decision in {"", "ASK_ENTRY_TYPE"} and should_avoid_paid_room(config, welcome):
+        if not readiness_blocks_free(welcome):
+            return {"type": "hello", "entryType": "free"}
+        return None
     if decision == "PAID_ONLY":
         return {"type": "hello", "entryType": "paid", "mode": config.mode}
     if config.mode == "free":
@@ -632,6 +740,23 @@ def account_status_summary(config: ClawRuntimeConfig) -> dict[str, Any]:
     }
 
 
+def record_stale_paid_waiting_games(account: dict[str, Any]) -> list[dict[str, Any]]:
+    games = account.get("currentGames") if isinstance(account.get("currentGames"), list) else []
+    recorded: list[dict[str, Any]] = []
+    for game in games:
+        if not isinstance(game, dict):
+            continue
+        if str(game.get("entryType") or "").lower() != "paid":
+            continue
+        if str(game.get("gameStatus") or "").lower() not in {"waiting", "queued"}:
+            continue
+        game_id = str(game.get("gameId") or "")
+        if not game_id:
+            continue
+        recorded = remember_stale_paid_room(game_id, reason="account currentGames paid waiting")
+    return recorded
+
+
 def _status_snapshot_to_compact_state(status: dict[str, Any]) -> dict[str, Any]:
     snapshot = status.get("last_snapshot") if isinstance(status.get("last_snapshot"), dict) else {}
     return {
@@ -677,6 +802,15 @@ def record_action_result_learning(payload: dict[str, Any], *, status: dict[str, 
         "message": error_text,
         "error": error_text,
     }
+    append_action_audit(
+        {
+            "kind": "action_result",
+            "action": last_action,
+            "outcome": outcome,
+            "reason": str(last_action.get("reason") or ""),
+            "state": status.get("state") or "",
+        }
+    )
 
     store = CompactMemoryStore().load()
     store.remember_turn(
@@ -706,6 +840,9 @@ def record_action_result_learning(payload: dict[str, Any], *, status: dict[str, 
     store.save()
     try:
         record_autonomy_observation(_status_snapshot_to_compact_state(status), last_action, outcome=outcome, runtime=status)
+        compiled = compile_lessons(evidence_limit=300, min_count=2)
+        if compiled.get("lesson_count"):
+            update_status(last_lesson_compile=compiled)
     except Exception:
         return
 
@@ -764,8 +901,9 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     url = websocket_url(config, path)
     extra_headers = config.headers
     account_status = record_account_balance(config, stage="connect")
+    stale_paid = record_stale_paid_waiting_games(account_status)
     join_blocker = join_blocker_for_account(config, account_status)
-    update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, account=account_status, last_error="")
+    update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, account=account_status, stale_paid_rooms=stale_paid, last_error="")
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
         gameplay_ready = False
         update_status(state="connected", endpoint=url, connected_at=int(time.time()), reconnects=read_json(claw_runtime_status_file()).get("reconnects", 0))
@@ -904,7 +1042,8 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 action = cerberus_tick(snapshot)
                 envelope = action_envelope(action)
                 await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
-                update_status(last_action=action, last_action_at=int(time.time()), state="playing")
+                append_action_audit({"kind": "action_sent", "action": action, "reason": str(action.get("reason") or ""), "state": "playing"})
+                update_status(last_action=action, last_action_at=int(time.time()), current_intent=runtime_intent(action), state="playing")
             elif snapshot and not gameplay_ready:
                 update_status(state="waiting_for_running_game", last_error="joined but waiting for running game frame")
         update_status(state="socket_closed", last_error="websocket closed without terminal game frame")

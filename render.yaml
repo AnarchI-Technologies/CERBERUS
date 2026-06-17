@@ -25,6 +25,12 @@ services:
         value: "true"
       - key: CLAW_ROYALE_GAME_MODE
         value: offchain
+      - key: CLAW_ROYALE_FREE_FALLBACK_ENABLED
+        value: "true"
+      - key: CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS
+        value: "true"
+      - key: CERBERUS_MOLTYBOOK_ENABLED
+        value: "false"
       - key: CERBERUS_HTTP_TOKEN
         generateValue: true
       - key: CERBERUS_PIN

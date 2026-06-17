@@ -15,24 +15,85 @@ from free_action_abuse import best_ground_weapon, equipped_weapon, weapon_bonus_
 from turn_state_model import TurnState
 
 
-VALUE_TERMS = ("moltz", "smoltz", "relic", "pack", "loot", "value", "pickup", "pick up")
-HEAL_TERMS = ("heal", "medkit", "bandage", "recover", "patch up", "use health", "stay healthy")
-WEAPON_TERMS = ("weapon", "equip", "sharper", "dagger", "sword", "katana", "sniper", "arm yourself", "best weapon")
-AVOID_TERMS = ("avoid fight", "avoid combat", "do not fight", "don't fight", "stop fighting")
-REST_BLOCK_TERMS = ("do not rest", "don't rest", "stop resting")
-SCOUT_TERMS = ("scout", "explore", "move", "rotate", "path", "map", "look around", "find route")
-ATTACK_TERMS = ("attack", "fight", "kill", "hunt", "smash", "destroy", "aggressive", "pressure", "push")
-GUARDIAN_TERMS = ("guardian", "monster")
-DEFENSIVE_TERMS = ("defensive", "survive", "safe", "safety", "stay alive", "preserve hp", "do not die", "risk off")
-RUIN_TERMS = ("ruin", "progress", "progression", "objective")
-TAUNT_TERMS = ("taunt", "talk", "say", "trash talk", "wisecrack", "mock")
-BROADCAST_TERMS = ("broadcast", "announce", "public thought", "spectator", "spectators")
-PROFIT_TERMS = ("profit", "yield", "premium", "earn", "earning", "farm", "bankroll", "paid game", "paid games", "grind")
-PERSONA_TERMS = ("persona", "tone", "sarcastic", "witty", "voice", "style")
-MAP_TERMS = ("map", "game map", "hex", "hexes", "heartbeat", "refresh map", "live state")
-LEAVE_TERMS = ("leave room", "leave game", "exit room", "stale room", "stuck room", "forfeit", "surrender")
+VALUE_TERMS = (
+    "moltz", "smoltz", "relic", "pack", "loot", "value", "pickup", "pick up", "grab", "collect",
+    "harvest", "scoop", "take item", "take items", "get paid", "money", "cash", "currency", "reward",
+    "treasure", "drops", "ground loot", "valuable", "resources",
+)
+HEAL_TERMS = (
+    "heal", "medkit", "bandage", "recover", "patch up", "use health", "stay healthy", "top off",
+    "restore hp", "restore health", "low hp", "drink potion", "use potion", "health first", "survive damage",
+)
+WEAPON_TERMS = (
+    "weapon", "equip", "sharper", "dagger", "sword", "katana", "sniper", "arm yourself", "best weapon",
+    "upgrade weapon", "pick weapon", "grab weapon", "switch weapon", "equip strongest", "use stronger",
+    "stop punching", "no fists", "find weapon", "weapon first", "arm up", "gear up",
+)
+AVOID_TERMS = (
+    "avoid fight", "avoid combat", "do not fight", "don't fight", "stop fighting", "evade", "run away",
+    "kite away", "disengage", "avoid enemies", "avoid agents", "avoid guardian", "avoid guardians",
+)
+REST_BLOCK_TERMS = (
+    "do not rest", "don't rest", "stop resting", "quit resting", "no rest", "rest less", "stop idling",
+    "dont rest", "do not idle", "don't idle",
+)
+SCOUT_TERMS = (
+    "scout", "explore", "move", "rotate", "path", "map", "look around", "find route", "search",
+    "roam", "navigate", "go north", "go south", "go east", "go west", "advance", "push forward",
+    "find ruins", "find loot", "find enemies", "leave empty area", "stop standing still", "unstick",
+)
+ATTACK_TERMS = (
+    "attack", "fight", "kill", "hunt", "smash", "destroy", "aggressive", "pressure", "push",
+    "engage", "target", "finish", "execute", "eliminate", "hit", "strike", "shoot", "stab",
+    "punish", "duel", "chase", "secure kill",
+)
+GUARDIAN_TERMS = ("guardian", "guardians", "monster", "monsters", "npc", "boss", "sentinel")
+DEFENSIVE_TERMS = (
+    "defensive", "survive", "safe", "safety", "stay alive", "preserve hp", "do not die", "risk off",
+    "play safe", "safer", "retreat", "deathzone", "death zone", "storm", "danger", "dangerous",
+    "protect yourself", "conserve hp", "avoid death", "live first",
+)
+RUIN_TERMS = (
+    "ruin", "ruins", "progress", "progression", "objective", "relic objective", "open ruin",
+    "finish objective", "farm relic", "relic room", "explore ruins",
+)
+TAUNT_TERMS = ("taunt", "talk", "say", "trash talk", "wisecrack", "mock", "chirp", "roast", "comment", "speak")
+BROADCAST_TERMS = (
+    "broadcast", "announce", "public thought", "spectator", "spectators", "say publicly",
+    "tell the arena", "post thought", "public message",
+)
+PROFIT_TERMS = (
+    "profit", "yield", "premium", "earn", "earning", "farm", "bankroll", "paid game", "paid games", "grind",
+    "roi", "return", "daily target", "1000", "make money", "increase balance", "balance hasnt changed",
+    "balance hasn't changed", "not profitable", "wasting money",
+)
+PERSONA_TERMS = ("persona", "tone", "sarcastic", "witty", "voice", "style", "personality", "hellion-like", "brand")
+MAP_TERMS = (
+    "map", "game map", "hex", "hexes", "heartbeat", "refresh map", "live state", "show map",
+    "update map", "where are you", "where is hellion", "current room", "current region",
+)
+LEAVE_TERMS = (
+    "leave room",
+    "leave game",
+    "exit room",
+    "stale room",
+    "stuck room",
+    "stale game",
+    "abort game",
+    "abort stale",
+    "abort stale game",
+    "force leave",
+    "forfeit",
+    "surrender",
+)
 PAID_TERMS = ("paid ready", "paid game", "paid games", "premium", "force paid", "join paid")
 FREE_TERMS = ("free game", "free games", "force free", "join free")
+LOADOUT_TERMS = ("loadout", "build", "gear", "profile", "pack", "reforge", "shop", "buy", "top up", "smoltz top-up")
+MEMORY_TERMS = ("memory", "learn", "lesson", "remember", "forget", "training", "evidence", "suggested edit", "self edit")
+SOCIAL_TERMS = ("moltbook", "moltybook", "post", "comment", "feed", "social", "reply", "follow", "subclaw")
+WALLET_TERMS = ("wallet", "balance", "deposit", "withdraw", "transfer", "fund", "funds", "private key", "owner wallet")
+DEPLOY_TERMS = ("render", "deploy", "deployment", "disk", "restart", "rebuild", "version", "environment", "env var", "logs")
+STREAM_TERMS = ("stream", "twitch", "chat", "viewer", "tip", "donation", "overlay", "avatar")
 DIAGNOSTIC_TERMS = (
     "balance hasnt changed",
     "balance hasn't changed",
@@ -47,7 +108,30 @@ DIAGNOSTIC_TERMS = (
     "blockers",
     "healthz",
     "readiness",
+    "status",
+    "what are you doing",
+    "what is she doing",
+    "why aren't you",
+    "why arent you",
+    "broken",
+    "not live",
 )
+
+CONTEXT_CATEGORY_TERMS = {
+    "profit": PROFIT_TERMS,
+    "persona": PERSONA_TERMS,
+    "map": MAP_TERMS,
+    "leave_game": LEAVE_TERMS,
+    "paid_mode": PAID_TERMS,
+    "free_mode": FREE_TERMS,
+    "loadout": LOADOUT_TERMS,
+    "memory": MEMORY_TERMS,
+    "social": SOCIAL_TERMS,
+    "wallet": WALLET_TERMS,
+    "deploy": DEPLOY_TERMS,
+    "stream": STREAM_TERMS,
+    "diagnostic": DIAGNOSTIC_TERMS,
+}
 
 
 class OwnerCommandCortex:
@@ -291,20 +375,9 @@ def command_categories(text: str) -> list[str]:
         categories.append("taunt")
     if any(term in normalized for term in BROADCAST_TERMS):
         categories.append("broadcast")
-    if any(term in normalized for term in PROFIT_TERMS):
-        categories.append("profit")
-    if any(term in normalized for term in PERSONA_TERMS):
-        categories.append("persona")
-    if any(term in normalized for term in MAP_TERMS):
-        categories.append("map")
-    if any(term in normalized for term in LEAVE_TERMS):
-        categories.append("leave_game")
-    if any(term in normalized for term in PAID_TERMS):
-        categories.append("paid_mode")
-    if any(term in normalized for term in FREE_TERMS):
-        categories.append("free_mode")
-    if any(term in normalized for term in DIAGNOSTIC_TERMS):
-        categories.append("diagnostic")
+    for category, terms in CONTEXT_CATEGORY_TERMS.items():
+        if any(term in normalized for term in terms):
+            categories.append(category)
     return categories
 
 
@@ -324,7 +397,7 @@ def acknowledge_owner_command(message: dict[str, Any]) -> dict[str, str]:
     context_only = [
         item
         for item in categories
-        if item in {"profit", "persona", "diagnostic", "map", "leave_game", "paid_mode", "free_mode"}
+        if item in CONTEXT_CATEGORY_TERMS
     ]
     executable = [item for item in categories if item not in set(context_only)]
     if context_only and not executable:
@@ -347,7 +420,7 @@ def action_response_for_owner_command(command: dict[str, Any], action_payload: d
             "status": "heard_context",
             "text": "I heard the command, but it did not map to a deterministic action family yet.",
         }
-    context_only = {"profit", "persona", "diagnostic", "map", "leave_game", "paid_mode", "free_mode"}
+    context_only = set(CONTEXT_CATEGORY_TERMS)
     executable = [item for item in categories if item not in context_only]
     if not executable:
         return {

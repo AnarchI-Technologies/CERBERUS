@@ -42,6 +42,7 @@ def build_live_map(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         "heartbeat": int(time.time()),
         "hexes": hexes[:80],
         "routes": _route_hints(state),
+        "summary": _map_summary(hexes),
         "legend": {
             "H": "Hellion",
             "A": "agent",
@@ -52,6 +53,31 @@ def build_live_map(snapshot: dict[str, Any] | None) -> dict[str, Any]:
             "U": "utility",
         },
     }
+
+
+def _map_summary(hexes: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "hexes": len(hexes),
+        "agents": sum(len([agent for agent in region.get("agents", []) if agent.get("kind") != "self"]) for region in hexes),
+        "guardians": sum(len(region.get("monsters", [])) for region in hexes),
+        "items": sum(len(region.get("items", [])) for region in hexes),
+        "weapons": sum(len([item for item in region.get("items", []) if item.get("kind") == "weapon"]) for region in hexes),
+        "currency": sum(len([item for item in region.get("items", []) if item.get("kind") == "currency"]) for region in hexes),
+        "recommended_routes": sum(1 for region in hexes if region.get("recommended")),
+        "death_zones": sum(1 for region in hexes if region.get("is_death_zone")),
+    }
+
+
+def _dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        key = str(item.get("id") or item.get("typeId") or item.get("type") or item.get("name") or len(out))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 
 def _region_sources(state: TurnState) -> list[dict[str, Any]]:
@@ -91,17 +117,18 @@ def _region_payload(region: dict[str, Any], state: TurnState) -> dict[str, Any]:
         else []
     )
     if is_current:
-        items = [*items, *state.visible_items]
+        items = _dedupe_items([*items, *state.visible_items])
         interactables = [*interactables, *state.current_region.interactables]
-    agents = [
-        _agent_marker(agent)
+    visible_agents = [
+        agent
         for agent in state.visible_agents
-        if is_current or not agent.region_id or agent.region_id == region_id
+        if (is_current and (not agent.region_id or agent.region_id == region_id)) or (not is_current and agent.region_id == region_id)
     ]
+    agents = [_agent_marker(agent) for agent in visible_agents if not _agent_looks_guardian(agent)]
     monsters = [
         _agent_marker(monster)
-        for monster in state.visible_monsters
-        if is_current or not monster.region_id or monster.region_id == region_id
+        for monster in [*state.visible_monsters, *[agent for agent in visible_agents if _agent_looks_guardian(agent)]]
+        if (is_current and (not monster.region_id or monster.region_id == region_id)) or (not is_current and monster.region_id == region_id)
     ]
     if is_current and state.self.id:
         agents.insert(
@@ -175,10 +202,10 @@ def _contents(region: dict[str, Any]) -> list[str]:
     labels: list[str] = []
     if region.get("is_current"):
         labels.append("H")
-    if region.get("agents"):
-        labels.append("A")
     if region.get("monsters"):
         labels.append("G")
+    if any(agent.get("kind") != "self" for agent in region.get("agents", [])):
+        labels.append("A")
     for item in region.get("items", []):
         kind = item.get("kind")
         if kind == "weapon":
@@ -266,12 +293,20 @@ def _agent_marker(agent: Any) -> dict[str, Any]:
     return {
         "id": scrub_scalar(agent.id, limit=48),
         "name": scrub_scalar(agent.name or agent.id[:8], limit=48),
-        "kind": agent.kind,
+        "kind": "monster" if _agent_looks_guardian(agent) else agent.kind,
         "hp": agent.hp,
         "ep": agent.ep,
         "atk": agent.atk,
         "defense": agent.defense,
     }
+
+
+def _agent_looks_guardian(agent: Any) -> bool:
+    label = f"{getattr(agent, 'name', '')} {getattr(agent, 'id', '')} {getattr(agent, 'kind', '')}".lower()
+    raw = getattr(agent, "raw", {})
+    if isinstance(raw, dict):
+        label += " " + " ".join(str(raw.get(key) or "") for key in ("type", "role", "class", "agentType")).lower()
+    return "guardian" in label or "monster" in label or "npc" in label
 
 
 def _connection_id(item: Any) -> str:

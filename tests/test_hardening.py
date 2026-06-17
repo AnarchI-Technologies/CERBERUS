@@ -34,9 +34,11 @@ import render_env_export
 import env_doctor
 import game_map
 import launch_doctor
+import lesson_compiler
 import memory_system
 import profit_simulator
 import owner_command_cortex
+import social_runtime
 from identity_bootstrap import (
     ensure_agentmail,
     ensure_claw_account,
@@ -104,6 +106,23 @@ class HardeningTests(unittest.TestCase):
         )
 
         self.assertEqual(state.visible_monsters[0].kind, "monster")
+
+    def test_parser_moves_guardians_from_visible_agents_to_monsters(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "ep": 5},
+                    "currentRegion": {"id": "r1"},
+                    "visibleAgents": [
+                        {"id": "guardian-1", "name": "Guardian", "hp": 150, "atk": 10},
+                        {"id": "rival-1", "name": "Rival", "hp": 40, "atk": 12},
+                    ],
+                }
+            }
+        )
+
+        self.assertEqual([agent.id for agent in state.visible_agents], ["rival-1"])
+        self.assertEqual([monster.id for monster in state.visible_monsters], ["guardian-1"])
 
     def test_parser_accepts_live_snapshot_aliases(self) -> None:
         state = TurnState.from_snapshot(
@@ -1448,6 +1467,66 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(any(effect.get("type") == "moltybook_draft" for effect in action["_side_effects"]))
         self.assertTrue(any(effect.get("type") == "game_free_action" for effect in action["_side_effects"]))
 
+    def test_social_side_effects_queue_independently_of_game_action(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                action = cerberus_tick(
+                    {
+                        "gameId": "game-1",
+                        "agentId": "me",
+                        "events": [
+                            {
+                                "type": "agent_killed",
+                                "killerId": "me",
+                                "victimId": "enemy-1",
+                                "victimName": "Runner",
+                            }
+                        ],
+                        "view": {
+                            "self": {"id": "me", "hp": 100, "ep": 4},
+                            "currentRegion": {"id": "r1"},
+                        },
+                    }
+                )
+                queue = social_runtime.social_queue()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertTrue(any(effect.get("type") == "social_queue_updated" for effect in action.get("_side_effects", [])))
+        self.assertTrue(any(item.get("type") == "moltybook_draft" for item in queue))
+
+    def test_social_runtime_drains_queue_with_fake_client(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+
+        class FakeClient:
+            def post_draft(self, draft):  # type: ignore[no-untyped-def]
+                return {"ok": True, "draft": draft}
+
+            def follow(self, effect):  # type: ignore[no-untyped-def]
+                return {"ok": True, "effect": effect}
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                social_runtime.enqueue_social_effects(
+                    [{"type": "moltybook_draft", "category": "test", "content": "Hellion queued this."}]
+                )
+                result = social_runtime.drain_social_queue_once(client=FakeClient(), max_items=1)
+                queue = social_runtime.social_queue()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(queue[0]["status"], "sent")
+
     def test_runtime_action_result_learning_persists_outcome_and_lesson(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         try:
@@ -1951,6 +2030,9 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("TWITCH_USERNAME", env_doctor.LAUNCH_VARS)
         self.assertIn("HELLION_TWITCH_USERNAME", env_doctor.LAUNCH_VARS)
         self.assertIn("TWITCH_ACCOUNT_CREATED", env_doctor.LAUNCH_VARS)
+        self.assertIn("CLAW_ROYALE_FREE_FALLBACK_ENABLED", env_doctor.LAUNCH_VARS)
+        self.assertIn("CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS", env_doctor.LAUNCH_VARS)
+        self.assertIn("CERBERUS_MOLTYBOOK_ENABLED", env_doctor.LAUNCH_VARS)
 
     def test_existing_agentmail_inbox_imports_without_network(self) -> None:
         old_inbox = os.environ.get("AGENTMAIL_INBOX_ID")
@@ -2707,7 +2789,27 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("W", current["contents"])
         self.assertIn("M", current["contents"])
         self.assertIn("G", current["contents"])
+        self.assertEqual(payload["summary"]["items"], 2)
+        self.assertEqual(payload["summary"]["guardians"], 1)
         self.assertTrue(any(hint["type"] == "loot" for hint in payload["routes"]))
+
+    def test_live_game_map_treats_visible_agent_guardians_as_guardians(self) -> None:
+        payload = game_map.build_live_map(
+            {
+                "gameId": "game-1",
+                "view": {
+                    "self": {"id": "me", "hp": 90, "ep": 4},
+                    "currentRegion": {"id": "r1", "name": "Lab", "terrain": "Cave"},
+                    "visibleAgents": [{"id": "guardian-1", "name": "Guardian", "hp": 150, "atk": 10}],
+                },
+            }
+        )
+
+        current = next(item for item in payload["hexes"] if item["is_current"])
+        self.assertEqual([agent["kind"] for agent in current["agents"]], ["self"])
+        self.assertEqual(current["monsters"][0]["id"], "guardian-1")
+        self.assertIn("G", current["contents"])
+        self.assertNotIn("A", current["contents"])
 
     def test_render_stats_includes_public_wallets(self) -> None:
         old_values = {key: os.environ.get(key) for key in ("CERBERUS_AGENT_EOA_ADDRESS", "CERBERUS_OWNER_EOA_ADDRESS", "CERBERUS_MOLTY_WALLET_ADDRESS")}
@@ -2732,17 +2834,59 @@ class HardeningTests(unittest.TestCase):
         self.assertIn('id="owner-form"', html)
         self.assertIn('id="paid-ready"', html)
         self.assertIn('id="healthz"', html)
+        self.assertIn('id="current-intent"', html)
+        self.assertIn('id="action-audit"', html)
+        self.assertIn('id="stuck-doctor"', html)
+        self.assertIn('id="stale-paid-rooms"', html)
+        self.assertIn('id="deployment"', html)
+        self.assertIn("launch.blockers", html)
+        self.assertIn("<line x1=", html)
+        self.assertIn("map.summary", html)
         self.assertNotIn("<iframe id=\"feed\"", html)
 
     def test_owner_command_understands_map_paid_and_leave_context(self) -> None:
         categories = owner_command_cortex.command_categories(
-            "force refresh the live hex map, diagnose paid ready blockers, and leave stale room"
+            "force refresh the live hex map, diagnose paid ready blockers, and abort stale game"
         )
 
         self.assertIn("map", categories)
         self.assertIn("paid_mode", categories)
         self.assertIn("leave_game", categories)
         self.assertIn("diagnostic", categories)
+
+    def test_owner_command_understands_broad_deterministic_command_families(self) -> None:
+        text = (
+            "stop idling, equip strongest weapon, collect moltz, heal if low hp, review memory lessons, "
+            "diagnose render disk, top up loadout, post to moltbook, check wallet balance, and join paid games"
+        )
+        categories = owner_command_cortex.command_categories(text)
+
+        for category in ("weapon", "value", "heal", "memory", "deploy", "loadout", "social", "wallet", "paid_mode"):
+            self.assertIn(category, categories)
+
+    def test_claw_runtime_action_audit_is_bounded_and_records_intent(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                for index in range(30):
+                    rows = claw_runtime.append_action_audit(
+                        {
+                            "kind": "action_sent",
+                            "action": {"type": "move", "regionId": f"r{index}"},
+                            "reason": "test route",
+                        }
+                    )
+                status = runtime_state.read_json(runtime_state.claw_runtime_status_file())
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(len(rows), 25)
+        self.assertEqual(status["action_audit"][-1]["action"]["regionId"], "r29")
+        self.assertIn("move", claw_runtime.runtime_intent({"type": "move", "regionId": "r1", "reason": "scout"}))
 
     def test_profit_simulator_reports_policy_gaps_and_extended_scenarios(self) -> None:
         report = profit_simulator.simulate(games_per_day=61, target_per_day=1000)
@@ -2762,7 +2906,10 @@ class HardeningTests(unittest.TestCase):
         paid = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         free = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
 
-        self.assertEqual(claw_runtime.hello_frame(paid, {"decision": "ASK_ENTRY_TYPE"}), {"type": "hello", "entryType": "paid", "mode": "offchain"})
+        self.assertEqual(
+            claw_runtime.hello_frame(paid, {"decision": "ASK_ENTRY_TYPE", "availableGames": [{"entryType": "paid", "playerCount": 1}]}),
+            {"type": "hello", "entryType": "paid", "mode": "offchain"},
+        )
         self.assertEqual(claw_runtime.hello_frame(free, {"decision": "FREE_ONLY"}), {"type": "hello", "entryType": "free"})
         self.assertIsNone(claw_runtime.hello_frame(paid, {"decision": "ALREADY_IN_GAME"}))
 
@@ -2780,7 +2927,7 @@ class HardeningTests(unittest.TestCase):
         old_fallback = os.environ.get("CLAW_ROYALE_FREE_FALLBACK_ENABLED")
         try:
             os.environ.pop("CLAW_ROYALE_FREE_FALLBACK_ENABLED", None)
-            self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "paid", "mode": "offchain"})
+            self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
             os.environ["CLAW_ROYALE_FREE_FALLBACK_ENABLED"] = "true"
             self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
         finally:
@@ -2790,8 +2937,188 @@ class HardeningTests(unittest.TestCase):
                 os.environ["CLAW_ROYALE_FREE_FALLBACK_ENABLED"] = old_fallback
         self.assertEqual(
             claw_runtime.room_choice_summary(welcome),
-            {"paid_rooms": 2, "paid_occupied": 0, "free_rooms": 1, "free_occupied": 1, "unknown_rooms": 0},
+            {
+                "paid_rooms": 2,
+                "paid_occupied": 0,
+                "paid_total_occupants": 0,
+                "paid_competitors": 0,
+                "free_rooms": 1,
+                "free_occupied": 1,
+                "free_total_occupants": 1,
+                "free_competitors": 1,
+                "unknown_rooms": 0,
+                "stale_paid_rooms": 0,
+            },
         )
+
+    def test_claw_runtime_does_not_count_guardians_as_paid_competitors(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        welcome = {
+            "decision": "ASK_ENTRY_TYPE",
+            "availableGames": [
+                {
+                    "entryType": "paid",
+                    "agents": [{"id": f"guardian-{index}", "name": "Guardian"} for index in range(9)],
+                },
+                {"entryType": "free", "players": [{"id": "actual-agent", "name": "Rival"}]},
+            ],
+        }
+        summary = claw_runtime.room_choice_summary(welcome)
+
+        self.assertEqual(summary["paid_total_occupants"], 9)
+        self.assertEqual(summary["paid_competitors"], 0)
+        self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
+
+    def test_claw_runtime_ignores_known_stale_paid_rooms_when_joining(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.remember_stale_paid_room("stale-paid-1", reason="waiting too long")
+                config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+                welcome = {
+                    "decision": "ASK_ENTRY_TYPE",
+                    "availableGames": [
+                        {"entryType": "paid", "gameId": "stale-paid-1", "playerCount": 4},
+                        {"entryType": "free", "gameId": "free-1", "playerCount": 1},
+                    ],
+                }
+                summary = claw_runtime.room_choice_summary(welcome)
+                frame = claw_runtime.hello_frame(config, welcome)
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(summary["stale_paid_rooms"], 1)
+        self.assertEqual(summary["paid_rooms"], 0)
+        self.assertEqual(frame, {"type": "hello", "entryType": "free"})
+
+    def test_claw_runtime_records_paid_waiting_games_as_stale_candidates(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                rows = claw_runtime.record_stale_paid_waiting_games(
+                    {
+                        "currentGames": [
+                            {"entryType": "paid", "gameStatus": "waiting", "gameId": "paid-wait-1"},
+                            {"entryType": "free", "gameStatus": "waiting", "gameId": "free-wait-1"},
+                        ]
+                    }
+                )
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(rows[-1]["room_id"], "paid-wait-1")
+
+    def test_lesson_compiler_persists_repeated_reject_lessons(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.append_match_evidence(
+                    {
+                        "state": {
+                            "terrain": "ruins",
+                            "death_zone": False,
+                            "visible_agents": 0,
+                            "visible_monsters": 1,
+                            "visible_items": 0,
+                        },
+                        "action": {"type": "attack", "targetId": "guardian-1"},
+                        "outcome": {"ok": False, "message": "TARGET_BLOCKED"},
+                    }
+                )
+                runtime_state.append_match_evidence(
+                    {
+                        "state": {
+                            "terrain": "ruins",
+                            "death_zone": False,
+                            "visible_agents": 0,
+                            "visible_monsters": 1,
+                            "visible_items": 0,
+                        },
+                        "action": {"type": "attack", "targetId": "guardian-1"},
+                        "outcome": {"ok": False, "message": "TARGET_BLOCKED"},
+                    }
+                )
+                memory = CompactMemoryStore(
+                    path=Path(tmp) / "compact.json",
+                    encrypted_path=Path(tmp) / "compact.vault.json",
+                ).load()
+                longterm = LongTermMemoryStore(Path(tmp) / "longterm.sqlite")
+
+                report = lesson_compiler.compile_lessons(memory=memory, longterm=longterm, min_count=2)
+                lessons = CompactMemoryStore(
+                    path=Path(tmp) / "compact.json",
+                    encrypted_path=Path(tmp) / "compact.vault.json",
+                ).load().data.get("lessons", [])
+                rows = longterm.top(kind="lesson", scope="claw_royale", limit=5)
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertGreater(report["lesson_count"], 0)
+        self.assertTrue(any("blocked_reject" in lesson for lesson in lessons))
+        self.assertTrue(any("blocked_reject" in row["text"] for row in rows))
+
+    def test_render_launch_blockers_surface_waiting_paid_games(self) -> None:
+        blockers = render_app.runtimeBlockers_server(
+            {
+                "ok": True,
+                "env": {
+                    "CERBERUS_PIN": True,
+                    "CLAW_ROYALE_API_KEY": True,
+                    "CLAW_ROYALE_ERC8004_ID": True,
+                    "CERBERUS_AGENT_EOA_PRIVATE_KEY": True,
+                    "CLAW_ROYALE_RUNTIME_ENABLED": True,
+                },
+                "memory_writable": True,
+            },
+            {
+                "state": "waiting_for_running_game",
+                "account": {
+                    "currentGames": [
+                        {"entryType": "paid", "gameStatus": "waiting", "gameId": "stale-paid-1"},
+                    ]
+                },
+            },
+        )
+
+        self.assertIn("paid game waiting for opponents: stale-paid-1", blockers)
+
+    def test_render_deployment_info_exposes_disk_and_version_status(self) -> None:
+        info = render_app.deployment_info(
+            {
+                "memory_dir": "/var/data/.cerberus",
+                "memory_writable": True,
+                "longterm_memory": {"path": "/var/data/.cerberus/hellion.longterm.sqlite", "items": 12, "bytes": 4096},
+            },
+            {"configured_version": "1.9.0", "live_version": "1.9.3"},
+        )
+
+        self.assertTrue(info["memory_writable"])
+        self.assertEqual(info["longterm_items"], 12)
+        self.assertEqual(info["live_claw_version"], "1.9.3")
+
+    def test_stuck_state_doctor_recommends_support_for_paid_waiting_game(self) -> None:
+        blockers = ["paid game waiting for opponents: stale-paid-1"]
+        doctor = render_app.stuck_state_doctor(
+            {"ok": True, "memory_writable": True},
+            {"state": "waiting_for_running_game", "last_error": "joined but waiting for running game frame"},
+            blockers,
+            {"target_met": True},
+        )
+
+        self.assertEqual(doctor["summary"], blockers[0])
+        self.assertTrue(any("Claw support" in item for item in doctor["recommendations"]))
 
     def test_claw_runtime_keeps_paid_when_paid_room_is_occupied(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
@@ -2819,7 +3146,7 @@ class HardeningTests(unittest.TestCase):
         old_fallback = os.environ.get("CLAW_ROYALE_FREE_FALLBACK_ENABLED")
         try:
             os.environ["CLAW_ROYALE_FREE_FALLBACK_ENABLED"] = "true"
-            self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "paid", "mode": "offchain"})
+            self.assertIsNone(claw_runtime.hello_frame(config, welcome))
         finally:
             if old_fallback is None:
                 os.environ.pop("CLAW_ROYALE_FREE_FALLBACK_ENABLED", None)
@@ -2981,6 +3308,32 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(evidence[-1]["outcome"]["message"], "TARGET_BLOCKED")
         self.assertEqual(edits[-1]["detector"], "runtime.target_blocked")
 
+    def test_suggested_edits_can_be_reviewed_privately(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                edits = runtime_state.append_suggested_edit(
+                    {
+                        "detector": "runtime.target_blocked",
+                        "title": "Add blocked target penalty",
+                        "file": "src/decision_engine.py",
+                        "symptom": "target blocked",
+                        "suggested_change": "penalize repeated blocked target",
+                        "priority": "high",
+                    }
+                )
+                result = runtime_state.update_suggested_edit_status(edits[-1]["id"], "approved", note="ship it")
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["edit"]["status"], "approved")
+        self.assertEqual(result["edit"]["review_note"], "ship it")
+
     def test_owner_balance_alarm_gets_runtime_diagnostic_response(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         try:
@@ -3018,6 +3371,7 @@ class HardeningTests(unittest.TestCase):
         self.assertIn('id="healthz"', html)
         self.assertIn('fetch("/admin/owner-message"', html)
         self.assertIn('fetch("/admin/suggested-edits"', html)
+        self.assertIn('fetch("/admin/suggested-edit-status"', html)
         self.assertIn('id="suggested-edits"', html)
         self.assertIn("overflow: hidden", html)
         self.assertIn("<aside", html)
