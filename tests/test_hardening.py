@@ -34,6 +34,7 @@ import render_env_export
 import env_doctor
 import game_map
 import launch_doctor
+import env_loader
 import lesson_compiler
 import memory_system
 import profit_simulator
@@ -2034,6 +2035,21 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS", env_doctor.LAUNCH_VARS)
         self.assertIn("CERBERUS_MOLTYBOOK_ENABLED", env_doctor.LAUNCH_VARS)
 
+    def test_env_loader_reports_malformed_dotenv_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".env"
+            path.write_text("GOOD=value\n\"client\": \"bad\"\nBAD KEY=value\n", encoding="utf-8")
+            issues = env_loader.invalid_dotenv_lines(path)
+
+        self.assertEqual([item["line"] for item in issues], [2, 3])
+
+    def test_env_example_documents_runtime_safety_switches(self) -> None:
+        text = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+        self.assertIn("CLAW_ROYALE_FREE_FALLBACK_ENABLED=true", text)
+        self.assertIn("CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS=true", text)
+        self.assertIn("CERBERUS_MOLTYBOOK_ENABLED=false", text)
+
     def test_existing_agentmail_inbox_imports_without_network(self) -> None:
         old_inbox = os.environ.get("AGENTMAIL_INBOX_ID")
         old_email = os.environ.get("AGENTMAIL_EMAIL")
@@ -2901,6 +2917,9 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("runtime", report)
         self.assertIn("profit", report)
         self.assertIn("live_map_ok", report["runtime"])
+        self.assertIn("env_lint", report)
+        self.assertIn("social_queue", report["runtime"])
+        self.assertIn("stale_paid_rooms", report["runtime"])
 
     def test_claw_runtime_hello_frame_follows_unified_join_docs(self) -> None:
         paid = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")

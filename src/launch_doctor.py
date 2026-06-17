@@ -16,8 +16,10 @@ for folder in (ROOT / "src", ROOT / "data"):
         sys.path.insert(0, path)
 
 from render_app import readiness  # noqa: E402
-from runtime_state import claw_runtime_status_file, read_json, stored_game_id  # noqa: E402
+from runtime_state import claw_runtime_status_file, read_json, stale_paid_rooms, stored_game_id  # noqa: E402
 from profit_simulator import simulate  # noqa: E402
+from env_loader import invalid_dotenv_lines  # noqa: E402
+from social_runtime import social_queue  # noqa: E402
 
 
 def launch_report() -> dict:
@@ -27,6 +29,9 @@ def launch_report() -> dict:
     readiness_flags = account.get("readiness", {}) if isinstance(account.get("readiness"), dict) else {}
     live_map = runtime.get("live_map", {}) if isinstance(runtime.get("live_map"), dict) else {}
     blockers = []
+    dotenv_issues = invalid_dotenv_lines()
+    if dotenv_issues:
+        blockers.append(f"malformed .env lines: {', '.join(str(item.get('line')) for item in dotenv_issues[:5])}")
     env = checks.get("env", {})
     for key in (
         "CERBERUS_PIN",
@@ -53,6 +58,10 @@ def launch_report() -> dict:
         "ok": not blockers,
         "blockers": blockers,
         "checks": checks,
+        "env_lint": {
+            "ok": not dotenv_issues,
+            "invalid_lines": dotenv_issues,
+        },
         "runtime": {
             "state": runtime.get("state", "unknown"),
             "mode": runtime.get("mode", "unknown"),
@@ -62,6 +71,8 @@ def launch_report() -> dict:
             "balance": account.get("balance", ""),
             "live_map_ok": bool(live_map.get("ok")),
             "live_map_heartbeat": live_map.get("heartbeat", ""),
+            "stale_paid_rooms": len(stale_paid_rooms()),
+            "social_queue": len(social_queue()),
         },
         "profit": profit,
     }

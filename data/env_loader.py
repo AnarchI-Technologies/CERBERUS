@@ -24,11 +24,30 @@ def load_dotenv_file(path: str | Path | None = None) -> None:
         _load_simple_dotenv(Path(path or ROOT / ".env"))
 
 
+def invalid_dotenv_lines(path: str | Path | None = None) -> list[dict[str, str | int]]:
+    dotenv_path = Path(path or ROOT / ".env")
+    if not dotenv_path.exists():
+        return []
+    invalid: list[dict[str, str | int]] = []
+    for number, raw in enumerate(dotenv_path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.strip().lstrip("\ufeff")
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            invalid.append({"line": number, "reason": "missing '='", "text": line[:120]})
+            continue
+        key, _value = line.split("=", 1)
+        key = key.strip().removeprefix("export ").strip()
+        if not key or any(ch.isspace() for ch in key) or not all(ch.isalnum() or ch == "_" for ch in key):
+            invalid.append({"line": number, "reason": "invalid key", "text": line[:120]})
+    return invalid
+
+
 def _load_simple_dotenv(path: Path) -> None:
     if not path.exists():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
+        line = raw.strip().lstrip("\ufeff")
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)

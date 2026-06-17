@@ -14,7 +14,7 @@ for folder in (ROOT / "src", ROOT / "data"):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from env_loader import env_report, hydrate_env  # noqa: E402
+from env_loader import env_report, hydrate_env, invalid_dotenv_lines  # noqa: E402
 
 
 X_VARS = ("X_CLIENT_ID", "X_CLIENT_SECRET", "X_REDIRECT_URI")
@@ -44,12 +44,18 @@ def _cli() -> int:
     parser = argparse.ArgumentParser(description="Check Cerberus environment values without printing secrets")
     parser.add_argument("--x", action="store_true", help="Only check X OAuth variables")
     parser.add_argument("--hydrate", action="store_true", help="Load discoverable values into this Python process")
+    parser.add_argument("--lint", action="store_true", help="Report malformed .env lines")
     args = parser.parse_args()
 
     names = X_VARS if args.x else LAUNCH_VARS
     if args.hydrate:
         hydrate_env(names)
-    print(json.dumps(env_report(names), ensure_ascii=True, indent=2))
+    payload: dict[str, object] | list[dict[str, str | bool]]
+    if args.lint:
+        payload = {"env": env_report(names), "invalid_dotenv_lines": invalid_dotenv_lines()}
+    else:
+        payload = env_report(names)
+    print(json.dumps(payload, ensure_ascii=True, indent=2))
     return 0
 
 
