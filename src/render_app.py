@@ -595,6 +595,14 @@ def dashboard_html(query: str = "") -> bytes:
           </div>
           <div id="social-queue" class="owner-log">loading</div>
         </div>
+        <div class="metric wide">
+          <div class="label">Launch Report</div>
+          <div class="form-row" style="margin:6px 0 8px">
+            <div id="launch-status" class="hint">locked</div>
+            <button type="button" onclick="loadLaunchReport()">Run Report</button>
+          </div>
+          <div id="launch-report" class="owner-log">Enter owner PIN, then run.</div>
+        </div>
         <div class="metric wide"><div class="label">Current Intent</div><div id="current-intent" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Action Audit</div><div id="action-audit" class="owner-log">loading</div></div>
@@ -747,6 +755,19 @@ def dashboard_html(query: str = "") -> bytes:
         "<span class='hint'>[" + esc(row.status || "queued") + "]</span><br>" +
         esc(row.content || row.handle || row.reason || "") + "</div>"
       )).join("");
+    }}
+    function renderLaunchReport(data) {{
+      const status = document.getElementById("launch-status");
+      const box = document.getElementById("launch-report");
+      const runtime = data.runtime || {{}};
+      const profit = data.profit || {{}};
+      const blockers = data.blockers || [];
+      status.textContent = data.ok ? "green" : "blocked";
+      box.innerHTML = "<div class='owner-msg'><strong>" + (data.ok ? "Launch ready" : "Launch blocked") + "</strong><br>" +
+        (blockers.length ? blockers.map(esc).join("<br>") : "no blockers") +
+        "<div class='hint'>runtime " + esc(runtime.state || "unknown") + " | mode " + esc(runtime.mode || "unknown") + " | game " + esc(runtime.current_game_id || "none") + "</div>" +
+        "<div class='hint'>paid " + esc(runtime.paid_ready) + " | balance " + esc(runtime.balance ?? "?") + " | map " + esc(runtime.live_map_ok) + " | stale rooms " + esc(runtime.stale_paid_rooms ?? 0) + "</div>" +
+        "<div class='hint'>profit target " + esc(profit.target_per_day ?? "?") + " | projected " + esc(profit.projected_smoltz_per_day ?? "?") + " | gap " + esc(profit.gap_smoltz_per_day ?? "?") + "</div></div>";
     }}
     function renderRouteHints(map) {{
       const box = document.getElementById("route-hints");
@@ -972,6 +993,26 @@ def dashboard_html(query: str = "") -> bytes:
         box.textContent = "Failed: " + err;
       }}
     }}
+    async function loadLaunchReport() {{
+      const pin = document.getElementById("owner-pin").value;
+      const box = document.getElementById("launch-report");
+      box.textContent = "Running...";
+      try {{
+        const res = await fetch("/admin/launch-report", {{
+          method: "POST",
+          headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
+          body: JSON.stringify({{}})
+        }});
+        const data = await res.json();
+        if (!res.ok && !data.blockers) {{
+          box.textContent = "Failed: " + (data.error || res.status);
+          return;
+        }}
+        renderLaunchReport(data);
+      }} catch (err) {{
+        box.textContent = "Failed: " + err;
+      }}
+    }}
     loadStats();
     setInterval(loadStats, 15000);
   </script>
@@ -1188,6 +1229,26 @@ class CerberusHandler(BaseHTTPRequestHandler):
             result = drain_social_queue_once(max_items=max_items)
             result["social_queue"] = social_queue(limit=20)
             self._send(result, status=200 if result.get("ok") else 502)
+            return
+        if parsed.path == "/admin/launch-report":
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            try:
+                payload = self._read_json()
+            except Exception as exc:
+                payload = {"_body_error": str(exc)[:240]}
+            pin = self.headers.get("X-Cerberus-Pin", "") or str(payload.get("pin") or "")
+            if not self._pin_authorized(pin):
+                self._send({"ok": False, "error": "invalid_pin", "body_error": payload.get("_body_error", "")}, status=401)
+                return
+            try:
+                from launch_doctor import launch_report
+
+                result = launch_report()
+                self._send(result, status=200 if result.get("ok") else 503)
+            except Exception as exc:
+                self._send({"ok": False, "error": str(exc)[:500]}, status=500)
             return
         if parsed.path == "/admin/owner-message":
             if not self._authorized():

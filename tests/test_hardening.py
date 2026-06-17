@@ -2873,9 +2873,11 @@ class HardeningTests(unittest.TestCase):
         self.assertIn('id="stuck-doctor"', html)
         self.assertIn('id="stale-paid-rooms"', html)
         self.assertIn('id="social-queue"', html)
+        self.assertIn('id="launch-report"', html)
         self.assertIn('id="deployment"', html)
         self.assertIn("launch.blockers", html)
         self.assertIn('fetch("/admin/social-drain"', html)
+        self.assertIn('fetch("/admin/launch-report"', html)
         self.assertIn("<line x1=", html)
         self.assertIn("map.summary", html)
         self.assertNotIn("<iframe id=\"feed\"", html)
@@ -3434,6 +3436,49 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(sent[0][0], "html")
         self.assertIn(b"Hellion Dashboard", sent[0][2])
         self.assertEqual(sent[1], ("json", 200, {"ok": True, "service": "cerberus"}))
+
+    def test_render_launch_report_endpoint_is_pin_guarded(self) -> None:
+        old_pin = os.environ.get("CERBERUS_PIN")
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        sent = []
+
+        class FakeHeaders(dict):
+            def get(self, key, default=None):  # type: ignore[no-untyped-def]
+                return super().get(key, default)
+
+        class FakeHandler(render_app.CerberusHandler):
+            def __init__(self, pin):  # type: ignore[no-untyped-def]
+                self.path = "/admin/launch-report"
+                self.headers = FakeHeaders({"X-Cerberus-Pin": pin})
+
+            def _read_json(self):  # type: ignore[no-untyped-def]
+                return {}
+
+            def _send(self, body, *, status=200):  # type: ignore[no-untyped-def]
+                sent.append((status, body))
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_PIN"] = "123456"
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                FakeHandler("bad").do_POST()
+                FakeHandler("123456").do_POST()
+        finally:
+            if old_pin is None:
+                os.environ.pop("CERBERUS_PIN", None)
+            else:
+                os.environ["CERBERUS_PIN"] = old_pin
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(sent[0][0], 401)
+        self.assertEqual(sent[0][1]["error"], "invalid_pin")
+        self.assertIn(sent[1][0], {200, 503})
+        self.assertIn("runtime", sent[1][1])
+        self.assertIn("profit", sent[1][1])
+        self.assertIn("env_lint", sent[1][1])
 
     def test_cross_spinal_cord_reports_side_effect_results_and_uses_moltbook_key(self) -> None:
         old_identity = sys.modules.get("identity_vault")
