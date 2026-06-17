@@ -2843,6 +2843,24 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(payload["public_wallets"]["owner_eoa"], "0x" + "2" * 40)
 
+    def test_render_stats_exposes_social_queue_count(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                social_runtime.enqueue_social_effects(
+                    [{"type": "moltybook_draft", "category": "test", "content": "queued"}]
+                )
+                payload = render_app.stats()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(payload["autonomy"]["social_queue"], 1)
+        self.assertEqual(payload["social_queue"][0]["type"], "moltybook_draft")
+
     def test_dashboard_is_vector_map_command_center(self) -> None:
         html = render_app.dashboard_html().decode("utf-8")
 
@@ -2854,8 +2872,10 @@ class HardeningTests(unittest.TestCase):
         self.assertIn('id="action-audit"', html)
         self.assertIn('id="stuck-doctor"', html)
         self.assertIn('id="stale-paid-rooms"', html)
+        self.assertIn('id="social-queue"', html)
         self.assertIn('id="deployment"', html)
         self.assertIn("launch.blockers", html)
+        self.assertIn('fetch("/admin/social-drain"', html)
         self.assertIn("<line x1=", html)
         self.assertIn("map.summary", html)
         self.assertNotIn("<iframe id=\"feed\"", html)

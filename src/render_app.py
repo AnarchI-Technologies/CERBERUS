@@ -37,6 +37,7 @@ from longterm_memory import LongTermMemoryStore  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now  # noqa: E402
 from owner_command_cortex import acknowledge_owner_command, command_categories, directive_text  # noqa: E402
 from profit_simulator import simulate as profit_simulate  # noqa: E402
+from social_runtime import drain_social_queue_once, social_queue  # noqa: E402
 from runtime_state import (
     append_hellion_owner_response,
     append_owner_message,
@@ -207,8 +208,10 @@ def stats() -> dict[str, Any]:
             "suggested_edits": len(suggested_edits()),
             "match_evidence": len(match_evidence()),
             "stale_paid_rooms": len(stale_paid_rooms()),
+            "social_queue": len(social_queue()),
         },
         "stale_paid_rooms": stale_paid_rooms(limit=20),
+        "social_queue": social_queue(limit=20),
         "launch": {
             "ok": not launch_blockers and bool(profit.get("target_met")),
             "blockers": [*launch_blockers, *([] if profit.get("target_met") else [f"profit gap {profit.get('gap_smoltz_per_day')} sMoltz/day"])][:12],
@@ -584,6 +587,14 @@ def dashboard_html(query: str = "") -> bytes:
         <div class="metric wide"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Stuck Doctor</div><div id="stuck-doctor" class="owner-log">loading</div></div>
         <div class="metric wide"><div class="label">Stale Paid Rooms</div><div id="stale-paid-rooms" class="owner-log">loading</div></div>
+        <div class="metric wide">
+          <div class="label">Social Queue</div>
+          <div class="form-row" style="margin:6px 0 8px">
+            <div id="social-queue-count" class="hint">loading</div>
+            <button type="button" onclick="drainSocialQueue()">Drain Queue</button>
+          </div>
+          <div id="social-queue" class="owner-log">loading</div>
+        </div>
         <div class="metric wide"><div class="label">Current Intent</div><div id="current-intent" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Action Audit</div><div id="action-audit" class="owner-log">loading</div></div>
@@ -723,6 +734,20 @@ def dashboard_html(query: str = "") -> bytes:
         "<div class='hint'>" + esc(row.reason || "") + " seen " + esc(row.seen_count || 1) + "x</div></div>"
       )).join("");
     }}
+    function renderSocialQueue(rows) {{
+      const box = document.getElementById("social-queue");
+      const count = document.getElementById("social-queue-count");
+      count.textContent = "queued " + ((rows || []).filter((row) => (row.status || "queued") === "queued").length);
+      if (!rows || !rows.length) {{
+        box.textContent = "none";
+        return;
+      }}
+      box.innerHTML = rows.slice().reverse().slice(0, 8).map((row) => (
+        "<div class='owner-msg'><strong>" + esc(row.type || "social") + "</strong> " +
+        "<span class='hint'>[" + esc(row.status || "queued") + "]</span><br>" +
+        esc(row.content || row.handle || row.reason || "") + "</div>"
+      )).join("");
+    }}
     function renderRouteHints(map) {{
       const box = document.getElementById("route-hints");
       const hints = (map && map.routes) || [];
@@ -812,6 +837,7 @@ def dashboard_html(query: str = "") -> bytes:
       document.getElementById("blockers").textContent = blockers.length ? blockers.join("; ") : "none";
       renderStuckDoctor((data.launch || {{}}).doctor || null);
       renderStalePaidRooms(data.stale_paid_rooms || []);
+      renderSocialQueue(data.social_queue || []);
       const mem = data.longterm_memory || {{}};
       const deployment = data.deployment || {{}};
       const runtime = data.claw_runtime || {{}};
@@ -922,6 +948,26 @@ def dashboard_html(query: str = "") -> bytes:
           return;
         }}
         renderSuggestedEdits(data.suggested_edits || [], []);
+      }} catch (err) {{
+        box.textContent = "Failed: " + err;
+      }}
+    }}
+    async function drainSocialQueue() {{
+      const pin = document.getElementById("owner-pin").value;
+      const box = document.getElementById("social-queue");
+      box.textContent = "Draining...";
+      try {{
+        const res = await fetch("/admin/social-drain", {{
+          method: "POST",
+          headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
+          body: JSON.stringify({{max_items: 5}})
+        }});
+        const data = await res.json();
+        if (!res.ok || !data.ok) {{
+          box.textContent = "Failed: " + (data.error || data.reason || res.status);
+          return;
+        }}
+        renderSocialQueue(data.social_queue || []);
       }} catch (err) {{
         box.textContent = "Failed: " + err;
       }}
@@ -1122,6 +1168,26 @@ class CerberusHandler(BaseHTTPRequestHandler):
                 note=str(payload.get("note") or ""),
             )
             self._send(result, status=200 if result.get("ok") else 400)
+            return
+        if parsed.path == "/admin/social-drain":
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            try:
+                payload = self._read_json()
+            except Exception as exc:
+                payload = {"_body_error": str(exc)[:240]}
+            pin = self.headers.get("X-Cerberus-Pin", "") or str(payload.get("pin") or "")
+            if not self._pin_authorized(pin):
+                self._send({"ok": False, "error": "invalid_pin", "body_error": payload.get("_body_error", "")}, status=401)
+                return
+            try:
+                max_items = max(1, min(20, int(payload.get("max_items") or 5)))
+            except (TypeError, ValueError):
+                max_items = 5
+            result = drain_social_queue_once(max_items=max_items)
+            result["social_queue"] = social_queue(limit=20)
+            self._send(result, status=200 if result.get("ok") else 502)
             return
         if parsed.path == "/admin/owner-message":
             if not self._authorized():
