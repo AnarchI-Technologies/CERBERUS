@@ -76,6 +76,10 @@ class HardeningTests(unittest.TestCase):
     def _isolated(self, tmp: str) -> IsolatedCerberusInstance:
         return IsolatedCerberusInstance.create(Path(tmp) / "isolated")
 
+    def test_repo_root_does_not_shadow_runtime_modules_with_stale_pseudocode(self) -> None:
+        for filename in ("decision_engine.py", "turn_state_model.py", "main_loop,py"):
+            self.assertFalse((ROOT / filename).exists(), filename)
+
     def test_malformed_snapshot_does_not_crash_parser(self) -> None:
         state = TurnState.from_snapshot(
             {
