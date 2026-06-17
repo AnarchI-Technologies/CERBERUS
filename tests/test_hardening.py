@@ -3049,6 +3049,32 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(summary["paid_competitors"], 0)
         self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
 
+    def test_claw_runtime_joins_paid_when_real_competitors_are_present(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        welcome = {
+            "decision": "ASK_ENTRY_TYPE",
+            "availableGames": [
+                {
+                    "entryType": "paid",
+                    "players": [{"id": "rival-1", "name": "Big League Rival"}],
+                },
+            ],
+        }
+
+        self.assertTrue(claw_runtime.paid_room_is_competitive(welcome))
+        self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "paid", "mode": "offchain"})
+
+    def test_claw_runtime_falls_back_when_paid_room_metadata_is_absent(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        welcome = {
+            "decision": "ASK_ENTRY_TYPE",
+            "readiness": {"paidRoom": {"ok": True, "mode": {"offchain": True}}},
+            "rooms": [{"entryType": "free", "playerCount": 2}],
+        }
+
+        self.assertFalse(claw_runtime.paid_room_is_competitive(welcome))
+        self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
+
     def test_claw_runtime_ignores_known_stale_paid_rooms_when_joining(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         try:

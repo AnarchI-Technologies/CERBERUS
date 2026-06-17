@@ -473,6 +473,24 @@ def avoid_empty_paid_rooms_enabled() -> bool:
     return os.getenv("CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def require_competitive_paid_room_enabled() -> bool:
+    return os.getenv("CLAW_ROYALE_REQUIRE_COMPETITIVE_PAID_ROOM", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def minimum_paid_competitors() -> int:
+    try:
+        return max(1, int(os.getenv("CLAW_ROYALE_MIN_PAID_COMPETITORS", "1")))
+    except ValueError:
+        return 1
+
+
+def paid_room_is_competitive(welcome: dict[str, Any] | None) -> bool:
+    if not require_competitive_paid_room_enabled():
+        return True
+    summary = room_choice_summary(welcome)
+    return summary["paid_rooms"] > 0 and summary["paid_competitors"] >= minimum_paid_competitors()
+
+
 def should_prefer_free_room(config: ClawRuntimeConfig, welcome: dict[str, Any] | None) -> bool:
     if not free_fallback_enabled() or config.mode == "free" or readiness_blocks_free(welcome):
         return False
@@ -491,8 +509,10 @@ def should_avoid_paid_room(config: ClawRuntimeConfig, welcome: dict[str, Any] | 
         return False
     summary = room_choice_summary(welcome)
     if summary["paid_rooms"] == 0:
-        return False
-    return summary["paid_occupied"] == 0
+        return require_competitive_paid_room_enabled()
+    if summary["paid_occupied"] == 0:
+        return True
+    return require_competitive_paid_room_enabled() and summary["paid_competitors"] < minimum_paid_competitors()
 
 
 def _readiness_paid_mode(welcome: dict[str, Any] | None) -> str:
@@ -523,6 +543,8 @@ def should_auto_upgrade_to_paid(config: ClawRuntimeConfig, welcome: dict[str, An
     if os.getenv("CLAW_ROYALE_DISABLE_PAID_AUTO_UPGRADE", "").strip().lower() in {"1", "true", "yes", "on"}:
         return ""
     if recent_paid_join_failure_active():
+        return ""
+    if not paid_room_is_competitive(welcome):
         return ""
     return _readiness_paid_mode(welcome)
 
@@ -598,9 +620,13 @@ def hello_frame(config: ClawRuntimeConfig, welcome: dict[str, Any] | None = None
             return {"type": "hello", "entryType": "free"}
         return None
     if decision == "PAID_ONLY":
+        if should_avoid_paid_room(config, welcome):
+            return None if readiness_blocks_free(welcome) else {"type": "hello", "entryType": "free"}
         return {"type": "hello", "entryType": "paid", "mode": config.mode}
     if config.mode == "free":
         return {"type": "hello", "entryType": "free"}
+    if should_avoid_paid_room(config, welcome):
+        return None if readiness_blocks_free(welcome) else {"type": "hello", "entryType": "free"}
     return {"type": "hello", "entryType": "paid", "mode": config.mode}
 
 

@@ -92,12 +92,23 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
             "type": "welcome",
             "decision": "ASK_ENTRY_TYPE",
             "readiness": {"paidRoom": {"ok": True, "mode": {"offchain": False, "onchain": True}}},
+            "availableGames": [{"entryType": "paid", "playerCount": 2}],
         }
 
         self.assertEqual(
             claw_runtime.hello_frame(config, welcome),
             {"type": "hello", "entryType": "paid", "mode": "onchain"},
         )
+
+    def test_free_mode_does_not_auto_upgrade_to_unproven_paid_room(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
+        welcome = {
+            "type": "welcome",
+            "decision": "ASK_ENTRY_TYPE",
+            "readiness": {"paidRoom": {"ok": True, "mode": {"onchain": True}}},
+        }
+
+        self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
 
     def test_recent_paid_join_failure_keeps_free_mode_temporarily(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
