@@ -25,6 +25,7 @@ import claw_config
 import claw_runtime
 import claw_signing
 import cross_spinal_cord
+import autonomy_suggestions
 import stream_dashboard_cortex
 import moltbook_claim_assistant
 import render_app
@@ -238,6 +239,40 @@ class HardeningTests(unittest.TestCase):
         )
         self.assertEqual(normalize_action({"type": "interact", "targetId": "station-1"})["type"], "interact")
         self.assertEqual(normalize_action({"type": "whisper", "message": "missing target"})["type"], "rest")
+
+    def test_legalizer_blocks_actions_that_exceed_contract_ep_cost(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 90, "ep": 1},
+                    "currentRegion": {"id": "storm-1", "terrain": "Storm"},
+                },
+            }
+        )
+
+        action = legalize_action({"type": "move", "regionId": "safe-1", "reason": "escape storm"}, state)
+
+        self.assertNotEqual(action["type"], "move")
+        self.assertIn("insufficient EP", action["reason"])
+        self.assertEqual(action["_contract_cost"]["cost"], 2)
+        self.assertEqual(action["_contract_cost"]["available_ep"], 1)
+
+    def test_autonomy_insufficient_ep_suggestion_includes_contract_cost(self) -> None:
+        suggestions = autonomy_suggestions.suggested_edits_from_observation(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 90, "ep": 1},
+                    "currentRegion": {"id": "storm-1", "terrain": "Storm"},
+                },
+            },
+            {"type": "move", "regionId": "safe-1"},
+            outcome={"code": "INSUFFICIENT_EP", "message": "not enough EP"},
+        )
+
+        suggestion = next(item for item in suggestions if item["detector"] == "contract.insufficient_ep")
+        self.assertIn("Action Cost: 2", suggestion["title"])
 
     def test_claw_v1_9_contract_captures_patch_economy(self) -> None:
         self.assertEqual(claw_contract.SHOP_ITEMS["random_pack_ticket"]["price_smoltz"], 25000)

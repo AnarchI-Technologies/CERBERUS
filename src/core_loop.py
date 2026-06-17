@@ -20,9 +20,10 @@ for folder in (ROOT / "src", ROOT / "data"):
 
 from agent_dossiers import AgentDossierStore
 from autonomy_suggestions import record_autonomy_observation
-from claw_contract import KNOWN_ACTION_TYPES, REQUIRED_ACTION_FIELDS
+from claw_contract import KNOWN_ACTION_TYPES, REQUIRED_ACTION_FIELDS, action_cost, is_cooldown_action
 from combat_decider import CombatCortex
 from combat_decider import target_in_attack_range
+from cortex_types import rest_action
 from decision_engine import make_plan as build_plan
 from decision_engine import active_fallback_action
 from decision_engine import has_usable_turn_facts
@@ -134,6 +135,32 @@ def _validate_use_item(action: dict[str, Any], state: TurnState) -> dict[str, An
     return None
 
 
+def _validate_ep_cost(action: dict[str, Any], state: TurnState) -> dict[str, Any] | None:
+    action_type = str(action.get("type") or "")
+    if not is_cooldown_action(action_type):
+        return None
+    cost = action_cost(action_type, terrain=state.current_region.terrain)
+    if cost <= state.self.ep:
+        return None
+    fallback = rest_action("recover EP after contract cost preflight")
+    fallback["reason"] = (
+        f"blocked insufficient EP for {action_type}: need {cost}, have {state.self.ep}; "
+        f"{fallback.get('reason', '')}"
+    )
+    fallback["_rejected_action"] = {
+        key: action.get(key)
+        for key in ("type", "targetId", "targetType", "regionId", "itemId", "reason")
+        if action.get(key) is not None
+    }
+    fallback["_contract_cost"] = {
+        "action": action_type,
+        "terrain": state.current_region.terrain,
+        "cost": cost,
+        "available_ep": state.self.ep,
+    }
+    return fallback
+
+
 VALIDATORS: dict[str, Callable[[dict[str, Any], TurnState], dict[str, Any] | None]] = {
     "attack": _validate_attack,
     "explore": _validate_explore,
@@ -143,6 +170,9 @@ VALIDATORS: dict[str, Callable[[dict[str, Any], TurnState], dict[str, Any] | Non
 
 
 def legalize_action(action: dict[str, Any], state: TurnState) -> dict[str, Any]:
+    ep_validated = _validate_ep_cost(action, state)
+    if ep_validated is not None:
+        return ep_validated
     validator = VALIDATORS.get(str(action.get("type") or ""))
     if validator:
         validated = validator(action, state)

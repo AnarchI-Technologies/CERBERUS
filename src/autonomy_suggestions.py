@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from claw_contract import action_cost
 from claw_contract import ERROR_CODES
 from runtime_state import append_match_evidence, append_suggested_edit
 from turn_state_model import TurnState
@@ -182,11 +183,12 @@ def suggested_edits_from_observation(
         )
 
     # Mapping specific ERROR_CODES to suggested architectural repairs
-    if outcome_code == "INSUFFICIENT_EP":
+    if outcome_code == "INSUFFICIENT_EP" or "insufficient ep" in outcome_text:
+        cost = action_cost(action_type, terrain=_text(evidence.get("state", {}).get("terrain")))
         suggestions.append(
             {
                 "detector": "contract.insufficient_ep",
-                "title": "Predictive EP cost validation in Economy Cortex",
+                "title": f"Predictive EP cost validation (Action Cost: {cost})",
                 "file": "src/ep_economy_engine.py",
                 "symptom": f"Server rejected action: {ERROR_CODES.get('INSUFFICIENT_EP')}",
                 "suggested_change": "Incorporate action_cost() check into cortex evaluation to avoid sending actions that exceed current EP.",
