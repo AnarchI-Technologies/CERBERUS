@@ -366,9 +366,10 @@ class CompactMemoryStore:
     ) -> str:
         lesson = compact_lesson(domain, text, source=source, confidence=confidence)
         existing = self.data.setdefault("lessons", [])
-        if lesson not in existing:
-            existing.append(lesson)
-        self.data["lessons"] = existing[-self.max_lessons :]
+        identity = self._lesson_identity(lesson)
+        kept = [item for item in existing if self._lesson_identity(item) != identity]
+        kept.append(lesson)
+        self.data["lessons"] = kept[-self.max_lessons :]
         return lesson
 
     def remember_fact(self, fact: str) -> None:
@@ -408,7 +409,7 @@ class CompactMemoryStore:
         self.data.setdefault("turns", [])
         self._rollup_old_turns()
         self.data["facts"] = self._dedupe_tail(self.data.get("facts", []), self.max_facts)
-        self.data["lessons"] = self._dedupe_tail(self.data.get("lessons", []), self.max_lessons)
+        self.data["lessons"] = self._dedupe_lessons(self.data.get("lessons", []), self.max_lessons)
         self.data["summaries"] = self._dedupe_tail(
             self.data.get("summaries", []),
             self.max_summaries,
@@ -492,6 +493,39 @@ class CompactMemoryStore:
         seen: set[str] = set()
         for item in reversed(values):
             marker = stable_hash(item, length=24)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            deduped.append(item)
+            if len(deduped) >= limit:
+                break
+        deduped.reverse()
+        return deduped
+
+    @staticmethod
+    def _lesson_identity(value: Any) -> str:
+        if not isinstance(value, str):
+            return stable_hash(value, length=24)
+        lesson = parse_compact_segments(value).get("L", {})
+        if lesson:
+            return stable_hash(
+                {
+                    "dom": lesson.get("dom", ""),
+                    "src": lesson.get("src", ""),
+                    "txt": lesson.get("txt", ""),
+                },
+                length=24,
+            )
+        return stable_hash(value, length=24)
+
+    @classmethod
+    def _dedupe_lessons(cls, values: Any, limit: int) -> list[Any]:
+        if not isinstance(values, list):
+            return []
+        deduped: list[Any] = []
+        seen: set[str] = set()
+        for item in reversed(values):
+            marker = cls._lesson_identity(item)
             if marker in seen:
                 continue
             seen.add(marker)

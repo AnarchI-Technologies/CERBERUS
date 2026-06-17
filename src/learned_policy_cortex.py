@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from combat_decider import equipped_weapon
+from combat_decider import equipped_weapon, is_worth_attacking, target_in_attack_range
 from cortex_types import CortexResult, action
 from decision_engine import active_fallback_action
 from free_action_abuse import best_ground_weapon, weapon_bonus_for_item
@@ -24,6 +24,12 @@ def _lesson_texts(store: CompactMemoryStore | None) -> list[str]:
     if not isinstance(lessons, list):
         return []
     return [str(item).lower() for item in lessons]
+
+
+def _dossier_records(context: dict[str, Any]) -> dict[str, Any]:
+    store = context.get("dossier_store") or context.get("dossiers")
+    records = getattr(store, "records", {}) if store is not None else {}
+    return records if isinstance(records, dict) else {}
 
 
 def death_pressure(store: CompactMemoryStore | None) -> int:
@@ -73,6 +79,7 @@ class LearnedPolicyCortex:
 
     def evaluate(self, state: TurnState, context: dict[str, Any]) -> list[CortexResult]:
         store = context.get("memory_store") if isinstance(context.get("memory_store"), CompactMemoryStore) else None
+        dossier_records = _dossier_records(context)
         results: list[CortexResult] = []
         applied: list[str] = []
         deaths = death_pressure(store)
@@ -94,7 +101,71 @@ class LearnedPolicyCortex:
                     reason=f"retained lesson: prior deaths justify early heal at {state.self.hp}/{state.self.max_hp}",
                     source_facts=["L|survival.failure", "F|items.recovery"],
                 )
-            )
+                    )
+
+        if state.can_take_main_action and state.self.ep >= 1:
+            for agent in state.visible_agents:
+                if not agent.is_alive or agent.id == state.self.id:
+                    continue
+                record = dossier_records.get(agent.id)
+                if record is None:
+                    continue
+                killed_us = int(getattr(record, "killed_us", 0) or 0)
+                killed_by_us = int(getattr(record, "killed_by_us", 0) or 0)
+                in_range = target_in_attack_range(state, agent)
+
+                if killed_us > killed_by_us and hp_ratio <= 0.72:
+                    if heal_item:
+                        applied.append("heal_before_known_killer")
+                        results.append(
+                            CortexResult(
+                                cortex=self.name,
+                                intent="apply_known_killer_survival_lesson",
+                                score=93 + min(4, killed_us),
+                                risk=4,
+                                priority=95,
+                                veto=True,
+                                action=action("use_item", itemId=heal_item.get("id")),
+                                reason=f"retained lesson: {agent.name or agent.id[:8]} has finished us before; heal before re-engaging",
+                                source_facts=["D|social.dossiers", "L|survival.repeat_killer"],
+                            )
+                        )
+                    elif in_range:
+                        fallback = active_fallback_action(state)
+                        applied.append("avoid_known_killer_when_weak")
+                        results.append(
+                            CortexResult(
+                                cortex=self.name,
+                                intent="apply_known_killer_escape_lesson",
+                                score=85 + min(4, killed_us),
+                                risk=9,
+                                priority=87,
+                                action=fallback,
+                                reason=f"retained lesson: {agent.name or agent.id[:8]} has finished us before; disengage until the board improves",
+                                source_facts=["D|social.dossiers", "L|survival.repeat_killer"],
+                            )
+                        )
+
+                if (
+                    killed_by_us > 0
+                    and killed_us == 0
+                    and in_range
+                    and not state.is_low_hp
+                    and is_worth_attacking(state, agent)
+                ):
+                    applied.append("press_repeat_prey")
+                    results.append(
+                        CortexResult(
+                            cortex=self.name,
+                            intent="apply_repeat_prey_lesson",
+                            score=87 + min(4, killed_by_us),
+                            risk=max(4, agent.atk * 0.55),
+                            priority=86,
+                            action=action("attack", targetId=agent.id, targetType="agent"),
+                            reason=f"retained lesson: {agent.name or agent.id[:8]} has folded to this pressure before; press the advantage",
+                            source_facts=["D|social.dossiers", "L|combat.repeat_prey", "F|combat.range"],
+                        )
+                    )
 
         blocked = current_game_blocked_targets(state)
         if blocked and state.can_take_main_action:

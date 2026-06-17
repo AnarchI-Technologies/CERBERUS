@@ -422,6 +422,30 @@ class HardeningTests(unittest.TestCase):
         self.assertLessEqual(len(reloaded.data["turns"]), 6)
         self.assertEqual(len(reloaded.data["facts"]), len(set(reloaded.data["facts"])))
 
+    def test_memory_lesson_dedupes_across_different_timestamps(self) -> None:
+        old_utc_now = memory_system.utc_now
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                memory_system.utc_now = lambda: "2026-06-17T00:00:00+00:00"  # type: ignore[assignment]
+                store = CompactMemoryStore(
+                    path=Path(tmp) / "memory.json",
+                    encrypted_path=Path(tmp) / "memory.vault.json",
+                ).load()
+                store.remember_lesson("combat", "failure: Rival eliminated us in Storm Hall", source="event:death", confidence="0.9")
+                memory_system.utc_now = lambda: "2026-06-17T00:00:02+00:00"  # type: ignore[assignment]
+                store.remember_lesson("combat", "failure: Rival eliminated us in Storm Hall", source="event:death", confidence="0.9")
+                store.rewrite()
+                reloaded = CompactMemoryStore(
+                    path=Path(tmp) / "memory.json",
+                    encrypted_path=Path(tmp) / "memory.vault.json",
+                ).load()
+        finally:
+            memory_system.utc_now = old_utc_now  # type: ignore[assignment]
+
+        lessons = reloaded.data["lessons"]
+        self.assertEqual(len(lessons), 1)
+        self.assertIn("Rival eliminated us", lessons[0])
+
     def test_memory_encrypt_decrypt_roundtrip_in_isolated_instance(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")
         os.environ["CERBERUS_PIN"] = "2468"
@@ -1651,6 +1675,75 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["type"], "use_item")
         self.assertEqual(action["itemId"], "med-1")
         self.assertIn("retained lesson", action["reason"])
+
+    def test_repeat_killer_dossier_changes_next_turn_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            dossiers.record_killed_us("enemy-1", name="Nemesis")
+            action = cerberus_tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 60,
+                            "maxHp": 100,
+                            "ep": 4,
+                            "inventory": [{"id": "med-1", "typeId": "medkit"}],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1", "name": "Storm Hall"},
+                        "visibleAgents": [{"id": "enemy-1", "name": "Nemesis", "hp": 48, "atk": 14, "def": 6, "regionId": "r1"}],
+                    },
+                },
+                memory_store=CompactMemoryStore(
+                    path=Path(tmp) / "memory.json",
+                    encrypted_path=Path(tmp) / "memory.vault.json",
+                ).load(),
+                dossier_store=dossiers,
+            )
+
+        self.assertEqual(action["type"], "use_item")
+        self.assertEqual(action["itemId"], "med-1")
+        self.assertIn("finished us before", action["reason"])
+
+    def test_repeat_prey_dossier_changes_next_turn_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            dossiers.record_kill("enemy-1", name="Runner")
+            action = cerberus_tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 100,
+                            "maxHp": 100,
+                            "ep": 4,
+                            "atk": 28,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1", "name": "Arena Ring"},
+                        "visibleAgents": [{"id": "enemy-1", "name": "Runner", "hp": 32, "atk": 8, "def": 2, "regionId": "r1"}],
+                    },
+                },
+                memory_store=CompactMemoryStore(
+                    path=Path(tmp) / "memory.json",
+                    encrypted_path=Path(tmp) / "memory.vault.json",
+                ).load(),
+                dossier_store=dossiers,
+            )
+
+        self.assertEqual(action["type"], "attack")
+        self.assertEqual(action["targetId"], "enemy-1")
+        self.assertIn("folded to this pressure before", action["reason"])
 
     def test_isolated_instance_survives_randomized_high_intensity_churn(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")
