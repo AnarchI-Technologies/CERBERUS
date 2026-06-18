@@ -11,6 +11,7 @@ from typing import Any
 from agent_dossiers import AgentDossierStore
 from core_loop import cerberus_tick
 from memory_system import CompactMemoryStore
+from runtime_state import reset_runtime_memory_dir, set_runtime_memory_dir
 
 
 @dataclass(slots=True)
@@ -34,7 +35,11 @@ class IsolatedCerberusInstance:
         return cls(root=base, memory=memory, dossiers=dossiers)
 
     def tick(self, state: dict[str, Any]) -> dict[str, Any]:
-        return cerberus_tick(state, memory_store=self.memory, dossier_store=self.dossiers)
+        token = set_runtime_memory_dir(self.root)
+        try:
+            return cerberus_tick(state, memory_store=self.memory, dossier_store=self.dossiers)
+        finally:
+            reset_runtime_memory_dir(token)
 
     def reload(self) -> "IsolatedCerberusInstance":
         return IsolatedCerberusInstance.create(self.root)
