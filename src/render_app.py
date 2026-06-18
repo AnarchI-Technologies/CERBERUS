@@ -1127,6 +1127,16 @@ def stream_html() -> bytes:
 class CerberusHandler(BaseHTTPRequestHandler):
     server_version = "CerberusRender/1.0"
 
+    def do_HEAD(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        if parsed.path in {"/", "/dashboard", "/stream"}:
+            self._send_empty("text/html; charset=utf-8")
+            return
+        if parsed.path in {"/healthz", "/ready", "/stats", "/stream/stats"}:
+            self._send_empty("application/json")
+            return
+        self._send_empty("application/json", status=404)
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         if parsed.path == "/":
@@ -1357,6 +1367,12 @@ class CerberusHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_empty(self, content_type: str, *, status: int = 200) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
 
 def main() -> int:

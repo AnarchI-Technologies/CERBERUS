@@ -230,7 +230,8 @@ Pre-join loadout optimizer defaults:
 - `CERBERUS_LOADOUT_SMOLTZ_RESERVE=1000` keeps a minimum sMoltz reserve when
   generating shop recommendations.
 - shop purchases and reforge candidates are reported first as recommendations;
-  they are not silent spending operations.
+  they are not silent spending operations unless `CLAW_ROYALE_SHOP_AUTO_PURCHASE`
+  or `CLAW_ROYALE_REFORGE_AUTO_APPLY` is explicitly enabled.
 
 Paid-room safety defaults:
 

@@ -2719,9 +2719,36 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(result["results"][0]["dry_run"])
         self.assertEqual(calls, [])
 
+    def test_shop_and_reforge_executors_are_dry_run_by_default(self) -> None:
+        calls = []
+
+        class FakeClient:
+            def purchase_shop_listing(self, *args):  # type: ignore[no-untyped-def]
+                calls.append(("purchase", args))
+                return {"ok": True}
+
+            def reforge_relic(self, *args):  # type: ignore[no-untyped-def]
+                calls.append(("reforge", args))
+                return {"ok": True}
+
+        shop = loadout_shop_reforge.execute_shop_recommendations(
+            FakeClient(),
+            [{"type": "buy_shop_item", "item": "reforge_stone_bundle"}],
+        )
+        reforge = loadout_shop_reforge.execute_reforge_candidates(
+            FakeClient(),
+            [{"relicInstanceId": "relic-1", "recommendedItemKey": "effect_add"}],
+        )
+
+        self.assertTrue(shop["results"][0]["dry_run"])
+        self.assertTrue(reforge["results"][0]["dry_run"])
+        self.assertEqual(calls, [])
+
     def test_claw_runtime_prejoin_loadout_report_uses_client_and_applies_when_enabled(self) -> None:
         old_client = claw_runtime.ClawRoyaleClient
         old_apply = os.environ.get("CLAW_ROYALE_LOADOUT_AUTO_APPLY")
+        old_shop = os.environ.get("CLAW_ROYALE_SHOP_AUTO_PURCHASE")
+        old_reforge = os.environ.get("CLAW_ROYALE_REFORGE_AUTO_APPLY")
         calls = []
 
         class FakeClient:
@@ -2746,8 +2773,18 @@ class HardeningTests(unittest.TestCase):
                 calls.append(("slot", slot, relic_id, bool(idempotency_key)))
                 return {"ok": True}
 
+            def purchase_shop_listing(self, listing_id, quantity, idempotency_key):  # type: ignore[no-untyped-def]
+                calls.append(("purchase", listing_id, quantity, bool(idempotency_key)))
+                return {"ok": True}
+
+            def reforge_relic(self, relic_id, item_key, idempotency_key):  # type: ignore[no-untyped-def]
+                calls.append(("reforge", relic_id, item_key, bool(idempotency_key)))
+                return {"ok": True}
+
         try:
             os.environ["CLAW_ROYALE_LOADOUT_AUTO_APPLY"] = "true"
+            os.environ.pop("CLAW_ROYALE_SHOP_AUTO_PURCHASE", None)
+            os.environ.pop("CLAW_ROYALE_REFORGE_AUTO_APPLY", None)
             claw_runtime.ClawRoyaleClient = FakeClient  # type: ignore[assignment]
             report = claw_runtime.prejoin_loadout_report(
                 claw_runtime.ClawRuntimeConfig(api_key="mr_test"),
@@ -2759,10 +2796,21 @@ class HardeningTests(unittest.TestCase):
                 os.environ.pop("CLAW_ROYALE_LOADOUT_AUTO_APPLY", None)
             else:
                 os.environ["CLAW_ROYALE_LOADOUT_AUTO_APPLY"] = old_apply
+            if old_shop is None:
+                os.environ.pop("CLAW_ROYALE_SHOP_AUTO_PURCHASE", None)
+            else:
+                os.environ["CLAW_ROYALE_SHOP_AUTO_PURCHASE"] = old_shop
+            if old_reforge is None:
+                os.environ.pop("CLAW_ROYALE_REFORGE_AUTO_APPLY", None)
+            else:
+                os.environ["CLAW_ROYALE_REFORGE_AUTO_APPLY"] = old_reforge
 
         self.assertTrue(report["ok"])
         self.assertTrue(report["auto_apply"])
         self.assertTrue(any(call[0] == "pack" for call in calls))
+        self.assertFalse(any(call[0] in {"purchase", "reforge"} for call in calls))
+        self.assertTrue(report["shop"]["results"][0]["dry_run"])
+        self.assertTrue(report["reforge"]["results"][0]["dry_run"])
 
     def test_claw_siwe_message_matches_frontend_shape(self) -> None:
         message = build_claw_siwe_message(
@@ -3723,6 +3771,24 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(sent[0][0], "html")
         self.assertIn(b"Hellion Dashboard", sent[0][2])
         self.assertEqual(sent[1], ("json", 200, {"ok": True, "service": "cerberus"}))
+
+    def test_render_head_requests_return_headers_without_body(self) -> None:
+        sent = []
+
+        class FakeHandler(render_app.CerberusHandler):
+            def __init__(self, path):  # type: ignore[no-untyped-def]
+                self.path = path
+
+            def _send_empty(self, content_type, *, status=200):  # type: ignore[no-untyped-def]
+                sent.append((status, content_type))
+
+        FakeHandler("/healthz").do_HEAD()
+        FakeHandler("/dashboard").do_HEAD()
+        FakeHandler("/missing").do_HEAD()
+
+        self.assertEqual(sent[0], (200, "application/json"))
+        self.assertEqual(sent[1], (200, "text/html; charset=utf-8"))
+        self.assertEqual(sent[2], (404, "application/json"))
 
     def test_render_launch_report_endpoint_is_pin_guarded(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")

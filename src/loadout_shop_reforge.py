@@ -289,3 +289,32 @@ def execute_loadout_operations(client: Any, operations: list[dict[str, Any]], *,
         else:
             results.append({"ok": False, "error": f"unsupported operation: {op_type}", "operation": op})
     return {"ok": all(item.get("ok", True) for item in results if isinstance(item, dict)), "results": results}
+
+
+def execute_shop_recommendations(client: Any, recommendations: list[dict[str, Any]], *, dry_run: bool = True) -> dict[str, Any]:
+    results = []
+    for recommendation in recommendations:
+        if str(recommendation.get("type") or "") != "buy_shop_item":
+            results.append({"ok": False, "error": "unsupported shop recommendation", "recommendation": recommendation})
+            continue
+        item = str(recommendation.get("item") or "")
+        if dry_run:
+            results.append({"ok": True, "dry_run": True, "recommendation": recommendation})
+            continue
+        results.append(client.purchase_shop_listing(item, int(recommendation.get("quantity") or 1), str(uuid.uuid4())))
+    return {"ok": all(item.get("ok", True) for item in results if isinstance(item, dict)), "results": results}
+
+
+def execute_reforge_candidates(client: Any, candidates: list[dict[str, Any]], *, dry_run: bool = True) -> dict[str, Any]:
+    results = []
+    for candidate in candidates:
+        relic_id = str(candidate.get("relicInstanceId") or "")
+        item_key = str(candidate.get("recommendedItemKey") or "")
+        if not relic_id or not item_key:
+            results.append({"ok": False, "error": "missing reforge target", "candidate": candidate})
+            continue
+        if dry_run:
+            results.append({"ok": True, "dry_run": True, "candidate": candidate})
+            continue
+        results.append(client.reforge_relic(relic_id, item_key, str(uuid.uuid4())))
+    return {"ok": all(item.get("ok", True) for item in results if isinstance(item, dict)), "results": results}

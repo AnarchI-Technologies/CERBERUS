@@ -25,7 +25,12 @@ from core_loop import cerberus_tick
 from env_loader import hydrate_env
 from game_map import build_live_map
 from lesson_compiler import compile_lessons
-from loadout_shop_reforge import build_prejoin_plan, execute_loadout_operations
+from loadout_shop_reforge import (
+    build_prejoin_plan,
+    execute_loadout_operations,
+    execute_reforge_candidates,
+    execute_shop_recommendations,
+)
 from memory_system import CompactMemoryStore
 from onboarding_clients import ClawRoyaleClient
 from runtime_state import (
@@ -921,6 +926,14 @@ def loadout_auto_apply_enabled() -> bool:
     return os.getenv("CLAW_ROYALE_LOADOUT_AUTO_APPLY", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def shop_auto_purchase_enabled() -> bool:
+    return os.getenv("CLAW_ROYALE_SHOP_AUTO_PURCHASE", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def reforge_auto_apply_enabled() -> bool:
+    return os.getenv("CLAW_ROYALE_REFORGE_AUTO_APPLY", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def prejoin_loadout_report(config: ClawRuntimeConfig, account: dict[str, Any] | None = None) -> dict[str, Any]:
     if not loadout_optimizer_enabled():
         return {"ok": True, "enabled": False, "reason": "CLAW_ROYALE_LOADOUT_OPTIMIZER_ENABLED is false"}
@@ -936,12 +949,26 @@ def prejoin_loadout_report(config: ClawRuntimeConfig, account: dict[str, Any] | 
             plan.get("loadout", {}).get("operations", []),
             dry_run=not loadout_auto_apply_enabled(),
         )
+        shop_result = execute_shop_recommendations(
+            client,
+            plan.get("shop", []),
+            dry_run=not shop_auto_purchase_enabled(),
+        )
+        reforge_result = execute_reforge_candidates(
+            client,
+            plan.get("reforge", []),
+            dry_run=not reforge_auto_apply_enabled(),
+        )
         return {
             "ok": True,
             "enabled": True,
             "auto_apply": loadout_auto_apply_enabled(),
+            "shop_auto_purchase": shop_auto_purchase_enabled(),
+            "reforge_auto_apply": reforge_auto_apply_enabled(),
             "plan": plan,
             "apply": apply_result,
+            "shop": shop_result,
+            "reforge": reforge_result,
         }
     except Exception as exc:
         return {"ok": False, "enabled": True, "error": str(exc)[:500]}
