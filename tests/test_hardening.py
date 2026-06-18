@@ -1832,6 +1832,76 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["itemId"], "med-1")
         self.assertIn("retained lesson", action["reason"])
 
+    def test_observed_finisher_tendency_changes_next_turn_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            dossiers.observe_agent("enemy-1", name="Closer", tendency="finishes_low_targets")
+            action = cerberus_tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 58,
+                            "maxHp": 100,
+                            "ep": 4,
+                            "atk": 24,
+                            "inventory": [{"id": "med-1", "typeId": "medkit"}],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1", "name": "Storm Hall"},
+                        "visibleAgents": [{"id": "enemy-1", "name": "Closer", "hp": 52, "atk": 18, "def": 4, "regionId": "r1"}],
+                    },
+                },
+                memory_store=CompactMemoryStore(
+                    path=Path(tmp) / "memory.json",
+                    encrypted_path=Path(tmp) / "memory.vault.json",
+                ).load(),
+                dossier_store=dossiers,
+            )
+
+        self.assertEqual(action["type"], "use_item")
+        self.assertEqual(action["itemId"], "med-1")
+        self.assertIn("finishes weak targets", action["reason"])
+
+    def test_observed_fragile_tendency_changes_next_turn_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            dossiers.observe_agent("enemy-1", name="Runner", tendency="dies_under_pressure")
+            action = cerberus_tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 94,
+                            "maxHp": 100,
+                            "ep": 4,
+                            "atk": 26,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1", "name": "Storm Hall"},
+                        "visibleAgents": [{"id": "enemy-1", "name": "Runner", "hp": 24, "atk": 8, "def": 2, "regionId": "r1"}],
+                    },
+                },
+                memory_store=CompactMemoryStore(
+                    path=Path(tmp) / "memory.json",
+                    encrypted_path=Path(tmp) / "memory.vault.json",
+                ).load(),
+                dossier_store=dossiers,
+            )
+
+        self.assertEqual(action["type"], "attack")
+        self.assertEqual(action["targetId"], "enemy-1")
+        self.assertIn("folds under pressure", action["reason"])
+
     def test_repeat_killer_dossier_changes_next_turn_policy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dossiers = AgentDossierStore(

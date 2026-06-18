@@ -32,6 +32,13 @@ def _dossier_records(context: dict[str, Any]) -> dict[str, Any]:
     return records if isinstance(records, dict) else {}
 
 
+def _record_tendencies(record: Any) -> set[str]:
+    tendencies = getattr(record, "observed_tendencies", []) if record is not None else []
+    if not isinstance(tendencies, list):
+        return set()
+    return {str(item).lower() for item in tendencies if item}
+
+
 def death_pressure(store: CompactMemoryStore | None) -> int:
     markers = ("failure:", "eliminated us", "killed_us", "agent_dead", "deathzone", "death zone")
     return sum(1 for lesson in _lesson_texts(store) if any(marker in lesson for marker in markers))
@@ -112,6 +119,7 @@ class LearnedPolicyCortex:
                     continue
                 killed_us = int(getattr(record, "killed_us", 0) or 0)
                 killed_by_us = int(getattr(record, "killed_by_us", 0) or 0)
+                tendencies = _record_tendencies(record)
                 in_range = target_in_attack_range(state, agent)
 
                 if killed_us > killed_by_us and hp_ratio <= 0.72:
@@ -146,6 +154,38 @@ class LearnedPolicyCortex:
                             )
                         )
 
+                if "finishes_low_targets" in tendencies and hp_ratio <= 0.7:
+                    if heal_item:
+                        applied.append("heal_before_observed_finisher")
+                        results.append(
+                            CortexResult(
+                                cortex=self.name,
+                                intent="apply_observed_finisher_survival_lesson",
+                                score=89,
+                                risk=4,
+                                priority=92,
+                                veto=True,
+                                action=action("use_item", itemId=heal_item.get("id")),
+                                reason=f"retained lesson: {agent.name or agent.id[:8]} finishes weak targets; heal before becoming the next one",
+                                source_facts=["D|social.dossiers", "L|opponents.finisher_pattern"],
+                            )
+                        )
+                    elif in_range:
+                        fallback = active_fallback_action(state)
+                        applied.append("avoid_observed_finisher_when_weak")
+                        results.append(
+                            CortexResult(
+                                cortex=self.name,
+                                intent="apply_observed_finisher_escape_lesson",
+                                score=82,
+                                risk=8,
+                                priority=84,
+                                action=fallback,
+                                reason=f"retained lesson: {agent.name or agent.id[:8]} closes on weak targets; disengage until the board improves",
+                                source_facts=["D|social.dossiers", "L|opponents.finisher_pattern"],
+                            )
+                        )
+
                 if (
                     killed_by_us > 0
                     and killed_us == 0
@@ -164,6 +204,26 @@ class LearnedPolicyCortex:
                             action=action("attack", targetId=agent.id, targetType="agent"),
                             reason=f"retained lesson: {agent.name or agent.id[:8]} has folded to this pressure before; press the advantage",
                             source_facts=["D|social.dossiers", "L|combat.repeat_prey", "F|combat.range"],
+                        )
+                    )
+
+                if (
+                    "dies_under_pressure" in tendencies
+                    and in_range
+                    and not state.is_low_hp
+                    and is_worth_attacking(state, agent)
+                ):
+                    applied.append("press_observed_fragile_target")
+                    results.append(
+                        CortexResult(
+                            cortex=self.name,
+                            intent="apply_observed_fragile_target_lesson",
+                            score=84,
+                            risk=max(4, agent.atk * 0.5),
+                            priority=83,
+                            action=action("attack", targetId=agent.id, targetType="agent"),
+                            reason=f"retained lesson: {agent.name or agent.id[:8]} folds under pressure; take the favorable fight",
+                            source_facts=["D|social.dossiers", "L|opponents.fragile_pattern", "F|combat.range"],
                         )
                     )
 
