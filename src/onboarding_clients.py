@@ -188,6 +188,28 @@ class ClawRoyaleClient:
             params["afterId"] = after_id
         return self._request("GET", "/inventory/packs", params=params)
 
+    def shop_listings(self) -> dict[str, Any]:
+        return self._request("GET", "/shop/listings")
+
+    def purchase_shop_listing(self, listing_id: str, quantity: int, idempotency_key: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/shop/purchase",
+            headers={"Idempotency-Key": idempotency_key},
+            json={"listingId": listing_id, "quantity": max(1, int(quantity))},
+        )
+
+    def reforge_relic(self, relic_instance_id: str, item_key: str, idempotency_key: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/reforge",
+            json={
+                "relicInstanceId": relic_instance_id,
+                "itemKey": item_key,
+                "idempotencyKey": idempotency_key,
+            },
+        )
+
     def discard_relic(self, relic_instance_id: str) -> dict[str, Any]:
         return self._request("DELETE", f"/inventory/relics/{relic_instance_id}")
 

@@ -221,6 +221,17 @@ approve, reject, or archive them from the private dashboard after entering
 `average_balance_delta_per_game`, and `games_needed_for_1000_per_day` after the
 runtime observes account balances across completed games.
 
+Pre-join loadout optimizer defaults:
+
+- `CLAW_ROYALE_LOADOUT_OPTIMIZER_ENABLED=true` polls loadout, relic inventory,
+  and pack inventory before joining.
+- `CLAW_ROYALE_LOADOUT_AUTO_APPLY=true` applies only safe loadout swaps: active
+  pack and R/G/B relic slots.
+- `CERBERUS_LOADOUT_SMOLTZ_RESERVE=1000` keeps a minimum sMoltz reserve when
+  generating shop recommendations.
+- shop purchases and reforge candidates are reported first as recommendations;
+  they are not silent spending operations.
+
 Paid-room safety defaults:
 
 - `CLAW_ROYALE_FREE_FALLBACK_ENABLED=true` lets Hellion choose a viable free

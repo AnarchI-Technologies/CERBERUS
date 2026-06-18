@@ -25,6 +25,7 @@ from core_loop import cerberus_tick
 from env_loader import hydrate_env
 from game_map import build_live_map
 from lesson_compiler import compile_lessons
+from loadout_shop_reforge import build_prejoin_plan, execute_loadout_operations
 from memory_system import CompactMemoryStore
 from onboarding_clients import ClawRoyaleClient
 from runtime_state import (
@@ -912,6 +913,40 @@ def record_account_balance(config: ClawRuntimeConfig, *, stage: str) -> dict[str
     return account
 
 
+def loadout_optimizer_enabled() -> bool:
+    return os.getenv("CLAW_ROYALE_LOADOUT_OPTIMIZER_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def loadout_auto_apply_enabled() -> bool:
+    return os.getenv("CLAW_ROYALE_LOADOUT_AUTO_APPLY", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def prejoin_loadout_report(config: ClawRuntimeConfig, account: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not loadout_optimizer_enabled():
+        return {"ok": True, "enabled": False, "reason": "CLAW_ROYALE_LOADOUT_OPTIMIZER_ENABLED is false"}
+    try:
+        client = ClawRoyaleClient(api_key=config.api_key, base_url=config.base_url)
+        loadout = client.loadout()
+        relics = client.inventory_relics(limit=int(os.getenv("CLAW_ROYALE_LOADOUT_RELIC_LIMIT", "15") or 15))
+        packs = client.inventory_packs(limit=int(os.getenv("CLAW_ROYALE_LOADOUT_PACK_LIMIT", "5") or 5))
+        balance = _balance_float((account or {}).get("balance"))
+        plan = build_prejoin_plan(loadout=loadout, relics=relics, packs=packs, balance_smoltz=balance)
+        apply_result = execute_loadout_operations(
+            client,
+            plan.get("loadout", {}).get("operations", []),
+            dry_run=not loadout_auto_apply_enabled(),
+        )
+        return {
+            "ok": True,
+            "enabled": True,
+            "auto_apply": loadout_auto_apply_enabled(),
+            "plan": plan,
+            "apply": apply_result,
+        }
+    except Exception as exc:
+        return {"ok": False, "enabled": True, "error": str(exc)[:500]}
+
+
 async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     version = discover_version(config.base_url)
     if version != config.version:
@@ -929,7 +964,17 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     account_status = record_account_balance(config, stage="connect")
     stale_paid = record_stale_paid_waiting_games(account_status)
     join_blocker = join_blocker_for_account(config, account_status)
-    update_status(state="connecting", endpoint=url, version=config.version, mode=config.mode, account=account_status, stale_paid_rooms=stale_paid, last_error="")
+    loadout_report = prejoin_loadout_report(config, account_status)
+    update_status(
+        state="connecting",
+        endpoint=url,
+        version=config.version,
+        mode=config.mode,
+        account=account_status,
+        stale_paid_rooms=stale_paid,
+        loadout_optimizer=loadout_report,
+        last_error="" if loadout_report.get("ok", True) else f"loadout optimizer: {loadout_report.get('error', '')}",
+    )
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
         gameplay_ready = False
         update_status(state="connected", endpoint=url, connected_at=int(time.time()), reconnects=read_json(claw_runtime_status_file()).get("reconnects", 0))

@@ -41,6 +41,8 @@ import memory_system
 import profit_simulator
 import owner_command_cortex
 import social_runtime
+import loadout_shop_reforge
+import social_worker
 from identity_bootstrap import (
     ensure_agentmail,
     ensure_claw_account,
@@ -1591,6 +1593,40 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(result["processed"], 1)
         self.assertEqual(queue[0]["status"], "sent")
 
+    def test_social_worker_is_disabled_by_default_and_can_run_once(self) -> None:
+        old_enabled = os.environ.get("CERBERUS_SOCIAL_WORKER_ENABLED")
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+
+        class FakeClient:
+            def post_draft(self, draft):  # type: ignore[no-untyped-def]
+                return {"ok": True, "draft": draft}
+
+            def follow(self, effect):  # type: ignore[no-untyped-def]
+                return {"ok": True, "effect": effect}
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                os.environ.pop("CERBERUS_SOCIAL_WORKER_ENABLED", None)
+                disabled = social_worker.run_loop(stop_after=1, sleep_fn=lambda _seconds: None)
+                social_runtime.enqueue_social_effects(
+                    [{"type": "moltybook_draft", "category": "test", "content": "Hellion worker queued this."}]
+                )
+                once = social_worker.run_once(client=FakeClient(), max_items=1)
+        finally:
+            if old_enabled is None:
+                os.environ.pop("CERBERUS_SOCIAL_WORKER_ENABLED", None)
+            else:
+                os.environ["CERBERUS_SOCIAL_WORKER_ENABLED"] = old_enabled
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertFalse(disabled["enabled"])
+        self.assertEqual(once["processed"], 1)
+        self.assertEqual(once["queued"], 0)
+
     def test_runtime_action_result_learning_persists_outcome_and_lesson(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         try:
@@ -2618,6 +2654,9 @@ class HardeningTests(unittest.TestCase):
         client.clear_relic_slot(1, "idem-4")
         client.inventory_relics(limit=15)
         client.inventory_packs(limit=5)
+        client.shop_listings()
+        client.purchase_shop_listing("reforge_stone_bundle", 1, "idem-5")
+        client.reforge_relic("relic-1", "effect_add", "idem-6")
         client.discard_relic("relic-1")
         client.discard_pack("pack-1")
 
@@ -2631,9 +2670,99 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("https://cdn.clawroyale.ai/api/loadout/slot/1", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/inventory/relics", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/inventory/packs", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/shop/listings", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/shop/purchase", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/reforge", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/inventory/relics/relic-1", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/inventory/packs/pack-1", urls)
         self.assertTrue(all("X-Version" in call[2]["headers"] for call in fake.calls))
+
+    def test_loadout_shop_reforge_planner_prepares_paid_game_setup(self) -> None:
+        plan = loadout_shop_reforge.build_prejoin_plan(
+            loadout={"activePack": {"instanceId": "old-pack"}, "slots": {}},
+            packs={
+                "packs": [
+                    {"instanceId": "pack-g", "category": "goliath", "tier": "T3"},
+                    {"instanceId": "pack-m", "category": "moltz_expert", "tier": "T2"},
+                ]
+            },
+            relics={
+                "relics": [
+                    {"instanceId": "red-1", "typeIndex": 0, "tier": "T2", "affixes": [{"stat": "ATK", "value": 4}]},
+                    {"instanceId": "green-1", "typeIndex": 1, "affixes": [{"stat": "MAX HP", "value": 8}]},
+                    {"instanceId": "blue-1", "typeIndex": 2, "affixes": [{"stat": "ATK", "value": -2}]},
+                ]
+            },
+            balance_smoltz=28000,
+        )
+
+        ops = plan["loadout"]["operations"]
+        self.assertTrue(any(op.get("type") == "set_active_pack" and op.get("packInstanceId") == "pack-m" for op in ops))
+        self.assertTrue(any(op.get("type") == "set_relic_slot" and op.get("slot") == "red" for op in ops))
+        self.assertTrue(plan["loadout"]["complete_full_set"])
+        self.assertEqual(plan["reforge"][0]["relicInstanceId"], "blue-1")
+        self.assertTrue(any(item["item"] == "reforge_stone_bundle" for item in plan["shop"]))
+
+    def test_loadout_executor_is_dry_run_by_default(self) -> None:
+        calls = []
+
+        class FakeClient:
+            def set_active_pack(self, *args):  # type: ignore[no-untyped-def]
+                calls.append(args)
+                return {"ok": True}
+
+        result = loadout_shop_reforge.execute_loadout_operations(
+            FakeClient(),
+            [{"type": "set_active_pack", "packInstanceId": "pack-1"}],
+        )
+
+        self.assertTrue(result["results"][0]["dry_run"])
+        self.assertEqual(calls, [])
+
+    def test_claw_runtime_prejoin_loadout_report_uses_client_and_applies_when_enabled(self) -> None:
+        old_client = claw_runtime.ClawRoyaleClient
+        old_apply = os.environ.get("CLAW_ROYALE_LOADOUT_AUTO_APPLY")
+        calls = []
+
+        class FakeClient:
+            def __init__(self, api_key="", base_url=""):  # type: ignore[no-untyped-def]
+                self.api_key = api_key
+                self.base_url = base_url
+
+            def loadout(self):  # type: ignore[no-untyped-def]
+                return {"activePack": {"instanceId": "old-pack"}, "slots": {}}
+
+            def inventory_relics(self, limit=15):  # type: ignore[no-untyped-def]
+                return {"relics": [{"instanceId": "red-1", "typeIndex": 0, "affixes": [{"stat": "ATK", "value": 3}]}]}
+
+            def inventory_packs(self, limit=5):  # type: ignore[no-untyped-def]
+                return {"packs": [{"instanceId": "pack-1", "category": "moltz_expert"}]}
+
+            def set_active_pack(self, pack_id, idempotency_key):  # type: ignore[no-untyped-def]
+                calls.append(("pack", pack_id, bool(idempotency_key)))
+                return {"ok": True}
+
+            def set_relic_slot(self, slot, relic_id, idempotency_key):  # type: ignore[no-untyped-def]
+                calls.append(("slot", slot, relic_id, bool(idempotency_key)))
+                return {"ok": True}
+
+        try:
+            os.environ["CLAW_ROYALE_LOADOUT_AUTO_APPLY"] = "true"
+            claw_runtime.ClawRoyaleClient = FakeClient  # type: ignore[assignment]
+            report = claw_runtime.prejoin_loadout_report(
+                claw_runtime.ClawRuntimeConfig(api_key="mr_test"),
+                {"balance": 11000},
+            )
+        finally:
+            claw_runtime.ClawRoyaleClient = old_client  # type: ignore[assignment]
+            if old_apply is None:
+                os.environ.pop("CLAW_ROYALE_LOADOUT_AUTO_APPLY", None)
+            else:
+                os.environ["CLAW_ROYALE_LOADOUT_AUTO_APPLY"] = old_apply
+
+        self.assertTrue(report["ok"])
+        self.assertTrue(report["auto_apply"])
+        self.assertTrue(any(call[0] == "pack" for call in calls))
 
     def test_claw_siwe_message_matches_frontend_shape(self) -> None:
         message = build_claw_siwe_message(
