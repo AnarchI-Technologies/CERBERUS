@@ -241,7 +241,8 @@ class OwnerCommandCortex:
                         intent="owner_requested_attack_pressure",
                         score=94,
                         risk=max(5, target.atk * 0.7),
-                        priority=94,
+                        priority=98,
+                        veto=True,
                         action=action("attack", targetId=target.id, targetType=target_type),
                         reason=f"owner directive: attack pressure on {target_type} {target.name or target.id[:8]}",
                         source_facts=["F|owner.private_command", "F|combat.attack"],
@@ -257,7 +258,8 @@ class OwnerCommandCortex:
                         intent="owner_requested_progression",
                         score=89,
                         risk=8,
-                        priority=89,
+                        priority=97,
+                        veto=True,
                         action=ruin_action,
                         reason="owner directive: prioritize ruin/progression objective",
                         source_facts=["F|owner.private_command", "F|progression.ruin"],
@@ -271,7 +273,8 @@ class OwnerCommandCortex:
                     intent="owner_requested_rest",
                     score=90,
                     risk=0,
-                    priority=90,
+                    priority=95,
+                    veto=True,
                     action=rest_action("owner directive: rest"),
                     reason="owner directive: rest",
                     source_facts=["F|owner.private_command"],
@@ -288,7 +291,8 @@ class OwnerCommandCortex:
                             intent="owner_requested_scouting",
                             score=88,
                             risk=5,
-                            priority=88,
+                            priority=94,
+                            veto=True,
                             action=action("move", regionId=region_id),
                             reason="owner directive: scout by moving to a safe connected region",
                             source_facts=["F|owner.private_command", "F|map.scout"],
@@ -308,7 +312,8 @@ class OwnerCommandCortex:
                     intent="owner_requested_public_voice",
                     score=80,
                     risk=0,
-                    priority=80,
+                    priority=91,
+                    veto=True,
                     action=social_action,
                     reason="owner directive: speak publicly without exposing private strategy",
                     source_facts=["F|owner.private_command", "F|social.sanitized"],
@@ -535,10 +540,10 @@ def best_value_item(state: TurnState) -> dict[str, Any] | None:
         if not item.get("id"):
             continue
         score = 0
-        if "moltz" in label or "smoltz" in label:
+        if "relic" in label or "pack" in label:
+            score = 115
+        elif "moltz" in label or "smoltz" in label:
             score = 90
-        elif "relic" in label or "pack" in label:
-            score = 80
         elif "medkit" in label or "bandage" in label:
             score = 65
         elif "loot" in label:

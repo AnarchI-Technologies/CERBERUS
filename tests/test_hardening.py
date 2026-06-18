@@ -581,6 +581,29 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(dossiers["enemy-2"].killed_us, 1)
         self.assertIn("beat_Runner@Arena Ring", dossiers["enemy-3"].social_notes)
 
+    def test_tick_registers_self_death_from_sparse_death_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            isolated.tick(
+                {
+                    "turn": 13,
+                    "canAct": False,
+                    "view": {
+                        "self": {"id": "me", "name": "Hellion", "hp": 0, "ep": 0, "isAlive": False},
+                        "currentRegion": {"id": "r1", "name": "Collapse Ring", "terrain": "Plain"},
+                    },
+                    "events": [
+                        {"type": "agent_death", "data": {"killerId": "enemy-2", "killerName": "Hunter", "isAlive": False}},
+                    ],
+                }
+            )
+
+            lessons = isolated.memory.data["lessons"]
+            dossiers = isolated.dossiers.records
+
+        self.assertTrue(any("failure: Hunter eliminated us" in lesson for lesson in lessons))
+        self.assertEqual(dossiers["enemy-2"].killed_us, 1)
+
     def test_tick_persists_validated_strategy_into_compact_memory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             isolated = self._isolated(tmp)
@@ -996,6 +1019,51 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(action["type"], "pickup")
         self.assertEqual(action["itemId"], "cash-1")
+
+    def test_relic_pickup_is_preferred_before_loose_smoltz(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 100, "ep": 3, "inventory": []},
+                        "currentRegion": {
+                            "id": "r1",
+                            "items": [
+                                {"id": "cash-1", "typeId": "smoltz_bundle"},
+                                {"id": "relic-1", "typeId": "relic_red"},
+                            ],
+                        },
+                    },
+                }
+            )
+
+        self.assertEqual(action["type"], "pickup")
+        self.assertEqual(action["itemId"], "relic-1")
+
+    def test_owner_value_command_prioritizes_relic_before_smoltz(self) -> None:
+        plan = make_plan(
+            state={
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 100, "ep": 3, "inventory": []},
+                    "currentRegion": {
+                        "id": "r1",
+                        "items": [
+                            {"id": "cash-1", "typeId": "smoltz_bundle"},
+                            {"id": "relic-1", "typeId": "relic_blue"},
+                        ],
+                    },
+                },
+            },
+            cortexes=[owner_command_cortex.OwnerCommandCortex(), EconomyCortex()],
+            owner_messages=[{"kind": "owner_command", "text": "prioritize relics and build the loadout"}],
+        )
+
+        self.assertEqual(plan["action"]["type"], "pickup")
+        self.assertEqual(plan["action"]["itemId"], "relic-1")
+        self.assertEqual(plan["winner"]["intent"], "owner_requested_value_pickup")
 
     def test_economy_uses_passed_dossiers_for_moltz_carrier_opportunity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3094,11 +3162,14 @@ class HardeningTests(unittest.TestCase):
                         "id": "r1",
                         "name": "Center",
                         "terrain": "Plain",
+                        "weather": "Fog",
                         "items": [
                             {"id": "cash-1", "typeId": "smoltz_bundle"},
                             {"id": "dagger-1", "typeId": "dagger"},
+                            {"id": "relic-1", "typeId": "relic_red"},
+                            {"id": "cache-1", "typeId": "supply_cache"},
                         ],
-                        "interactables": [{"id": "shop-1", "type": "shop"}],
+                        "interactables": [{"id": "med-1", "type": "medical facility"}, {"id": "tower-1", "type": "broadcast tower"}],
                         "connections": [{"id": "ruin-1", "terrain": "Ruin"}],
                     },
                     "visibleRegions": [{"id": "ruin-1", "name": "Old Vault", "terrain": "Ruin"}],
@@ -3112,9 +3183,21 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertIn("H", current["contents"])
         self.assertIn("W", current["contents"])
-        self.assertIn("M", current["contents"])
+        self.assertIn("$", current["contents"])
+        self.assertIn("R", current["contents"])
+        self.assertIn("S", current["contents"])
+        self.assertIn("+", current["contents"])
+        self.assertIn("B", current["contents"])
         self.assertIn("G", current["contents"])
-        self.assertEqual(payload["summary"]["items"], 2)
+        self.assertIn("$", payload["legend"])
+        self.assertIn("R", payload["legend"])
+        self.assertIn("B", payload["legend"])
+        self.assertEqual(current["badges"][0]["symbol"], "H")
+        self.assertTrue(any(badge["symbol"] == "R" for badge in current["badges"]))
+        self.assertEqual(payload["summary"]["items"], 4)
+        self.assertEqual(payload["summary"]["relics"], 1)
+        self.assertEqual(payload["summary"]["medical"], 1)
+        self.assertEqual(payload["summary"]["broadcast"], 1)
         self.assertEqual(payload["summary"]["guardians"], 1)
         self.assertTrue(any(hint["type"] == "loot" for hint in payload["routes"]))
 
@@ -3174,6 +3257,9 @@ class HardeningTests(unittest.TestCase):
         html = render_app.dashboard_html().decode("utf-8")
 
         self.assertIn('id="game-map"', html)
+        self.assertIn('id="map-legend"', html)
+        self.assertIn("renderLegend", html)
+        self.assertIn("badgeFill", html)
         self.assertIn('id="owner-form"', html)
         self.assertIn('id="paid-ready"', html)
         self.assertIn('id="healthz"', html)
@@ -3189,6 +3275,7 @@ class HardeningTests(unittest.TestCase):
         self.assertIn('fetch("/admin/launch-report"', html)
         self.assertIn("<line x1=", html)
         self.assertIn("map.summary", html)
+        self.assertIn("Live tactical map", html)
         self.assertNotIn("<iframe id=\"feed\"", html)
 
     def test_owner_command_understands_map_paid_and_leave_context(self) -> None:

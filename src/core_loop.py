@@ -272,6 +272,37 @@ def _event_data(event: dict[str, Any]) -> dict[str, Any]:
     return event.get("data") if isinstance(event.get("data"), dict) else event
 
 
+def _event_value(data: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = data.get(key)
+        if value is not None and value != "":
+            return str(value)
+    return ""
+
+
+def _event_bool(data: dict[str, Any], *keys: str) -> bool | None:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in {"true", "false"}:
+            return value.strip().lower() == "true"
+    return None
+
+
+def _event_names_self(data: dict[str, Any], state: TurnState) -> bool:
+    names = {
+        str(state.self.id or "").lower(),
+        str(state.self.name or "").lower(),
+        "hellion",
+    }
+    names.discard("")
+    for key in ("agentName", "victimName", "targetName", "name"):
+        if str(data.get(key) or "").lower() in names:
+            return True
+    return False
+
+
 def _remember_event_learning_or_warn(
     action: dict[str, Any],
     memory: CompactMemoryStore,
@@ -280,15 +311,39 @@ def _remember_event_learning_or_warn(
 ) -> None:
     region = state.current_region.name or state.current_region.id or "unknown_region"
     try:
+        self_death_recorded = False
         for event in state.events:
             event_type = str(event.get("type") or event.get("eventType") or "").lower()
             data = _event_data(event)
-            killer = str(data.get("killerId") or data.get("attackerId") or "")
-            killer_name = str(data.get("killerName") or data.get("attackerName") or killer[:8] or "unknown")
-            victim = str(data.get("victimId") or data.get("agentId") or data.get("targetId") or "")
-            victim_name = str(data.get("victimName") or data.get("targetName") or victim[:8] or "unknown")
+            killer = _event_value(data, "killerId", "attackerId", "sourceAgentId", "sourceId", "winnerId", "winnerAgentId")
+            killer_name = _event_value(data, "killerName", "attackerName", "sourceName", "winnerName") or killer[:8] or "unknown"
+            victim = _event_value(
+                data,
+                "victimId",
+                "deadAgentId",
+                "eliminatedAgentId",
+                "defeatedAgentId",
+                "agentId",
+                "targetId",
+            )
+            victim_name = _event_value(data, "victimName", "deadAgentName", "eliminatedAgentName", "targetName", "agentName") or victim[:8] or "unknown"
+            is_death_event = any(term in event_type for term in ("kill", "death", "dead", "eliminated", "defeated"))
+            self_alive_flag = _event_bool(data, "selfAlive", "isAlive", "alive")
+            self_dead_event = (
+                is_death_event
+                and state.self.id
+                and (
+                    victim == state.self.id
+                    or _event_bool(data, "self", "isSelf", "player") is True
+                    or self_alive_flag is False
+                    or _event_names_self(data, state)
+                )
+            )
+            if is_death_event and not victim and self_dead_event:
+                victim = state.self.id
+                victim_name = state.self.name or "Hellion"
 
-            if any(term in event_type for term in ("kill", "death", "eliminated")) and killer and victim:
+            if is_death_event and victim:
                 if killer == state.self.id and victim != state.self.id:
                     dossiers.add_social_note(victim, f"lost_to_us@{region}"[:180])
                     memory.remember_lesson(
@@ -298,15 +353,17 @@ def _remember_event_learning_or_warn(
                         confidence="0.82",
                     )
                 elif victim == state.self.id and killer != state.self.id:
-                    dossiers.record_killed_us(killer, name=killer_name)
-                    dossiers.add_social_note(killer, f"killed_us@{region}"[:180])
+                    if killer:
+                        dossiers.record_killed_us(killer, name=killer_name)
+                        dossiers.add_social_note(killer, f"killed_us@{region}"[:180])
                     memory.remember_lesson(
                         "combat",
                         f"failure: {killer_name} eliminated us in {region}; respect their pressure and leave earlier",
                         source=f"event:{event_type}",
                         confidence="0.91",
                     )
-                elif killer != victim:
+                    self_death_recorded = True
+                elif killer and victim and killer != victim:
                     dossiers.observe_agent(killer, name=killer_name, tendency="finishes_low_targets")
                     dossiers.observe_agent(victim, name=victim_name, tendency="dies_under_pressure")
                     dossiers.add_social_note(killer, f"beat_{victim_name}@{region}"[:180])
@@ -353,6 +410,14 @@ def _remember_event_learning_or_warn(
                     source=f"event:{event_type}",
                     confidence="0.85",
                 )
+
+        if state.self.id and not state.self.is_alive and not self_death_recorded:
+            memory.remember_lesson(
+                "combat",
+                f"failure: Hellion death registered in {region}; preserve exits and heal before collapse",
+                source="state:self_dead",
+                confidence="0.88",
+            )
 
         for effect in action.get("_side_effects", []):
             if not isinstance(effect, dict):

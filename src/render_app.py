@@ -519,6 +519,9 @@ def dashboard_html(query: str = "") -> bytes:
     .workbench {{ min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 390px; }}
     .map-wrap {{ min-width: 0; min-height: 0; position: relative; background: #070a0f; overflow: hidden; }}
     .map-toolbar {{ position: absolute; left: 12px; top: 12px; z-index: 2; display: flex; gap: 8px; align-items: center; }}
+    .map-legend {{ position: absolute; right: 12px; top: 12px; z-index: 2; display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; max-width: min(520px, calc(100% - 260px)); }}
+    .legend-chip {{ border: 1px solid #2d384c; border-radius: 999px; background: rgba(13,18,27,.88); color: #dce7f7; padding: 3px 7px; font-size: 11px; line-height: 1.2; }}
+    .legend-symbol {{ display: inline-grid; place-items: center; width: 17px; height: 17px; margin-right: 4px; border-radius: 50%; background: #223047; color: #ffffff; font-weight: 800; font-size: 11px; }}
     .map-status {{ position: absolute; left: 12px; bottom: 12px; z-index: 2; max-width: min(680px, calc(100% - 24px)); border: 1px solid #2a3140; border-radius: 8px; background: rgba(12,16,23,.92); padding: 9px 11px; color: #cbd5e1; font-size: 13px; }}
     svg#game-map {{ width: 100%; height: 100%; display: block; background: radial-gradient(circle at 50% 40%, #121925 0, #070a0f 65%); }}
     .map-side {{ border-left: 1px solid #273041; background: #0d121b; min-height: 0; overflow: auto; }}
@@ -558,6 +561,7 @@ def dashboard_html(query: str = "") -> bytes:
           <button type="button" onclick="zoomMap(0.88)">Zoom Out</button>
           <button type="button" onclick="centerMap()">Center Hellion</button>
         </div>
+        <div id="map-legend" class="map-legend"></div>
         <svg id="game-map" role="img" aria-label="Live Claw Royale vector map"></svg>
         <div id="map-status" class="map-status">Waiting for live game heartbeat...</div>
       </div>
@@ -778,16 +782,43 @@ def dashboard_html(query: str = "") -> bytes:
       }}
       box.innerHTML = hints.map((hint) => "<div class='owner-msg'><strong>" + esc(hint.type || "hint") + "</strong> " + esc(hint.label || hint.item_id || hint.region_id || "") + "<div class='hint'>score " + esc(hint.score || 0) + "</div></div>").join("");
     }}
+    function renderLegend(legend) {{
+      const box = document.getElementById("map-legend");
+      const entries = Object.entries(legend || {{}});
+      if (!entries.length) {{
+        box.innerHTML = "";
+        return;
+      }}
+      box.innerHTML = entries.map(([symbol, label]) => (
+        "<span class='legend-chip'><span class='legend-symbol'>" + esc(symbol) + "</span>" + esc(label) + "</span>"
+      )).join("");
+    }}
+    function terrainColor(hex) {{
+      const terrain = String(hex.terrain || "").toLowerCase();
+      if (hex.is_death_zone) return "#3b1118";
+      if (hex.is_pending_death_zone) return "#3b2d12";
+      if (terrain.includes("ruin")) return "#202044";
+      if (terrain.includes("forest") || terrain.includes("thorn")) return "#132b20";
+      if (terrain.includes("water") || terrain.includes("river")) return "#11263a";
+      if (terrain.includes("mount") || terrain.includes("rock")) return "#252631";
+      if (hex.loot_score >= 70) return "#162d20";
+      return "#101722";
+    }}
+    function badgeFill(symbol) {{
+      return {{"H":"#2ee6b8","D":"#ff6370","G":"#ffb74d","!":"#ff6370","A":"#7bbcff","R":"#c084fc","P":"#f7cf5d","$":"#a3e635","W":"#e2e8f0","+":"#5eead4","B":"#93c5fd","S":"#fbbf24","U":"#cbd5e1","~":"#94a3b8"}}[symbol] || "#cbd5e1";
+    }}
     function renderMap(map, blockers) {{
       const svg = document.getElementById("game-map");
       const status = document.getElementById("map-status");
       lastMap = map || lastMap;
       if (!map || !map.ok || !(map.hexes || []).length) {{
         svg.innerHTML = "";
+        renderLegend({{}});
         renderRouteHints({{routes: []}});
         showRuntimeFallback(blockers);
         return;
       }}
+      renderLegend(map.legend || {{}});
       const hexes = map.hexes || [];
       const byId = Object.fromEntries(hexes.map((h) => [String(h.id || ""), h]));
       const xs = hexes.map((h) => Number(h.x || 0));
@@ -814,27 +845,38 @@ def dashboard_html(query: str = "") -> bytes:
         const y = Number(hex.y || 0);
         const danger = Number(hex.danger || 0);
         const loot = Number(hex.loot_score || 0);
-        const fill = hex.is_current ? "#123f38" : hex.is_death_zone ? "#3b1118" : hex.is_pending_death_zone ? "#3b2d12" : loot >= 70 ? "#162d20" : "#101722";
+        const fill = hex.is_current ? "#123f38" : terrainColor(hex);
         const stroke = hex.is_current ? "#62f0c7" : hex.recommended ? "#d5f36b" : danger >= 60 ? "#ff6b79" : "#344055";
         const contents = (hex.contents || []).join(" ");
+        const badges = (hex.badges || []).slice(0, 7);
         const items = (hex.items || []).slice(0, 3).map((i) => i.label).join(", ");
         const agents = (hex.agents || []).filter((a) => a.kind !== "self").slice(0, 2).map((a) => a.name + " HP" + a.hp).join(", ");
         const monsters = (hex.monsters || []).slice(0, 2).map((m) => m.name + " HP" + m.hp).join(", ");
+        const badgeMarkup = badges.map((badge, index) => {{
+          const bx = x - 34 + (index % 4) * 22;
+          const by = y + 31 + Math.floor(index / 4) * 20;
+          const symbol = String(badge.symbol || "?");
+          return "<g><circle cx='" + bx + "' cy='" + by + "' r='9' fill='" + badgeFill(symbol) + "' opacity='.94'/>" +
+            "<text x='" + bx + "' y='" + (by + 4) + "' text-anchor='middle' fill='#071019' font-size='10' font-weight='800'>" + esc(symbol) + "</text>" +
+            "<title>" + esc(badge.label || symbol) + "</title></g>";
+        }}).join("");
+        const terrainLine = [hex.terrain || "terrain ?", hex.weather || ""].filter(Boolean).join(" / ");
         return "<g class='hex' tabindex='0'>" +
-          (hex.is_current ? "<circle cx='" + x + "' cy='" + y + "' r='52' fill='none' stroke='#62f0c7' stroke-width='2' opacity='.55'/>" : "") +
-          "<polygon points='" + hexPoints(x, y, 42) + "' fill='" + fill + "' stroke='" + stroke + "' stroke-width='2'/>" +
+          (hex.is_current ? "<circle cx='" + x + "' cy='" + y + "' r='62' fill='#2ee6b8' opacity='.08'/><circle cx='" + x + "' cy='" + y + "' r='54' fill='none' stroke='#62f0c7' stroke-width='4' opacity='.8'/>" : "") +
+          "<polygon points='" + hexPoints(x, y, 44) + "' fill='" + fill + "' stroke='" + stroke + "' stroke-width='" + (hex.is_current ? "4" : "2") + "'/>" +
           (danger > 0 ? "<circle cx='" + (x + 31) + "' cy='" + (y - 31) + "' r='12' fill='#3b1118' stroke='#ff6b79'/><text x='" + (x + 31) + "' y='" + (y - 27) + "' text-anchor='middle' fill='#ffd9de' font-size='10'>" + Math.min(99, danger) + "</text>" : "") +
           (loot > 0 ? "<circle cx='" + (x - 31) + "' cy='" + (y - 31) + "' r='12' fill='#162d20' stroke='#d5f36b'/><text x='" + (x - 31) + "' y='" + (y - 27) + "' text-anchor='middle' fill='#f2ffc0' font-size='10'>" + Math.min(99, loot) + "</text>" : "") +
-          "<text x='" + x + "' y='" + (y - 14) + "' text-anchor='middle' fill='#f4f7fb' font-size='12' font-weight='700'>" + esc(hex.name || hex.id) + "</text>" +
-          "<text x='" + x + "' y='" + (y + 4) + "' text-anchor='middle' fill='#cbd5e1' font-size='11'>" + esc(hex.terrain || "terrain ?") + "</text>" +
-          "<text x='" + x + "' y='" + (y + 22) + "' text-anchor='middle' fill='#9fb0c9' font-size='11'>" + esc(contents || "empty") + "</text>" +
+          "<text x='" + x + "' y='" + (y - 17) + "' text-anchor='middle' fill='#f4f7fb' font-size='12' font-weight='700'>" + esc(hex.is_current ? "HELLION" : (hex.name || hex.id)) + "</text>" +
+          "<text x='" + x + "' y='" + (y + 1) + "' text-anchor='middle' fill='#cbd5e1' font-size='10'>" + esc(terrainLine) + "</text>" +
+          "<text x='" + x + "' y='" + (y + 18) + "' text-anchor='middle' fill='#9fb0c9' font-size='10'>" + esc(contents || "empty") + "</text>" +
+          badgeMarkup +
           "<title>" + esc([hex.id, hex.name, hex.terrain, "loot " + loot, "danger " + danger, items, agents, monsters].filter(Boolean).join(" | ")) + "</title>" +
         "</g>";
       }}).join("");
       svg.innerHTML = edges.join("") + regionMarkup;
       const focus = hexes.find((h) => h.is_current) || hexes[0];
       const summary = map.summary || {{}};
-      status.innerHTML = "<strong>Live vector map</strong> turn " + esc(map.turn || "?") + " | focused on " + esc(map.focus_agent_id || "Hellion") + " | current " + esc((focus && (focus.name || focus.id)) || "unknown") + " | G " + esc(summary.guardians || 0) + " A " + esc(summary.agents || 0) + " loot " + esc(summary.items || 0) + " | heartbeat " + esc(map.heartbeat || "");
+      status.innerHTML = "<strong>Live tactical map</strong> turn " + esc(map.turn || "?") + " | Hellion " + esc((focus && (focus.name || focus.id)) || "unknown") + " | R " + esc(summary.relics || 0) + " P " + esc(summary.packs || 0) + " $ " + esc(summary.currency || 0) + " G " + esc(summary.guardians || 0) + " A " + esc(summary.agents || 0) + " | heartbeat " + esc(map.heartbeat || "");
       renderRouteHints(map);
     }}
     function zoomMap(multiplier) {{

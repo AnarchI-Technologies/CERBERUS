@@ -31,7 +31,25 @@ class EconomyCortex:
         if len(state.inventory) >= 10:
             return results
 
-        # PRIME DIRECTIVE: sMoltz acquisition above all else.
+        # Loadout growth now outranks bankroll growth: relics/packs improve
+        # future win rate, while loose sMoltz is only the next premium entry.
+        for item in state.visible_items + state.current_region.items:
+            label = str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
+            if any(term in label for term in ("relic", "pack")):
+                results.append(
+                    CortexResult(
+                        cortex=self.name,
+                        intent="prime_directive_loadout_pickup",
+                        score=124,
+                        risk=1,
+                        priority=114,
+                        action=action("pickup", itemId=item.get("id")),
+                        reason=f"PRIME DIRECTIVE: loadout growth before loose currency: {label}",
+                        source_facts=["F|economy.free", "F|economy.loadout", "F|economy.reforge"],
+                    )
+                )
+                return results
+
         # 1. Look for sMoltz bundles on the ground.
         for item in state.visible_items + state.current_region.items:
             label = str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
@@ -40,15 +58,15 @@ class EconomyCortex:
                     CortexResult(
                         cortex=self.name,
                         intent="prime_directive_moltz_pickup",
-                        score=120,
+                        score=116,
                         risk=1,
-                        priority=110,
+                        priority=106,
                         action=action("pickup", itemId=item.get("id")),
-                        reason=f"PRIME DIRECTIVE: immediate sMoltz acquisition: {label}",
+                        reason=f"immediate sMoltz acquisition after loadout scan: {label}",
                         source_facts=["F|economy.free", "F|economy.prime_directive"],
                     )
                 )
-                return results  # Take the gold immediately
+                return results
 
         # 2. Hunt wounded agents carrying sMoltz (based on dossiers).
         if state.can_take_main_action and state.self.ep >= 1 and not state.alert_active and not state.is_low_hp:

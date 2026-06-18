@@ -46,11 +46,18 @@ def build_live_map(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         "legend": {
             "H": "Hellion",
             "A": "agent",
-            "G": "guardian/monster",
+            "G": "guardian",
+            "!": "monster/threat",
             "W": "weapon",
-            "M": "Moltz/sMoltz",
-            "R": "ruin/relic",
+            "$": "Moltz/sMoltz",
+            "R": "relic",
+            "P": "pack",
+            "+": "heal/medical",
+            "B": "broadcast",
+            "S": "supply cache",
             "U": "utility",
+            "D": "death zone",
+            "~": "weather/terrain",
         },
     }
 
@@ -63,6 +70,12 @@ def _map_summary(hexes: list[dict[str, Any]]) -> dict[str, Any]:
         "items": sum(len(region.get("items", [])) for region in hexes),
         "weapons": sum(len([item for item in region.get("items", []) if item.get("kind") == "weapon"]) for region in hexes),
         "currency": sum(len([item for item in region.get("items", []) if item.get("kind") == "currency"]) for region in hexes),
+        "relics": sum(len([item for item in region.get("items", []) if item.get("kind") == "relic"]) for region in hexes),
+        "packs": sum(len([item for item in region.get("items", []) if item.get("kind") == "pack"]) for region in hexes),
+        "medical": sum(len([item for item in region.get("interactables", []) if item.get("kind") == "medical"]) for region in hexes),
+        "broadcast": sum(len([item for item in region.get("interactables", []) if item.get("kind") == "broadcast"]) for region in hexes),
+        "utilities": sum(len(region.get("interactables", [])) for region in hexes),
+        "moltz_targets": sum(len([agent for agent in region.get("agents", []) if agent.get("carries_value")]) for region in hexes),
         "recommended_routes": sum(1 for region in hexes if region.get("recommended")),
         "death_zones": sum(1 for region in hexes if region.get("is_death_zone")),
     }
@@ -73,6 +86,18 @@ def _dedupe_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
     for item in items:
         key = str(item.get("id") or item.get("typeId") or item.get("type") or item.get("name") or len(out))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
+def _dedupe_interactables(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        key = str(item.get("id") or item.get("type") or item.get("name") or len(out))
         if key in seen:
             continue
         seen.add(key)
@@ -118,7 +143,7 @@ def _region_payload(region: dict[str, Any], state: TurnState) -> dict[str, Any]:
     )
     if is_current:
         items = _dedupe_items([*items, *state.visible_items])
-        interactables = [*interactables, *state.current_region.interactables]
+        interactables = _dedupe_interactables([*interactables, *state.current_region.interactables])
     visible_agents = [
         agent
         for agent in state.visible_agents
@@ -141,6 +166,8 @@ def _region_payload(region: dict[str, Any], state: TurnState) -> dict[str, Any]:
                 "ep": state.self.ep,
                 "atk": state.self.atk,
                 "defense": state.self.defense,
+                "symbol": "H",
+                "carries_value": False,
             },
         )
     return {
@@ -148,6 +175,8 @@ def _region_payload(region: dict[str, Any], state: TurnState) -> dict[str, Any]:
         "name": scrub_scalar(region.get("name") or state.current_region.name or region_id or "Unknown", limit=64),
         "terrain": scrub_scalar(region.get("terrain") or "", limit=48),
         "weather": scrub_scalar(region.get("weather") or "", limit=48),
+        "terrain_symbol": _terrain_symbol(str(region.get("terrain") or "")),
+        "weather_symbol": _weather_symbol(str(region.get("weather") or "")),
         "is_death_zone": bool(region.get("isDeathZone") or region.get("isDeathzone") or region.get("deathZone")),
         "is_pending_death_zone": region_id in state.pending_deathzone_ids,
         "is_current": is_current,
@@ -174,6 +203,7 @@ def _hex_for_region(region: dict[str, Any], index: int, state: TurnState) -> dic
         "x": x,
         "y": y,
         "contents": contents,
+        "badges": _badges(region, contents),
         "loot_score": score,
         "recommended": bool(score >= 50 and not region.get("is_death_zone")),
         "danger": _danger_score(region, state),
@@ -202,6 +232,8 @@ def _contents(region: dict[str, Any]) -> list[str]:
     labels: list[str] = []
     if region.get("is_current"):
         labels.append("H")
+    if region.get("is_death_zone"):
+        labels.append("D")
     if region.get("monsters"):
         labels.append("G")
     if any(agent.get("kind") != "self" for agent in region.get("agents", [])):
@@ -211,12 +243,55 @@ def _contents(region: dict[str, Any]) -> list[str]:
         if kind == "weapon":
             labels.append("W")
         elif kind == "currency":
-            labels.append("M")
-        elif kind in {"relic", "pack"}:
+            labels.append("$")
+        elif kind == "relic":
             labels.append("R")
+        elif kind == "pack":
+            labels.append("P")
+        elif kind == "heal":
+            labels.append("+")
+        elif kind == "supply":
+            labels.append("S")
     if region.get("interactables"):
-        labels.append("U")
+        for utility in region.get("interactables", []):
+            labels.append(str(utility.get("symbol") or "U"))
+    if region.get("terrain_symbol") or region.get("weather_symbol"):
+        labels.append("~")
     return list(dict.fromkeys(labels))
+
+
+def _badges(region: dict[str, Any], contents: list[str]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for symbol in contents:
+        out.append({"symbol": symbol, "kind": "status", "label": symbol, "priority": _symbol_priority(symbol)})
+    for item in region.get("items", []):
+        out.append(
+            {
+                "symbol": item.get("symbol") or "?",
+                "kind": item.get("kind") or "item",
+                "label": item.get("label") or "item",
+                "priority": int(item.get("score") or 0),
+            }
+        )
+    for utility in region.get("interactables", []):
+        out.append(
+            {
+                "symbol": utility.get("symbol") or "U",
+                "kind": utility.get("kind") or "utility",
+                "label": utility.get("label") or "utility",
+                "priority": 70,
+            }
+        )
+    unique: dict[tuple[str, str], dict[str, Any]] = {}
+    for badge in out:
+        key = (str(badge.get("symbol") or ""), str(badge.get("label") or ""))
+        if key not in unique or int(badge.get("priority") or 0) > int(unique[key].get("priority") or 0):
+            unique[key] = badge
+    return sorted(unique.values(), key=lambda item: int(item.get("priority") or 0), reverse=True)[:9]
+
+
+def _symbol_priority(symbol: str) -> int:
+    return {"H": 200, "D": 160, "G": 135, "!": 130, "A": 120, "R": 115, "P": 100, "$": 90, "W": 85, "+": 75, "B": 72, "S": 70, "U": 60, "~": 30}.get(symbol, 20)
 
 
 def _loot_score(region: dict[str, Any]) -> int:
@@ -266,26 +341,52 @@ def _item_marker(item: dict[str, Any]) -> dict[str, Any]:
     score = 10
     if any(term in lowered for term in ("dagger", "sword", "katana", "bow", "pistol", "sniper", "weapon")):
         kind = "weapon"
-        score = 75
+        score = 85
+        symbol = "W"
     elif "moltz" in lowered or "smoltz" in lowered:
         kind = "currency"
         score = 90
+        symbol = "$"
     elif "relic" in lowered:
         kind = "relic"
-        score = 85
+        score = 115
+        symbol = "R"
     elif "pack" in lowered:
         kind = "pack"
-        score = 80
+        score = 100
+        symbol = "P"
     elif "medkit" in lowered or "bandage" in lowered:
         kind = "heal"
-        score = 65
-    return {"id": scrub_scalar(item.get("id") or "", limit=48), "label": label, "kind": kind, "score": score}
+        score = 75
+        symbol = "+"
+    elif any(term in lowered for term in ("supply", "cache", "crate")):
+        kind = "supply"
+        score = 90
+        symbol = "S"
+    else:
+        symbol = "?"
+    return {"id": scrub_scalar(item.get("id") or "", limit=48), "label": label, "kind": kind, "score": score, "symbol": symbol}
 
 
 def _interactable_marker(item: dict[str, Any]) -> dict[str, Any]:
+    label = scrub_scalar(item.get("type") or item.get("name") or item.get("id") or "utility", limit=64)
+    lowered = label.lower()
+    kind = "utility"
+    symbol = "U"
+    if any(term in lowered for term in ("medical", "medbay", "hospital", "heal")):
+        kind = "medical"
+        symbol = "+"
+    elif any(term in lowered for term in ("broadcast", "tower", "radio", "signal")):
+        kind = "broadcast"
+        symbol = "B"
+    elif any(term in lowered for term in ("shop", "forge", "reforge")):
+        kind = "shop"
+        symbol = "U"
     return {
         "id": scrub_scalar(item.get("id") or "", limit=48),
-        "label": scrub_scalar(item.get("type") or item.get("name") or item.get("id") or "utility", limit=64),
+        "label": label,
+        "kind": kind,
+        "symbol": symbol,
     }
 
 
@@ -294,11 +395,47 @@ def _agent_marker(agent: Any) -> dict[str, Any]:
         "id": scrub_scalar(agent.id, limit=48),
         "name": scrub_scalar(agent.name or agent.id[:8], limit=48),
         "kind": "monster" if _agent_looks_guardian(agent) else agent.kind,
+        "symbol": _agent_symbol(agent),
+        "carries_value": _agent_carries_value(agent),
         "hp": agent.hp,
         "ep": agent.ep,
         "atk": agent.atk,
         "defense": agent.defense,
     }
+
+
+def _agent_symbol(agent: Any) -> str:
+    if getattr(agent, "kind", "") == "self":
+        return "H"
+    return "G" if _agent_looks_guardian(agent) else "A"
+
+
+def _agent_carries_value(agent: Any) -> bool:
+    raw = getattr(agent, "raw", {})
+    label = f"{getattr(agent, 'name', '')} {getattr(agent, 'id', '')}".lower()
+    if isinstance(raw, dict):
+        label += " " + " ".join(str(raw.get(key) or "") for key in ("moltz", "smoltz", "balance", "loot", "bounty", "carrying"))
+    return any(term in label.lower() for term in ("moltz", "smoltz", "bounty", "carrier", "carrying"))
+
+
+def _terrain_symbol(terrain: str) -> str:
+    lowered = terrain.lower()
+    if "ruin" in lowered:
+        return "R"
+    if "water" in lowered or "river" in lowered:
+        return "~"
+    if "mount" in lowered or "rock" in lowered:
+        return "^"
+    if "forest" in lowered or "thorn" in lowered:
+        return "*"
+    return ""
+
+
+def _weather_symbol(weather: str) -> str:
+    lowered = weather.lower()
+    if any(term in lowered for term in ("storm", "rain", "fog", "snow", "ash")):
+        return "~"
+    return ""
 
 
 def _agent_looks_guardian(agent: Any) -> bool:
