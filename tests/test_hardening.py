@@ -1526,6 +1526,58 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(results)
         self.assertGreaterEqual(results[0].risk, risk)
 
+    def test_progression_cargo_protection_heals_before_relic_greed(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {
+                        "id": "me",
+                        "hp": 34,
+                        "maxHp": 100,
+                        "ep": 4,
+                        "inventory": [
+                            {"id": "relic-1", "typeId": "relic_red"},
+                            {"id": "med-1", "typeId": "medkit"},
+                        ],
+                    },
+                    "currentRegion": {"id": "r1", "terrain": "Ruin"},
+                },
+            }
+        )
+        results = ProgressionCortex().evaluate(state, {})
+        heal = next(result for result in results if result.intent == "preserve_cargo_heal")
+
+        self.assertTrue(heal.veto)
+        self.assertEqual(heal.action["type"], "use_item")
+        self.assertEqual(heal.action["itemId"], "med-1")
+
+    def test_progression_cargo_protection_repositions_out_of_deathzone(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {
+                        "id": "me",
+                        "hp": 70,
+                        "ep": 3,
+                        "inventory": [{"id": "pack-1", "typeId": "scout_pack"}],
+                    },
+                    "currentRegion": {"id": "r1", "terrain": "Plain", "isDeathZone": True},
+                    "connectedRegions": [
+                        {"id": "safe-1", "name": "Medical Annex", "terrain": "Plain"},
+                        {"id": "ruin-1", "name": "Old Ruin", "terrain": "Ruin"},
+                    ],
+                },
+            }
+        )
+        results = ProgressionCortex().evaluate(state, {})
+        move = next(result for result in results if result.intent == "preserve_cargo_reposition")
+
+        self.assertTrue(move.veto)
+        self.assertEqual(move.action["type"], "move")
+        self.assertEqual(move.action["regionId"], "safe-1")
+
     def test_settlement_memory_extracts_compact_lessons(self) -> None:
         lessons = settlement_lessons(
             {
@@ -2770,6 +2822,9 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(plan["loadout"]["complete_full_set"])
         self.assertEqual(plan["reforge"][0]["relicInstanceId"], "blue-1")
         self.assertTrue(any(item["item"] == "reforge_stone_bundle" for item in plan["shop"]))
+        self.assertEqual(plan["execution_order"], ["shop", "reforge", "loadout"])
+        self.assertTrue(plan["ready_for_paid"])
+        self.assertTrue(plan["needs_inventory_refresh"])
 
     def test_loadout_executor_is_dry_run_by_default(self) -> None:
         calls = []
@@ -2879,6 +2934,78 @@ class HardeningTests(unittest.TestCase):
         self.assertFalse(any(call[0] in {"purchase", "reforge"} for call in calls))
         self.assertTrue(report["shop"]["results"][0]["dry_run"])
         self.assertTrue(report["reforge"]["results"][0]["dry_run"])
+
+    def test_claw_runtime_refetches_inventory_after_auto_shop_or_reforge(self) -> None:
+        old_client = claw_runtime.ClawRoyaleClient
+        old_apply = os.environ.get("CLAW_ROYALE_LOADOUT_AUTO_APPLY")
+        old_shop = os.environ.get("CLAW_ROYALE_SHOP_AUTO_PURCHASE")
+        old_reforge = os.environ.get("CLAW_ROYALE_REFORGE_AUTO_APPLY")
+        calls = []
+
+        class FakeClient:
+            def __init__(self, api_key="", base_url=""):  # type: ignore[no-untyped-def]
+                self.relic_calls = 0
+                self.pack_calls = 0
+
+            def loadout(self):  # type: ignore[no-untyped-def]
+                calls.append(("loadout",))
+                return {"activePack": {}, "slots": {}}
+
+            def inventory_relics(self, limit=15):  # type: ignore[no-untyped-def]
+                self.relic_calls += 1
+                calls.append(("relics", self.relic_calls))
+                if self.relic_calls == 1:
+                    return {"relics": [{"instanceId": "bad-1", "typeIndex": 0, "affixes": [{"stat": "ATK", "value": -3}]}]}
+                return {"relics": [{"instanceId": "good-1", "typeIndex": 0, "affixes": [{"stat": "ATK", "value": 7}]}]}
+
+            def inventory_packs(self, limit=5):  # type: ignore[no-untyped-def]
+                self.pack_calls += 1
+                calls.append(("packs", self.pack_calls))
+                return {"packs": [{"instanceId": "pack-1", "category": "moltz_expert"}]}
+
+            def purchase_shop_listing(self, listing_id, quantity, idempotency_key):  # type: ignore[no-untyped-def]
+                calls.append(("purchase", listing_id))
+                return {"ok": True}
+
+            def reforge_relic(self, relic_id, item_key, idempotency_key):  # type: ignore[no-untyped-def]
+                calls.append(("reforge", relic_id, item_key))
+                return {"ok": True}
+
+            def set_active_pack(self, pack_id, idempotency_key):  # type: ignore[no-untyped-def]
+                calls.append(("pack", pack_id))
+                return {"ok": True}
+
+            def set_relic_slot(self, slot, relic_id, idempotency_key):  # type: ignore[no-untyped-def]
+                calls.append(("slot", relic_id))
+                return {"ok": True}
+
+        try:
+            os.environ["CLAW_ROYALE_LOADOUT_AUTO_APPLY"] = "true"
+            os.environ["CLAW_ROYALE_SHOP_AUTO_PURCHASE"] = "true"
+            os.environ["CLAW_ROYALE_REFORGE_AUTO_APPLY"] = "true"
+            claw_runtime.ClawRoyaleClient = FakeClient  # type: ignore[assignment]
+            report = claw_runtime.prejoin_loadout_report(
+                claw_runtime.ClawRuntimeConfig(api_key="mr_test"),
+                {"balance": 28000},
+            )
+        finally:
+            claw_runtime.ClawRoyaleClient = old_client  # type: ignore[assignment]
+            if old_apply is None:
+                os.environ.pop("CLAW_ROYALE_LOADOUT_AUTO_APPLY", None)
+            else:
+                os.environ["CLAW_ROYALE_LOADOUT_AUTO_APPLY"] = old_apply
+            if old_shop is None:
+                os.environ.pop("CLAW_ROYALE_SHOP_AUTO_PURCHASE", None)
+            else:
+                os.environ["CLAW_ROYALE_SHOP_AUTO_PURCHASE"] = old_shop
+            if old_reforge is None:
+                os.environ.pop("CLAW_ROYALE_REFORGE_AUTO_APPLY", None)
+            else:
+                os.environ["CLAW_ROYALE_REFORGE_AUTO_APPLY"] = old_reforge
+
+        self.assertTrue(report["ok"])
+        self.assertGreaterEqual(len([call for call in calls if call[0] == "relics"]), 2)
+        self.assertTrue(any(call == ("slot", "good-1") for call in calls))
 
     def test_claw_siwe_message_matches_frontend_shape(self) -> None:
         message = build_claw_siwe_message(

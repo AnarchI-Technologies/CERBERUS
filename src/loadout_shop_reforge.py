@@ -266,12 +266,36 @@ def build_prejoin_plan(
     balance_smoltz: float = 0,
 ) -> dict[str, Any]:
     loadout_plan = choose_best_loadout(loadout, relics, packs)
+    reforge = reforge_candidates(relics)
+    shop = shop_recommendations(balance_smoltz=balance_smoltz, relics_payload=relics, packs_payload=packs)
+    execution_order = prejoin_execution_order(loadout_plan=loadout_plan, reforge=reforge, shop=shop)
     return {
         "ok": True,
         "loadout": loadout_plan,
-        "reforge": reforge_candidates(relics),
-        "shop": shop_recommendations(balance_smoltz=balance_smoltz, relics_payload=relics, packs_payload=packs),
+        "reforge": reforge,
+        "shop": shop,
+        "execution_order": execution_order,
+        "ready_for_paid": bool(loadout_plan.get("complete_full_set")),
+        "needs_inventory_refresh": any(step in execution_order for step in ("shop", "reforge")),
     }
+
+
+def prejoin_execution_order(
+    *,
+    loadout_plan: dict[str, Any],
+    reforge: list[dict[str, Any]],
+    shop: list[dict[str, Any]],
+) -> list[str]:
+    order: list[str] = []
+    if shop:
+        order.append("shop")
+    if reforge:
+        order.append("reforge")
+    if loadout_plan.get("operations"):
+        order.append("loadout")
+    if not order:
+        order.append("hold")
+    return order
 
 
 def execute_loadout_operations(client: Any, operations: list[dict[str, Any]], *, dry_run: bool = True) -> dict[str, Any]:

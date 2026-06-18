@@ -944,11 +944,6 @@ def prejoin_loadout_report(config: ClawRuntimeConfig, account: dict[str, Any] | 
         packs = client.inventory_packs(limit=int(os.getenv("CLAW_ROYALE_LOADOUT_PACK_LIMIT", "5") or 5))
         balance = _balance_float((account or {}).get("balance"))
         plan = build_prejoin_plan(loadout=loadout, relics=relics, packs=packs, balance_smoltz=balance)
-        apply_result = execute_loadout_operations(
-            client,
-            plan.get("loadout", {}).get("operations", []),
-            dry_run=not loadout_auto_apply_enabled(),
-        )
         shop_result = execute_shop_recommendations(
             client,
             plan.get("shop", []),
@@ -958,6 +953,19 @@ def prejoin_loadout_report(config: ClawRuntimeConfig, account: dict[str, Any] | 
             client,
             plan.get("reforge", []),
             dry_run=not reforge_auto_apply_enabled(),
+        )
+        if (
+            (shop_auto_purchase_enabled() and plan.get("shop"))
+            or (reforge_auto_apply_enabled() and plan.get("reforge"))
+        ):
+            loadout = client.loadout()
+            relics = client.inventory_relics(limit=int(os.getenv("CLAW_ROYALE_LOADOUT_RELIC_LIMIT", "15") or 15))
+            packs = client.inventory_packs(limit=int(os.getenv("CLAW_ROYALE_LOADOUT_PACK_LIMIT", "5") or 5))
+            plan = build_prejoin_plan(loadout=loadout, relics=relics, packs=packs, balance_smoltz=balance)
+        apply_result = execute_loadout_operations(
+            client,
+            plan.get("loadout", {}).get("operations", []),
+            dry_run=not loadout_auto_apply_enabled(),
         )
         return {
             "ok": True,
