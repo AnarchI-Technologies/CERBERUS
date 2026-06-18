@@ -13,10 +13,20 @@ from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now
 
 
 _RUNTIME_AGENT_ID: ContextVar[str] = ContextVar("cerberus_runtime_agent_id", default="")
+_MEMORY_DIR_OVERRIDE: ContextVar[str] = ContextVar("cerberus_runtime_memory_dir", default="")
 
 
 def memory_dir() -> Path:
-    return Path(os.getenv("CERBERUS_MEMORY_DIR") or DEFAULT_MEMORY_DIR)
+    override = str(_MEMORY_DIR_OVERRIDE.get() or "").strip()
+    return Path(override or os.getenv("CERBERUS_MEMORY_DIR") or DEFAULT_MEMORY_DIR)
+
+
+def set_runtime_memory_dir(path: str | Path):
+    return _MEMORY_DIR_OVERRIDE.set(str(path))
+
+
+def reset_runtime_memory_dir(token: Any) -> None:
+    _MEMORY_DIR_OVERRIDE.reset(token)
 
 
 def normalize_agent_id(agent_id: str | None = None) -> str:

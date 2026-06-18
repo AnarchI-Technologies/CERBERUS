@@ -39,6 +39,7 @@ import env_loader
 import lesson_compiler
 import memory_system
 import profit_simulator
+import isolated_runtime
 import owner_command_cortex
 import social_runtime
 import loadout_shop_reforge
@@ -1713,6 +1714,108 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(result["processed"], 1)
         self.assertEqual(queue[0]["status"], "sent")
 
+    def test_social_runtime_requeues_transient_failures_before_marking_failed(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+
+        class FlakyClient:
+            def post_draft(self, draft):  # type: ignore[no-untyped-def]
+                return {"ok": False, "skipped": False, "reason": "server strain", "draft": draft}
+
+            def follow(self, effect):  # type: ignore[no-untyped-def]
+                return {"ok": False, "skipped": False, "reason": "server strain", "effect": effect}
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                social_runtime.enqueue_social_effects(
+                    [{"type": "moltybook_draft", "category": "test", "content": "retry me"}]
+                )
+                first = social_runtime.drain_social_queue_once(client=FlakyClient(), max_items=1, max_retry_attempts=3)
+                second = social_runtime.drain_social_queue_once(client=FlakyClient(), max_items=1, max_retry_attempts=3)
+                third = social_runtime.drain_social_queue_once(client=FlakyClient(), max_items=1, max_retry_attempts=3)
+                queue = social_runtime.social_queue()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertTrue(third["ok"])
+        self.assertEqual(first["results"][0]["reason"], "server strain")
+        self.assertEqual(second["results"][0]["reason"], "server strain")
+        self.assertEqual(queue[0]["attempts"], 3)
+        self.assertEqual(queue[0]["status"], "failed")
+        self.assertEqual(queue[0]["last_result"]["reason"], "server strain")
+
+    def test_social_runtime_requeues_before_retry_limit(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+
+        class FlakyClient:
+            def post_draft(self, draft):  # type: ignore[no-untyped-def]
+                return {"ok": False, "skipped": False, "reason": "temporary", "draft": draft}
+
+            def follow(self, effect):  # type: ignore[no-untyped-def]
+                return {"ok": False, "skipped": False, "reason": "temporary", "effect": effect}
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                social_runtime.enqueue_social_effects(
+                    [{"type": "moltybook_draft", "category": "test", "content": "retry me once"}]
+                )
+                result = social_runtime.drain_social_queue_once(client=FlakyClient(), max_items=1, max_retry_attempts=3)
+                queue = social_runtime.social_queue()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(queue[0]["attempts"], 1)
+        self.assertEqual(queue[0]["status"], "queued")
+        self.assertEqual(queue[0]["last_result"]["reason"], "temporary")
+
+    def test_social_runtime_surfaces_queue_write_failures(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        old_write_json = social_runtime.write_json
+
+        class FakeClient:
+            def post_draft(self, draft):  # type: ignore[no-untyped-def]
+                return {"ok": True, "draft": draft}
+
+            def follow(self, effect):  # type: ignore[no-untyped-def]
+                return {"ok": True, "effect": effect}
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                social_runtime.write_json = lambda path, payload: False  # type: ignore[assignment]
+                with self.assertRaises(OSError):
+                    social_runtime.enqueue_social_effects(
+                        [{"type": "moltybook_draft", "category": "test", "content": "drop me"}]
+                    )
+
+                social_runtime.write_json = old_write_json  # type: ignore[assignment]
+                social_runtime.enqueue_social_effects(
+                    [{"type": "moltybook_draft", "category": "test", "content": "persisted"}]
+                )
+                social_runtime.write_json = lambda path, payload: False  # type: ignore[assignment]
+                result = social_runtime.drain_social_queue_once(client=FakeClient(), max_items=1)
+        finally:
+            social_runtime.write_json = old_write_json  # type: ignore[assignment]
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "social queue write failed")
+        self.assertEqual(result["processed"], 1)
+
     def test_social_worker_is_disabled_by_default_and_can_run_once(self) -> None:
         old_enabled = os.environ.get("CERBERUS_SOCIAL_WORKER_ENABLED")
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
@@ -2042,6 +2145,77 @@ class HardeningTests(unittest.TestCase):
                 os.environ.pop("CERBERUS_PIN", None)
             else:
                 os.environ["CERBERUS_PIN"] = old_pin
+
+    def test_isolated_instance_keeps_social_queue_out_of_live_memory_dir(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        old_pin = os.environ.get("CERBERUS_PIN")
+        os.environ["CERBERUS_PIN"] = "2222"
+        try:
+            with tempfile.TemporaryDirectory() as live_tmp:
+                with tempfile.TemporaryDirectory() as isolated_tmp:
+                    os.environ["CERBERUS_MEMORY_DIR"] = live_tmp
+                    isolated = self._isolated(isolated_tmp)
+                    action = isolated.tick(
+                        {
+                            "turn": 1,
+                            "view": {
+                                "self": {"id": "me", "hp": 100, "ep": 3, "equippedWeapon": {"typeId": "katana"}},
+                                "currentRegion": {"id": "r1", "interactables": [{"type": "broadcast_station"}]},
+                                "visibleAgents": [{"id": "enemy-1", "name": "Rival", "moltybookHandle": "@enemy"}],
+                            },
+                            "events": [{"type": "agent_kill", "data": {"killerId": "me", "victimId": "enemy-1", "victimName": "Rival"}}],
+                        }
+                    )
+                    isolated_queue = Path(isolated_tmp) / "isolated" / "social_runtime_queue.json"
+                    live_queue = Path(live_tmp) / "social_runtime_queue.json"
+                    self.assertTrue(any(effect.get("type") == "social_queue_updated" for effect in action.get("_side_effects", [])))
+                    self.assertTrue(isolated_queue.exists())
+                    self.assertFalse(live_queue.exists())
+        finally:
+            if old_pin is None:
+                os.environ.pop("CERBERUS_PIN", None)
+            else:
+                os.environ["CERBERUS_PIN"] = old_pin
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+    def test_runtime_state_memory_dir_override_takes_precedence_and_resets(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as live_tmp:
+                with tempfile.TemporaryDirectory() as isolated_tmp:
+                    os.environ["CERBERUS_MEMORY_DIR"] = live_tmp
+                    self.assertEqual(runtime_state.memory_dir(), Path(live_tmp))
+                    token = runtime_state.set_runtime_memory_dir(isolated_tmp)
+                    self.assertEqual(runtime_state.memory_dir(), Path(isolated_tmp))
+                    runtime_state.reset_runtime_memory_dir(token)
+                    self.assertEqual(runtime_state.memory_dir(), Path(live_tmp))
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+    def test_isolated_instance_restores_live_memory_dir_after_tick_failure(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        old_tick = isolated_runtime.cerberus_tick
+        try:
+            with tempfile.TemporaryDirectory() as live_tmp:
+                with tempfile.TemporaryDirectory() as isolated_tmp:
+                    os.environ["CERBERUS_MEMORY_DIR"] = live_tmp
+                    isolated_runtime.cerberus_tick = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))  # type: ignore[assignment]
+                    isolated = self._isolated(isolated_tmp)
+                    with self.assertRaisesRegex(RuntimeError, "boom"):
+                        isolated.tick({"turn": 1, "view": {"self": {"id": "me"}, "currentRegion": {"id": "r1"}}})
+                    self.assertEqual(runtime_state.memory_dir(), Path(live_tmp))
+        finally:
+            isolated_runtime.cerberus_tick = old_tick  # type: ignore[assignment]
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
 
     def test_wallet_purpose_map_routes_game_needs(self) -> None:
         identity = empty_identity()
