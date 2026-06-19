@@ -39,6 +39,10 @@ def _record_tendencies(record: Any) -> set[str]:
     return {str(item).lower() for item in tendencies if item}
 
 
+def _has_tendency(tendencies: set[str], *markers: str) -> bool:
+    return any(marker in tendency for marker in markers for tendency in tendencies)
+
+
 def death_pressure(store: CompactMemoryStore | None) -> int:
     markers = ("failure:", "eliminated us", "killed_us", "agent_dead", "deathzone", "death zone")
     return sum(1 for lesson in _lesson_texts(store) if any(marker in lesson for marker in markers))
@@ -224,6 +228,26 @@ class LearnedPolicyCortex:
                             action=action("attack", targetId=agent.id, targetType="agent"),
                             reason=f"retained lesson: {agent.name or agent.id[:8]} folds under pressure; take the favorable fight",
                             source_facts=["D|social.dossiers", "L|opponents.fragile_pattern", "F|combat.range"],
+                        )
+                    )
+
+                if (
+                    in_range
+                    and not state.is_low_hp
+                    and is_worth_attacking(state, agent)
+                    and _has_tendency(tendencies, "collects_smoltz", "collects_high_value_loot", "collects_loadout")
+                ):
+                    applied.append("intercept_known_loot_carrier")
+                    results.append(
+                        CortexResult(
+                            cortex=self.name,
+                            intent="apply_known_loot_carrier_lesson",
+                            score=86 if _has_tendency(tendencies, "collects_smoltz") else 83,
+                            risk=max(5, agent.atk * 0.55),
+                            priority=85,
+                            action=action("attack", targetId=agent.id, targetType="agent"),
+                            reason=f"retained lesson: {agent.name or agent.id[:8]} tends to leave fights with value; intercept before they cash out",
+                            source_facts=["D|social.dossiers", "L|economy.loot_carrier", "F|combat.range"],
                         )
                     )
 

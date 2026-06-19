@@ -625,6 +625,50 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(any("validated strat from ally-1" in lesson for lesson in lessons))
         self.assertTrue(any(note.startswith("validated:") for note in dossier.social_notes))
 
+    def test_tick_learns_observed_loot_winner_as_future_intercept_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            isolated = self._isolated(tmp)
+            isolated.tick(
+                {
+                    "view": {
+                        "self": {"id": "me", "name": "Hellion", "hp": 100, "ep": 4, "isAlive": True},
+                        "currentRegion": {"id": "r1", "name": "Arena Ring"},
+                    },
+                    "events": [
+                        {
+                            "type": "relic_acquired",
+                            "data": {"agentId": "enemy-7", "agentName": "Carrier", "contentType": "relic_red"},
+                        }
+                    ],
+                }
+            )
+
+            action = isolated.tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 95,
+                            "maxHp": 100,
+                            "ep": 4,
+                            "atk": 28,
+                            "inventory": [],
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "currentRegion": {"id": "r1", "name": "Arena Ring"},
+                        "visibleAgents": [{"id": "enemy-7", "name": "Carrier", "hp": 34, "atk": 8, "def": 2, "regionId": "r1"}],
+                    },
+                }
+            )
+            dossier = isolated.dossiers.records["enemy-7"]
+
+        self.assertIn("collects_high_value_loot", dossier.observed_tendencies)
+        self.assertIn("collects_loadout", dossier.observed_tendencies)
+        self.assertEqual(action["type"], "attack")
+        self.assertEqual(action["targetId"], "enemy-7")
+        self.assertIn("tends to leave fights with value", action["reason"])
+
     def test_cannot_act_blocks_main_actions_but_free_equip_still_works(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             isolated = self._isolated(tmp)
