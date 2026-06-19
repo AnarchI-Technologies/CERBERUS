@@ -290,6 +290,18 @@ def _event_bool(data: dict[str, Any], *keys: str) -> bool | None:
     return None
 
 
+def _normalized_loot_tendencies(item_name: str) -> list[str]:
+    label = "".join(ch.lower() if ch.isalnum() else "_" for ch in str(item_name))
+    label = "_".join(part for part in label.split("_") if part)[:48] or "loot"
+    tendencies = [f"collects_{label}"]
+    if any(term in label for term in ("moltz", "smoltz")):
+        tendencies.append("collects_smoltz")
+    if any(term in label for term in ("relic", "pack")):
+        tendencies.append("collects_high_value_loot")
+        tendencies.append("collects_loadout")
+    return tendencies
+
+
 def _event_names_self(data: dict[str, Any], state: TurnState) -> bool:
     names = {
         str(state.self.id or "").lower(),
@@ -345,6 +357,7 @@ def _remember_event_learning_or_warn(
 
             if is_death_event and victim:
                 if killer == state.self.id and victim != state.self.id:
+                    dossiers.record_kill(victim, name=victim_name)
                     dossiers.add_social_note(victim, f"lost_to_us@{region}"[:180])
                     memory.remember_lesson(
                         "combat",
@@ -394,7 +407,9 @@ def _remember_event_learning_or_warn(
                         confidence="0.77",
                     )
                 else:
-                    dossiers.observe_agent(actor, name=str(data.get("agentName") or actor[:8]), tendency=f"collects_{item_name}")
+                    actor_name = str(data.get("agentName") or actor[:8])
+                    for tendency in _normalized_loot_tendencies(item_name):
+                        dossiers.observe_agent(actor, name=actor_name, tendency=tendency)
                     memory.remember_lesson(
                         domain,
                         f"observed: another agent secured {item_name} in {region}",

@@ -180,7 +180,9 @@ class SocialCortex:
 
         victim_name = str(data.get("victimName") or data.get("targetName") or victim[:8])
         outsmarted = event_looks_outsmarted(event)
-        record = self.dossiers.record_kill(victim, name=victim_name, tricked=outsmarted)
+        record = self.dossiers.observe_agent(victim, name=victim_name)
+        if outsmarted:
+            record.tricked_into_death += 1
         content = self.persona.taunt_for(record.name or victim_name, outsmarted=outsmarted)
         draft = MoltyBookDraft(
             category="kill_taunt" if not outsmarted else "outsmart_taunt",
