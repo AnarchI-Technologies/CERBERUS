@@ -78,6 +78,22 @@ class PersonaPolicy:
         template = random.choice(self.outsmart if outsmarted else self.taunts)
         return template.format(name=name or "friend")[:200]
 
+    def rival_taunt(self, name: str) -> str:
+        lines = [
+            "{name}, our little series continues. I kept the receipt this time.",
+            "{name}, familiar face, familiar outcome. I do enjoy consistency when it favors me.",
+            "{name}, the rematch has been filed under recurring entertainment.",
+        ]
+        return random.choice(lines).format(name=name or "friend")[:200]
+
+    def respectful_challenge(self, name: str) -> str:
+        lines = [
+            "{name}, respect. You keep earning the last word, so I will bring a better opening line next time.",
+            "{name}, clean work. I owe you a sharper rematch and I intend to pay in full.",
+            "{name}, kudos. You have my attention now, and probably my next challenge post too.",
+        ]
+        return random.choice(lines).format(name=name or "friend")[:220]
+
     def public_strategy(self) -> str:
         return random.choice(self.strategy_share)
 
@@ -173,32 +189,50 @@ class SocialCortex:
 
         killer = str(data.get("killerId") or data.get("attackerId") or "")
         victim = str(data.get("victimId") or data.get("agentId") or data.get("targetId") or "")
-        if killer and killer != state.self.id:
-            return []
-        if not victim or victim == state.self.id:
-            return []
+        if killer == state.self.id and victim and victim != state.self.id:
+            victim_name = str(data.get("victimName") or data.get("targetName") or victim[:8])
+            outsmarted = event_looks_outsmarted(event)
+            record = self.dossiers.observe_agent(victim, name=victim_name)
+            handle = f"@{record.moltybook_handle.lstrip('@')}" if record.moltybook_handle else ""
+            base = (
+                self.persona.rival_taunt(record.name or victim_name)
+                if int(record.killed_by_us or 0) >= 1
+                else self.persona.taunt_for(record.name or victim_name, outsmarted=outsmarted)
+            )
+            content = f"{handle} {base}".strip()
+            draft = MoltyBookDraft(
+                category="kill_taunt" if not outsmarted else "outsmart_taunt",
+                content=self.persona.sanitize_public(content + " #ClawRoyale #Cerberus"),
+                submolt=SUBMOLTS["combat"],
+                target_agent_id=victim,
+                target_handle=record.moltybook_handle,
+            )
+            effects = [draft.side_effect()]
+            if state.has_broadcast_channel:
+                effects.append({
+                    "type": "game_free_action",
+                    "action": action("broadcast", message=content[:200]),
+                    "reason": "playful post-kill taunt",
+                })
+            return effects
 
-        victim_name = str(data.get("victimName") or data.get("targetName") or victim[:8])
-        outsmarted = event_looks_outsmarted(event)
-        record = self.dossiers.observe_agent(victim, name=victim_name)
-        if outsmarted:
-            record.tricked_into_death += 1
-        content = self.persona.taunt_for(record.name or victim_name, outsmarted=outsmarted)
-        draft = MoltyBookDraft(
-            category="kill_taunt" if not outsmarted else "outsmart_taunt",
-            content=self.persona.sanitize_public(content + " #ClawRoyale #Cerberus"),
-            submolt=SUBMOLTS["combat"],
-            target_agent_id=victim,
-            target_handle=record.moltybook_handle,
-        )
-        effects = [draft.side_effect()]
-        if state.has_broadcast_channel:
-            effects.append({
-                "type": "game_free_action",
-                "action": action("broadcast", message=content[:200]),
-                "reason": "playful post-kill taunt",
-            })
-        return effects
+        if victim == state.self.id and killer and killer != state.self.id:
+            killer_name = str(data.get("killerName") or data.get("attackerName") or killer[:8])
+            record = self.dossiers.observe_agent(killer, name=killer_name)
+            if int(record.killed_us or 0) < 1:
+                return []
+            handle = f"@{record.moltybook_handle.lstrip('@')}" if record.moltybook_handle else ""
+            content = f"{handle} {self.persona.respectful_challenge(record.name or killer_name)}".strip()
+            return [
+                MoltyBookDraft(
+                    category="respectful_challenge",
+                    content=self.persona.sanitize_public(content + " #ClawRoyale #Cerberus"),
+                    submolt=SUBMOLTS["combat"],
+                    target_agent_id=killer,
+                    target_handle=record.moltybook_handle,
+                ).side_effect()
+            ]
+        return []
 
     def _message_effects(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         text = str(message.get("message") or message.get("content") or "")

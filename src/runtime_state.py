@@ -69,6 +69,10 @@ def suggested_edits_file() -> Path:
     return memory_dir() / "suggested_edits.json"
 
 
+def social_event_stack_file() -> Path:
+    return memory_dir() / "social_event_stack.json"
+
+
 def stale_paid_rooms_file() -> Path:
     return memory_dir() / "stale_paid_rooms.json"
 
@@ -245,7 +249,7 @@ def append_suggested_edit(edit: dict[str, Any], *, limit: int = 100) -> list[dic
 
 
 def update_suggested_edit_status(edit_id: str, status: str, *, note: str = "", limit: int = 100) -> dict[str, Any]:
-    allowed = {"open", "approved", "rejected", "archived"}
+    allowed = {"open", "approved", "rejected", "archived", "hardened"}
     normalized = status.strip().lower()
     if normalized not in allowed:
         return {"ok": False, "error": "invalid_status", "allowed": sorted(allowed)}
@@ -259,6 +263,71 @@ def update_suggested_edit_status(edit_id: str, status: str, *, note: str = "", l
         edit["review_note"] = scrub_scalar(note, limit=220)
     write_json(suggested_edits_file(), {"edits": edits, "updated_at": int(time.time())})
     return {"ok": True, "edit": edit, "suggested_edits": edits}
+
+
+def approved_suggested_edits(limit: int = 100) -> list[dict[str, Any]]:
+    return [
+        item for item in suggested_edits(limit=limit)
+        if isinstance(item, dict) and str(item.get("status") or "") == "approved"
+    ]
+
+
+def social_event_stack(limit: int = 300, *, status: str = "") -> list[dict[str, Any]]:
+    rows = read_json(social_event_stack_file()).get("events", [])
+    if not isinstance(rows, list):
+        return []
+    cleaned = [item for item in rows if isinstance(item, dict)]
+    if status:
+        cleaned = [item for item in cleaned if str(item.get("status") or "queued") == status]
+    return cleaned[-max(1, limit):]
+
+
+def append_social_event(event: dict[str, Any], *, limit: int = 300) -> list[dict[str, Any]]:
+    rows = social_event_stack(limit=limit)
+    cleaned = _scrub_mapping(event, text_limit=260)
+    signature = stable_hash(
+        {
+            "kind": cleaned.get("kind", ""),
+            "agent_id": cleaned.get("agent_id", ""),
+            "game_id": cleaned.get("game_id", ""),
+            "region": cleaned.get("region", ""),
+            "detail": cleaned.get("detail", ""),
+        },
+        length=18,
+    )
+    existing = next((item for item in rows if item.get("id") == signature), None)
+    if existing is not None:
+        existing["last_seen_at"] = utc_now()
+        existing["seen_count"] = int(existing.get("seen_count") or 1) + 1
+        if cleaned.get("detail"):
+            existing["detail"] = cleaned["detail"]
+    else:
+        cleaned.setdefault("status", "queued")
+        cleaned.setdefault("created_at", utc_now())
+        cleaned.setdefault("last_seen_at", cleaned["created_at"])
+        cleaned.setdefault("seen_count", 1)
+        cleaned["id"] = signature
+        rows.append(cleaned)
+    rows = rows[-max(1, limit):]
+    write_json(social_event_stack_file(), {"events": rows, "updated_at": int(time.time())})
+    return rows
+
+
+def update_social_event_status(event_id: str, status: str, *, note: str = "", limit: int = 300) -> dict[str, Any]:
+    allowed = {"queued", "drafted", "sent", "failed", "archived"}
+    normalized = status.strip().lower()
+    if normalized not in allowed:
+        return {"ok": False, "error": "invalid_status", "allowed": sorted(allowed)}
+    rows = social_event_stack(limit=limit)
+    event = next((item for item in rows if str(item.get("id") or "") == str(event_id)), None)
+    if event is None:
+        return {"ok": False, "error": "not_found"}
+    event["status"] = normalized
+    event["reviewed_at"] = utc_now()
+    if note:
+        event["review_note"] = scrub_scalar(note, limit=220)
+    write_json(social_event_stack_file(), {"events": rows, "updated_at": int(time.time())})
+    return {"ok": True, "event": event, "events": rows}
 
 
 def stale_paid_rooms(limit: int = 100) -> list[dict[str, Any]]:

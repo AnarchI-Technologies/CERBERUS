@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import time
+import os
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,7 @@ def enqueue_social_effects(effects: list[dict[str, Any]], *, limit: int = 200) -
         seen.add(cleaned["id"])
     queue = queue[-max(1, limit):]
     write_json(social_queue_file(), {"queue": queue, "updated_at": int(time.time())})
+    _autodrain_if_enabled()
     return queue
 
 
@@ -103,3 +105,16 @@ def compact_result(result: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(value, (str, int, float)):
             out[key] = scrub_scalar(value, limit=220)
     return out
+
+
+def _autodrain_if_enabled() -> None:
+    enabled = os.getenv("CERBERUS_SOCIAL_AUTODRAIN_ON_ENQUEUE", "true").strip().lower() in {"1", "true", "yes", "on"}
+    if not enabled:
+        return
+    client = MoltyBookClient.from_env()
+    if not client.enabled or not client.api_key:
+        return
+    try:
+        drain_social_queue_once(client=client, max_items=1)
+    except Exception:
+        return

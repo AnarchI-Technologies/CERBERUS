@@ -1,0 +1,18 @@
+{
+  "hardened_from": {
+    "lessons": [],
+    "source_hash": "4f53cda18c2baa0c0354bb5f",
+    "suggested_edits": []
+  },
+  "rules": {
+    "heal_hp_ratio_floor": 0.72,
+    "known_killer_hp_ratio_floor": 0.78,
+    "observed_finisher_hp_ratio_floor": 0.74,
+    "postgame_memory_rescan_before_loadout": true,
+    "repeat_prey_min_kills": 1,
+    "social_autodrain_on_enqueue": true
+  },
+  "type": "cerberus.hardened_strategy_rules",
+  "updated_at": "2026-06-20T11:31:43+00:00",
+  "version": 1
+}
