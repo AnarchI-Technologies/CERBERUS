@@ -11,6 +11,7 @@ from typing import Any
 
 from combat_decider import target_in_attack_range, target_score
 from cortex_types import CortexResult, action, rest_action
+from external_wisdom import shared_public_line
 from free_action_abuse import best_ground_weapon, equipped_weapon, weapon_bonus_for_item
 from turn_state_model import TurnState
 
@@ -502,7 +503,10 @@ def taunt_message(command: dict[str, Any]) -> str:
             candidate = raw[index + len(marker) :].strip(" :\"'")
             if candidate:
                 return sanitize_public_message(candidate)
-    return "Hellion heard the owner. The arena may now update its emergency plans."
+    return shared_public_line(
+        "owner_taunt",
+        "Hellion heard the owner. The arena may now update its emergency plans.",
+    )
 
 
 def sanitize_public_message(text: str) -> str:

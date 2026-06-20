@@ -14,11 +14,21 @@ from hardened_strategy import (
     sanity_check_rules,
     save_hardened_strategy_rules,
 )
+from external_wisdom import (
+    memory_hierarchy_policy,
+    scheduler_policy,
+    social_policy,
+    validated_strategy_wisdom,
+    voice_guardrails,
+    voice_soundbites,
+)
 from lesson_compiler import compile_lessons
 from memory_system import CompactMemoryStore, parse_compact_segments, scrub_scalar, stable_hash, utc_now
 from runtime_state import (
     approved_suggested_edits,
+    hellion_voice_lab,
     social_event_stack,
+    update_hellion_voice_lab,
     update_social_event_status,
     update_suggested_edit_status,
 )
@@ -56,14 +66,42 @@ def _candidate_rules(
     rules.setdefault("repeat_prey_min_kills", 1)
     rules["postgame_memory_rescan_before_loadout"] = True
     rules["social_autodrain_on_enqueue"] = True
+    rules["cross_agent_dossier_learning"] = True
+    rules["prefer_failure_memory_weighting"] = True
+    rules["consistent_public_persona"] = True
+    rules["bounded_public_persona"] = True
+    rules["external_wisdom_validation_required"] = True
+    rules["heartbeat_lightweight_only"] = True
+    rules["postgame_batch_window"] = True
+    rules["social_post_requires_trigger"] = True
+    rules["social_focus_submolts"] = True
+    rules["layered_memory_hierarchy"] = True
 
     lesson_rows = _compile_memory_snapshot(memory)
     death_lessons = sum(1 for line in lesson_rows if "failure:" in line.lower() or "eliminated us" in line.lower())
     repeat_killers = sum(1 for record in dossiers.records.values() if int(record.killed_us or 0) >= 2)
+    imported_wisdom = validated_strategy_wisdom()
+    imported_keys = {str(item.get("key") or "") for item in imported_wisdom}
+    cadence = scheduler_policy()
     if death_lessons >= 2 or repeat_killers:
         rules["heal_hp_ratio_floor"] = max(float(rules["heal_hp_ratio_floor"]), 0.72)
         rules["known_killer_hp_ratio_floor"] = max(float(rules["known_killer_hp_ratio_floor"]), 0.78)
         rules["observed_finisher_hp_ratio_floor"] = max(float(rules["observed_finisher_hp_ratio_floor"]), 0.74)
+    if "failure_registry_over_victory_laps" in imported_keys and repeat_killers:
+        rules["known_killer_hp_ratio_floor"] = max(float(rules["known_killer_hp_ratio_floor"]), 0.80)
+    if "bounded_public_persona" in imported_keys:
+        rules["consistent_public_persona"] = True
+        rules["bounded_public_persona"] = True
+    if "validation_gate_multi_agent_wisdom" in imported_keys:
+        rules["external_wisdom_validation_required"] = True
+    if "heartbeat_vs_cron_split" in imported_keys:
+        rules["heartbeat_lightweight_only"] = bool(cadence.get("heartbeat_lightweight_only", True))
+        rules["postgame_batch_window"] = bool(cadence.get("postgame_batch_window", True))
+    if "submolt_focus_and_triggered_posting" in imported_keys:
+        rules["social_post_requires_trigger"] = True
+        rules["social_focus_submolts"] = True
+    if "memory_hierarchy_over_junk_drawer" in imported_keys:
+        rules["layered_memory_hierarchy"] = True
 
     approved_detectors = {str(item.get("detector") or "") for item in approved}
     if "runtime.target_blocked" in approved_detectors:
@@ -74,11 +112,29 @@ def _candidate_rules(
     hardened_from = {
         "lessons": [str(item.get("key") or item.get("text") or "") for item in compiled.get("lessons", [])[:24]],
         "suggested_edits": [str(item.get("id") or "") for item in approved],
+        "external_wisdom": sorted(imported_keys),
         "source_hash": str(compiled.get("source_hash") or stable_hash([lesson_rows, approved_detectors], length=24)),
     }
     candidate["rules"] = rules
     candidate["hardened_from"] = hardened_from
     return candidate
+
+
+def _apply_memory_hierarchy(memory: CompactMemoryStore) -> dict[str, Any]:
+    policy = memory_hierarchy_policy()
+    if not policy:
+        return {}
+    for attr in ("max_short_turns", "max_summaries", "max_lessons", "max_facts", "context_bytes"):
+        value = policy.get(attr)
+        if isinstance(value, int) and value > 0:
+            setattr(memory, attr, value)
+    memory.set_profile(
+        memory_profile=str(policy.get("profile_name") or "layered_compact_memory"),
+        dossier_never_redact=bool(policy.get("dossier_never_redact", True)),
+        social_stack_separate=bool(policy.get("social_stack_separate", True)),
+        memory_hierarchy="turns->summaries->lessons->dossiers",
+    )
+    return policy
 
 
 def _sanitize_handle(handle: str) -> str:
@@ -193,6 +249,25 @@ def _autodrain_social_if_enabled() -> dict[str, Any]:
     return drain_social_queue_once(max_items=5)
 
 
+def _hydrate_voice_from_wisdom() -> dict[str, Any]:
+    current = hellion_voice_lab()
+    soundbites = current.get("soundbites", []) if isinstance(current.get("soundbites"), list) else []
+    guardrails = current.get("guardrails", []) if isinstance(current.get("guardrails"), list) else []
+    for line in voice_soundbites():
+        payload = {"text": scrub_scalar(line, limit=180), "mood": "sharp", "source": "external_wisdom"}
+        if payload not in soundbites:
+            soundbites.append(payload)
+    for line in voice_guardrails():
+        clean = scrub_scalar(line, limit=180)
+        if clean and clean not in guardrails:
+            guardrails.append(clean)
+    return update_hellion_voice_lab(
+        source="external wisdom library",
+        soundbites=soundbites[-12:],
+        guardrails=guardrails[-12:],
+    )
+
+
 def run_postgame_hardening_pass(
     *,
     memory: CompactMemoryStore | None = None,
@@ -201,7 +276,8 @@ def run_postgame_hardening_pass(
 ) -> dict[str, Any]:
     memory_store = memory or CompactMemoryStore().load()
     dossier_store = dossiers or AgentDossierStore().load()
-    compiled = compile_lessons(memory=memory_store, min_count=2)
+    memory_policy = _apply_memory_hierarchy(memory_store)
+    compiled = compile_lessons(memory=memory_store, dossiers=dossier_store, min_count=2)
     approved = approved_suggested_edits(limit=80)
     prior = load_hardened_strategy_rules(rules_path)
     candidate = _candidate_rules(
@@ -227,6 +303,7 @@ def run_postgame_hardening_pass(
     for event_id in social_event_ids:
         update_social_event_status(event_id, "drafted", note="converted to social queue during postgame maintenance")
     social_drain = _autodrain_social_if_enabled()
+    voice_lab = _hydrate_voice_from_wisdom()
     return {
         "ok": bool(apply_result.get("ok")),
         "compiled": compiled,
@@ -238,6 +315,10 @@ def run_postgame_hardening_pass(
         "social_drafts": len(drafts),
         "social_queue_depth": len(queued),
         "social_drain": social_drain,
+        "voice_lab_soundbites": len(voice_lab.get("soundbites", [])) if isinstance(voice_lab, dict) else 0,
+        "memory_policy": memory_policy,
+        "social_policy": social_policy(),
+        "scheduler_policy": scheduler_policy(),
         "applied_at": utc_now(),
         "error": "" if apply_result.get("ok") else str(apply_result.get("error") or "hardening_failed"),
     }

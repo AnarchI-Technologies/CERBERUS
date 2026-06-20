@@ -20,6 +20,7 @@ for folder in (ROOT / "src", ROOT / "data"):
         sys.path.insert(0, path)
 
 from memory_system import scrub_scalar, stable_hash
+from external_wisdom import preferred_submolt_for, scheduler_policy, social_trigger_for
 from moltybook_client import MoltyBookClient, process_social_side_effects
 from runtime_state import hellion_voice_lab, memory_dir, read_json, update_hellion_voice_lab, write_json
 from agent_dossiers import AgentDossierStore
@@ -49,6 +50,12 @@ def sanitize_effect(effect: dict[str, Any]) -> dict[str, Any] | None:
         "attempts": int(effect.get("attempts") or 0),
         "status": str(effect.get("status") or "queued"),
     }
+    category = str(effect.get("category") or "")
+    if category:
+        cleaned["trigger"] = scrub_scalar(effect.get("trigger") or social_trigger_for(category), limit=80)
+        preferred_submolt = preferred_submolt_for(category, str(effect.get("submolt") or ""))
+        if preferred_submolt:
+            cleaned["submolt"] = scrub_scalar(preferred_submolt, limit=120)
     for key in ("category", "content", "submolt", "targetAgentId", "targetHandle", "agentId", "handle", "reason"):
         if effect.get(key):
             cleaned[key] = scrub_scalar(effect.get(key), limit=500 if key == "content" else 120)
@@ -118,6 +125,15 @@ def _autodrain_if_enabled() -> None:
     enabled = os.getenv("CERBERUS_SOCIAL_AUTODRAIN_ON_ENQUEUE", "true").strip().lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return
+    policy = scheduler_policy()
+    allowed = {
+        str(item).strip()
+        for item in policy.get("autodrain_triggers", [])
+        if str(item).strip()
+    }
+    queue = social_queue()
+    if allowed and not any(str(item.get("trigger") or "") in allowed and str(item.get("status") or "queued") == "queued" for item in queue):
+        return
     client = MoltyBookClient.from_env()
     if not client.enabled or not client.api_key:
         return
@@ -162,6 +178,7 @@ def queue_forced_voice_recovered_post(
         "category": "voice_recovered_bootstrap",
         "content": scrub_scalar(FORCED_VOICE_POST_TEMPLATE + trailing, limit=500),
         "submolt": "submolt/combat-stories",
+        "trigger": "admin_bootstrap",
     }
     queue = enqueue_social_effects([effect])
     one_shots[FORCED_VOICE_POST_KEY] = {

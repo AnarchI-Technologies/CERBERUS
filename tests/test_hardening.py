@@ -38,6 +38,7 @@ import game_map
 import launch_doctor
 import env_loader
 import secret_env_admin
+import external_wisdom
 import lesson_compiler
 import memory_system
 import profit_simulator
@@ -1997,6 +1998,61 @@ class HardeningTests(unittest.TestCase):
             SocialCortex(dossier_store=dossiers).evaluate(state, {})
 
         self.assertEqual(dossiers.records["enemy-1"].moltybook_handle, "@rival")
+
+    def test_external_wisdom_library_exposes_three_curated_lessons(self) -> None:
+        payload = external_wisdom.load_external_wisdom_library()
+        entries = payload.get("entries", [])
+        keys = {str(item.get("key") or "") for item in entries if isinstance(item, dict)}
+
+        self.assertIn("failure_registry_over_victory_laps", keys)
+        self.assertIn("bounded_public_persona", keys)
+        self.assertIn("validation_gate_multi_agent_wisdom", keys)
+        self.assertIn("heartbeat_vs_cron_split", keys)
+        self.assertIn("memory_hierarchy_over_junk_drawer", keys)
+        self.assertIn("submolt_focus_and_triggered_posting", keys)
+
+    def test_compile_lessons_uses_dossiers_and_external_wisdom(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.compact.json",
+                encrypted_path=Path(tmp) / "memory.compact.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "agent_dossiers.compact.json",
+                encrypted_path=Path(tmp) / "agent_dossiers.compact.vault.json",
+            ).load()
+            dossiers.record_killed_us("enemy-1", name="Nemesis")
+            dossiers.record_killed_us("enemy-1", name="Nemesis")
+            dossiers.record_kill("enemy-2", name="Runner")
+            dossiers.record_kill("enemy-2", name="Runner")
+
+            report = lesson_compiler.compile_lessons(memory=memory, dossiers=dossiers, min_count=2)
+
+        keys = {str(item.get("key") or "") for item in report.get("lessons", []) if isinstance(item, dict)}
+        self.assertIn("dossier:repeat_killer:enemy-1", keys)
+        self.assertIn("dossier:repeat_prey:enemy-2", keys)
+        self.assertIn("wisdom:failure_registry_over_victory_laps", keys)
+        self.assertIn("validation_gate_multi_agent_wisdom", report.get("external_wisdom_keys", []))
+        self.assertIn("heartbeat_vs_cron_split", report.get("external_wisdom_keys", []))
+        self.assertIn("memory_hierarchy_over_junk_drawer", report.get("external_wisdom_keys", []))
+        self.assertIn("submolt_focus_and_triggered_posting", report.get("external_wisdom_keys", []))
+
+    def test_social_runtime_applies_trigger_and_preferred_submolt_policy(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                queue = social_runtime.enqueue_social_effects(
+                    [{"type": "moltybook_draft", "category": "match_summary", "content": "summary text"}]
+                )
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(queue[-1]["trigger"], "postgame")
+        self.assertEqual(queue[-1]["submolt"], "submolt/ruins-relics-packs")
 
     def test_social_worker_is_disabled_by_default_and_can_run_once(self) -> None:
         old_enabled = os.environ.get("CERBERUS_SOCIAL_WORKER_ENABLED")
@@ -4409,6 +4465,18 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(rules_file_exists)
         self.assertTrue(all("target_blocked" not in str(item).lower() for item in reloaded.data.get("lessons", [])))
         self.assertEqual(stored_edits[-1]["status"], "hardened")
+        self.assertTrue(result["rules"]["cross_agent_dossier_learning"])
+        self.assertTrue(result["rules"]["bounded_public_persona"])
+        self.assertTrue(result["rules"]["external_wisdom_validation_required"])
+        self.assertTrue(result["rules"]["heartbeat_lightweight_only"])
+        self.assertTrue(result["rules"]["postgame_batch_window"])
+        self.assertTrue(result["rules"]["social_post_requires_trigger"])
+        self.assertTrue(result["rules"]["social_focus_submolts"])
+        self.assertTrue(result["rules"]["layered_memory_hierarchy"])
+        self.assertGreaterEqual(result["voice_lab_soundbites"], 1)
+        self.assertEqual(result["memory_policy"]["profile_name"], "layered_compact_memory")
+        self.assertTrue(result["scheduler_policy"]["heartbeat_lightweight_only"])
+        self.assertEqual(result["social_policy"]["default_triggers"]["match_summary"], "postgame")
 
     def test_postgame_hardening_turns_social_stack_into_tagged_queue(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
@@ -4484,6 +4552,10 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(response["status"], "diagnostic")
         self.assertIn("balance=46", response["text"])
         self.assertIn("games=85", response["text"])
+
+    def test_shared_public_voice_defaults_come_from_external_wisdom(self) -> None:
+        self.assertIn("emergency plans", owner_command_cortex.taunt_message({"text": "taunt"}))
+        self.assertIn("intermission", claw_runtime.public_action_thought({"type": "rest"}).lower())
 
     def test_dashboard_is_game_map_command_center(self) -> None:
         html = render_app.dashboard_html().decode("utf-8")

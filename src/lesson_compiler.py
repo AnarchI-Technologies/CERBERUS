@@ -13,6 +13,8 @@ for folder in (ROOT / "src", ROOT / "data"):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+from agent_dossiers import AgentDossierStore
+from external_wisdom import validated_strategy_wisdom
 from longterm_memory import LongTermMemoryStore
 from memory_system import CompactMemoryStore, stable_hash, utc_now
 from runtime_state import match_evidence
@@ -54,6 +56,7 @@ def compile_lessons(
     evidence_limit: int = 500,
     memory: CompactMemoryStore | None = None,
     longterm: LongTermMemoryStore | None = None,
+    dossiers: AgentDossierStore | None = None,
     min_count: int = 2,
 ) -> dict[str, Any]:
     rows = match_evidence(limit=evidence_limit)
@@ -115,6 +118,49 @@ def compile_lessons(
                 "confidence": 0.6,
                 "importance": 45,
                 "count": count,
+                }
+            )
+
+    if dossiers is not None:
+        for record in dossiers.records.values():
+            killed_us = int(getattr(record, "killed_us", 0) or 0)
+            killed_by_us = int(getattr(record, "killed_by_us", 0) or 0)
+            name = str(getattr(record, "name", "") or getattr(record, "agent_id", "")[:8] or "rival")
+            if killed_us >= min_count:
+                lessons.append(
+                    {
+                        "domain": "dossiers",
+                        "key": f"dossier:repeat_killer:{record.agent_id}",
+                        "text": f"lesson: {name} has repeatedly eliminated us; weight failure memory and shared counterplay above victory laps until the pattern breaks",
+                        "confidence": 0.84,
+                        "importance": 78,
+                        "count": killed_us,
+                    }
+                )
+            if killed_by_us >= min_count and killed_us == 0:
+                lessons.append(
+                    {
+                        "domain": "dossiers",
+                        "key": f"dossier:repeat_prey:{record.agent_id}",
+                        "text": f"lesson: {name} repeatedly folds under pressure; keep the cross-agent dossier hot and press favorable fights when the board still agrees",
+                        "confidence": 0.76,
+                        "importance": 64,
+                        "count": killed_by_us,
+                    }
+                )
+
+    for item in validated_strategy_wisdom():
+        rendered = str(item.get("rendered_lesson") or "").strip()
+        if not rendered:
+            continue
+        lessons.append(
+            {
+                "domain": "wisdom",
+                "key": f"wisdom:{item['key']}",
+                "text": f"lesson: {rendered}",
+                "confidence": 0.72,
+                "importance": 60,
+                "count": 1,
             }
         )
 
@@ -146,6 +192,7 @@ def compile_lessons(
         "lesson_count": len(unique_lessons),
         "lessons": unique_lessons,
         "source_hash": stable_hash(rows[-100:], length=24),
+        "external_wisdom_keys": [str(item.get("key") or "") for item in validated_strategy_wisdom()],
     }
 
 

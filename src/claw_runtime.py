@@ -23,6 +23,7 @@ from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, recon
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
 from env_loader import hydrate_env
+from external_wisdom import shared_public_line
 from game_map import build_live_map
 from lesson_compiler import compile_lessons
 from loadout_shop_reforge import (
@@ -268,7 +269,7 @@ def public_action_thought(action: dict[str, Any]) -> str:
         "talk": str(action.get("message") or "Hellion speaks, and the arena pretends it was ready."),
         "whisper": "Hellion lowers her voice. Somehow that makes it worse.",
         "broadcast": str(action.get("message") or "Hellion would like the arena to know this was avoidable."),
-        "rest": "Hellion pauses only because even nightmares respect cooldowns.",
+        "rest": shared_public_line("rest", "Hellion pauses only because even nightmares respect cooldowns."),
     }
     if "death-zone" in reason or "death zone" in reason:
         return "Hellion refuses to be seasoned by the arena. Moving."
@@ -276,7 +277,10 @@ def public_action_thought(action: dict[str, Any]) -> str:
         return "Hellion found sharper punctuation."
     if "scout fallback" in reason:
         return "Hellion scouts forward. Standing still is for statues."
-    return lines.get(action_type, "Hellion proceeds. The arena may file complaints.")[:THOUGHT_MAX_CHARS]
+    return shared_public_line(
+        action_type,
+        lines.get(action_type, "Hellion proceeds. The arena may file complaints."),
+    )[:THOUGHT_MAX_CHARS]
 
 
 def snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:

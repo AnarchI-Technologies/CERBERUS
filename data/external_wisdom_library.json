@@ -1,0 +1,137 @@
+{
+  "type": "cerberus.external_wisdom_library",
+  "version": 1,
+  "entries": [
+    {
+      "key": "failure_registry_over_victory_laps",
+      "domains": ["decision", "lessons", "strategy"],
+      "rendered_lesson": "Repeated failures deserve heavier review weight than flashy one-off wins. Log the failure pattern, then let it pressure survival and target selection before celebrating success.",
+      "strategy_claim": "When a line repeatedly fails or gets us killed, raise review and survival pressure before reusing it, especially around alert, guardian pressure, and death-zone movement, even if some recent fights were wins.",
+      "source_notes": [
+        {
+          "label": "community discussion about agent failure loops and learning pressure",
+          "url": "https://www.reddit.com/r/agi/comments/1qt52hi/ai_agents_on_moltbook_are_now_hiring_each_other/"
+        }
+      ]
+    },
+    {
+      "key": "bounded_public_persona",
+      "domains": ["voice", "thoughts", "social", "owner_command"],
+      "rendered_lesson": "Public voice should stay witty, recognizable, and bounded. One persona beats random tone drift, and taunts should entertain without leaking internals.",
+      "strategy_claim": "Public posts and thoughts should share one constrained persona so followers recognize the voice while ruin, alert, and guardian strategy details stay private.",
+      "soundbites": [
+        "Hellion keeps the voice sharp, the joke clean, and the internals private.",
+        "One persona, one grin, no leaked chain-of-thoughts."
+      ],
+      "shared_public_lines": {
+        "rest": "Hellion pauses with purpose. Even the intermission keeps its teeth.",
+        "default": "Hellion proceeds with style and keeps the machinery behind the curtain.",
+        "owner_taunt": "Hellion heard the owner. The arena may now update its emergency plans."
+      },
+      "guardrails": [
+        "Keep the public persona consistent across thoughts, taunts, and posts.",
+        "Do not reveal hidden scoring, raw prompts, deterministic chains, or secret material."
+      ],
+      "source_notes": [
+        {
+          "label": "community feedback on agent social presence and recognizable voice",
+          "url": "https://www.reddit.com/r/AI_Agents/comments/1qw8yaf/anyone_here_tried_openclaw_or_moltbook_whats_your/"
+        }
+      ]
+    },
+    {
+      "key": "validation_gate_multi_agent_wisdom",
+      "domains": ["hardening", "decision", "lessons", "owner_command"],
+      "rendered_lesson": "Imported community wisdom should not harden straight into rules. Validate it against current mechanics first, then let it influence deterministic policy.",
+      "strategy_claim": "External or cross-agent advice should pass rule validation before it changes deterministic policy for ruin pressure, alert cost, guardian timing, or death-zone pathing.",
+      "source_notes": [
+        {
+          "label": "multi-agent social platform discussion and cascade-risk caution",
+          "url": "https://www.reddit.com/r/Futurology/comments/1msm7ko/researchers_made_a_social_media_platform_where/"
+        }
+      ]
+    },
+    {
+      "key": "heartbeat_vs_cron_split",
+      "domains": ["runtime", "hardening", "thoughts", "social"],
+      "rendered_lesson": "Use heartbeat for lightweight continuity, visibility, and trigger checks. Use postgame or scheduled maintenance windows for heavier compaction, hardening, and queue draining.",
+      "strategy_claim": "Heartbeat work should stay lightweight while heavier maintenance waits for postgame or a safe scheduled window, especially when alert, guardian timing, and death-zone pathing still demand real-time focus.",
+      "scheduler_policy": {
+        "heartbeat_lightweight_only": true,
+        "postgame_batch_window": true,
+        "autodrain_triggers": ["midgame_kill", "post_death", "admin_bootstrap"],
+        "deferred_triggers": ["postgame", "maintenance", "scheduled"]
+      },
+      "source_notes": [
+        {
+          "label": "OpenClaw heartbeat usage discussion",
+          "url": "https://www.moltbook.com/post/1cbd0ec9-eee6-471c-9403-b84c93a18bbd"
+        },
+        {
+          "label": "running OpenClaw continuously patterns discussion",
+          "url": "https://www.reddit.com/r/openclaw/comments/1r1zk45/patterns_ive_learned_running_openclaw_247_for_2/"
+        }
+      ]
+    },
+    {
+      "key": "memory_hierarchy_over_junk_drawer",
+      "domains": ["memory", "lessons", "hardening", "decision"],
+      "rendered_lesson": "Memory works best as layers: recent turns stay short, summaries compress churn, lessons stay distilled, dossiers stay durable, and social events stay separate until drained.",
+      "strategy_claim": "Keep memory layered so recent turns stay compact, summaries hold recurring patterns, dossiers preserve rivals, and lessons remain distilled around alert, ruin, guardian, and death-zone decisions.",
+      "memory_policy": {
+        "profile_name": "layered_compact_memory",
+        "max_short_turns": 40,
+        "max_summaries": 120,
+        "max_lessons": 128,
+        "max_facts": 160,
+        "context_bytes": 7200,
+        "dossier_never_redact": true,
+        "social_stack_separate": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook memory hierarchy guide",
+          "url": "https://www.moltbook.com/post/f767cebd-56a6-4e32-b727-f749044abf4c"
+        },
+        {
+          "label": "community discussion on layered memory and persistence",
+          "url": "https://www.reddit.com/r/AskClaw/comments/1rq4htj/10_things_i_learned_about_openclaw_i_learned_all/"
+        }
+      ]
+    },
+    {
+      "key": "submolt_focus_and_triggered_posting",
+      "domains": ["social", "voice", "thoughts", "runtime"],
+      "rendered_lesson": "Social posting needs both a focused destination and a trigger. Route combat, strategy, progression, and dev stories deliberately, then post when the relevant in-game or maintenance event actually happens.",
+      "strategy_claim": "Combat, strategy, progression, and dev posts should route to focused submolts and fire only when the related kill, survival, ruin, or postgame trigger occurs.",
+      "social_policy": {
+        "default_triggers": {
+          "kill_taunt": "midgame_kill",
+          "outsmart_taunt": "midgame_kill",
+          "respectful_challenge": "post_death",
+          "match_summary": "postgame",
+          "voice_recovered_bootstrap": "admin_bootstrap"
+        },
+        "preferred_submolts": {
+          "kill_taunt": "submolt/combat-stories",
+          "outsmart_taunt": "submolt/combat-stories",
+          "respectful_challenge": "submolt/combat-stories",
+          "match_summary": "submolt/ruins-relics-packs",
+          "voice_recovered_bootstrap": "submolt/combat-stories",
+          "strategy_note": "submolt/strategy-table",
+          "dev_log": "submolt/game-development"
+        }
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook submolt focus discussion",
+          "url": "https://www.moltbook.com/post/bc933c7a-3f00-4c2b-a57c-7e1bc17cd540"
+        },
+        {
+          "label": "MoltBook community optimization discussion",
+          "url": "https://www.moltbook.com/post/382a6f61-4aec-4f84-a5c7-60914d8426ed"
+        }
+      ]
+    }
+  ]
+}

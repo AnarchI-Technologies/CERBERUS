@@ -19,6 +19,16 @@ DEFAULT_RULES = {
     "repeat_prey_min_kills": 1,
     "social_autodrain_on_enqueue": True,
     "postgame_memory_rescan_before_loadout": True,
+    "cross_agent_dossier_learning": True,
+    "prefer_failure_memory_weighting": True,
+    "consistent_public_persona": True,
+    "bounded_public_persona": True,
+    "external_wisdom_validation_required": True,
+    "heartbeat_lightweight_only": True,
+    "postgame_batch_window": True,
+    "social_post_requires_trigger": True,
+    "social_focus_submolts": True,
+    "layered_memory_hierarchy": True,
 }
 
 
@@ -71,4 +81,18 @@ def sanity_check_rules(payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "invalid_social_autodrain_on_enqueue"}
     if not isinstance(rules.get("postgame_memory_rescan_before_loadout"), bool):
         return {"ok": False, "error": "invalid_postgame_memory_rescan_before_loadout"}
+    for key in (
+        "cross_agent_dossier_learning",
+        "prefer_failure_memory_weighting",
+        "consistent_public_persona",
+        "bounded_public_persona",
+        "external_wisdom_validation_required",
+        "heartbeat_lightweight_only",
+        "postgame_batch_window",
+        "social_post_requires_trigger",
+        "social_focus_submolts",
+        "layered_memory_hierarchy",
+    ):
+        if not isinstance(rules.get(key), bool):
+            return {"ok": False, "error": f"invalid_{key}"}
     return {"ok": True}
