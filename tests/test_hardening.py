@@ -379,6 +379,18 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("[private]", state["voice_lab"]["soundbites"][0]["text"])
         self.assertEqual(state["voice_lab"]["soundbites"][0]["mood"], "hype")
 
+    def test_stream_dashboard_cortex_exposes_public_runtime_thought(self) -> None:
+        cortex = stream_dashboard_cortex.StreamDashboardCortex(
+            spectate_base_url="https://www.clawroyale.ai/games/spect"
+        )
+        state = cortex.public_state(
+            runtime={"state": "playing", "last_public_thought": "Hellion applies peer review. Results may be terminal."},
+            current_game_id="game-1",
+        )
+
+        self.assertIn("Hellion", state["thought"])
+        self.assertNotIn("private key", state["thought"].lower())
+
     def test_tick_returns_action_when_save_fails(self) -> None:
         class BadMemory(CompactMemoryStore):
             def save(self, *args, **kwargs):  # type: ignore[no-untyped-def]
@@ -3512,8 +3524,8 @@ class HardeningTests(unittest.TestCase):
         self.assertIn('id="launch-report"', html)
         self.assertIn('id="deployment"', html)
         self.assertIn("launch.blockers", html)
-        self.assertIn('fetch("/admin/social-drain"', html)
-        self.assertIn('fetch("/admin/launch-report"', html)
+        self.assertIn('fetchJson("/admin/social-drain"', html)
+        self.assertIn('fetchJson("/admin/launch-report"', html)
         self.assertIn("<line x1=", html)
         self.assertIn("map.summary", html)
         self.assertIn("Live tactical map", html)
@@ -4074,11 +4086,35 @@ class HardeningTests(unittest.TestCase):
         self.assertIn('id="paid-ready"', html)
         self.assertIn('id="healthz"', html)
         self.assertIn('fetch("/admin/owner-message"', html)
-        self.assertIn('fetch("/admin/suggested-edits"', html)
-        self.assertIn('fetch("/admin/suggested-edit-status"', html)
+        self.assertIn('fetchJson("/admin/suggested-edits"', html)
+        self.assertIn('fetchJson("/admin/suggested-edit-status"', html)
         self.assertIn('id="suggested-edits"', html)
+        self.assertIn('id="public-thought"', html)
+        self.assertIn('cache = "no-store"', html)
         self.assertIn("overflow: hidden", html)
         self.assertIn("<aside", html)
+
+    def test_stats_falls_back_to_runtime_status_game_id_when_current_game_file_is_missing(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.update_claw_runtime_status(
+                    current_game_id="game-live-7",
+                    state="playing",
+                    last_public_thought="Hellion scouts forward. Standing still is for statues.",
+                    last_snapshot={"game_id": "game-live-7", "hp": 88, "ep": 4},
+                )
+                payload = render_app.stats()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(payload["current_game_id"], "game-live-7")
+        self.assertTrue(payload["spectate_url"].endswith("/game-live-7"))
+        self.assertIn("Hellion", payload["public_thought"])
 
     def test_render_root_serves_dashboard_and_healthz_stays_json(self) -> None:
         sent = []
