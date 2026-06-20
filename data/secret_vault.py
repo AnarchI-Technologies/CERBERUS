@@ -15,6 +15,7 @@ import ctypes.wintypes
 import hashlib
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -187,11 +188,29 @@ def decrypt_json(envelope: dict[str, Any], *, pin: str | None = None) -> Any:
     return json.loads(decrypt_bytes(envelope, pin=pin).decode("utf-8"))
 
 
+def _atomic_write_text(path: str | Path, text: str, *, encoding: str = "utf-8") -> Path:
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{out.name}.", suffix=".tmp", dir=str(out.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as handle:
+            handle.write(text)
+        tmp_path.replace(out)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return out
+
+
 def write_vault(path: str | Path, data: Any, *, pin: str | None = None, purpose: str = "json") -> Path:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     envelope = encrypt_json(data, pin=pin, purpose=purpose)
-    out.write_text(json.dumps(envelope, ensure_ascii=True, indent=2), encoding="utf-8")
+    _atomic_write_text(out, json.dumps(envelope, ensure_ascii=True, indent=2), encoding="utf-8")
     try:
         os.chmod(out, 0o600)
     except OSError:

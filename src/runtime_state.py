@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now
+from memory_system import DEFAULT_MEMORY_DIR, atomic_write_text, scrub_scalar, stable_hash, utc_now
 
 
 _RUNTIME_AGENT_ID: ContextVar[str] = ContextVar("cerberus_runtime_agent_id", default="")
@@ -85,8 +85,11 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def write_json(path: Path, payload: dict[str, Any]) -> bool:
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=True, separators=(",", ":")), encoding="utf-8")
+        atomic_write_text(
+            path,
+            json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
     except OSError:
         return False
     return True

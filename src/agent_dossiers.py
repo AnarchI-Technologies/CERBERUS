@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from memory_system import DEFAULT_MEMORY_DIR, stable_hash, utc_now
+from memory_system import DEFAULT_MEMORY_DIR, atomic_write_text, stable_hash, utc_now
 from secret_vault import read_vault, write_vault
 
 
@@ -106,8 +106,11 @@ class AgentDossierStore:
         }
         if encrypt:
             return write_vault(self.encrypted_path, data, purpose="cerberus.agent_dossiers")
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, ensure_ascii=True, separators=(",", ":")), encoding="utf-8")
+        atomic_write_text(
+            self.path,
+            json.dumps(data, ensure_ascii=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
         return self.path
 
     def observe_agent(self, agent_id: str, *, name: str = "", tendency: str = "") -> AgentDossier:

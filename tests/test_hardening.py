@@ -8,6 +8,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 for folder in (ROOT / "src", ROOT / "data"):
@@ -1757,6 +1758,35 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(result["processed"], 1)
         self.assertEqual(queue[0]["status"], "sent")
 
+    def test_social_runtime_marks_failed_posts_without_crashing(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+
+        class FailingClient:
+            def post_draft(self, draft):  # type: ignore[no-untyped-def]
+                return {"ok": False, "skipped": False, "reason": "moltybook post failed", "error": "503"}
+
+            def follow(self, effect):  # type: ignore[no-untyped-def]
+                return {"ok": False, "skipped": False, "reason": "moltybook follow failed", "error": "503"}
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                social_runtime.enqueue_social_effects(
+                    [{"type": "moltybook_draft", "category": "test", "content": "Hellion queued this."}]
+                )
+                result = social_runtime.drain_social_queue_once(client=FailingClient(), max_items=1)
+                queue = social_runtime.social_queue()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(queue[0]["status"], "failed")
+        self.assertEqual(queue[0]["attempts"], 1)
+        self.assertEqual(queue[0]["last_result"]["reason"], "moltybook post failed")
+
     def test_social_worker_is_disabled_by_default_and_can_run_once(self) -> None:
         old_enabled = os.environ.get("CERBERUS_SOCIAL_WORKER_ENABLED")
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
@@ -2151,6 +2181,66 @@ class HardeningTests(unittest.TestCase):
                     if index % 8 == 0:
                         isolated.memory.rewrite()
                         isolated = isolated.reload()
+        finally:
+            if old_pin is None:
+                os.environ.pop("CERBERUS_PIN", None)
+            else:
+                os.environ["CERBERUS_PIN"] = old_pin
+
+    def test_isolated_instance_survives_encrypted_reload_strain(self) -> None:
+        old_pin = os.environ.get("CERBERUS_PIN")
+        os.environ["CERBERUS_PIN"] = "2468"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                isolated = self._isolated(tmp)
+                observed_actions = set()
+                for index in range(72):
+                    snapshot = {
+                        "turn": index,
+                        "canAct": index % 4 != 0,
+                        "cooldownRemainingMs": 12000 if index % 4 == 0 else 0,
+                        "view": {
+                            "self": {
+                                "id": "me",
+                                "hp": max(12, 100 - (index % 37)),
+                                "ep": index % 5,
+                                "atk": 12 + (index % 9),
+                                "inventory": [
+                                    {"id": f"weapon-{index}", "typeId": "katana" if index % 3 == 0 else "dagger"},
+                                    {"id": f"heal-{index}", "typeId": "medkit" if index % 6 == 0 else "bandage"},
+                                ],
+                                "equippedWeapon": {"typeId": "fist" if index % 2 == 0 else "dagger"},
+                            },
+                            "alertGauge": index % 15,
+                            "currentRegion": {
+                                "id": f"r{index % 9}",
+                                "name": "Broadcast Ruin" if index % 6 == 0 else "Field",
+                                "terrain": "Ruin" if index % 6 == 0 else "Plain",
+                                "interactables": [{"id": f"tower-{index}", "type": "broadcast tower"}] if index % 6 == 0 else [],
+                                "connections": [{"id": "safe-a"}, {"id": "safe-b"}],
+                            },
+                            "visibleAgents": [
+                                {"id": f"enemy-{index}", "name": "Enemy", "hp": 40, "atk": 16, "moltybookHandle": "@enemy"}
+                            ]
+                            if index % 5 == 0
+                            else [],
+                            "visibleMonsters": [{"id": f"mob-{index}", "hp": 20, "atk": 9}] if index % 5 == 1 else [],
+                            "visibleItems": [{"id": f"loot-{index}", "typeId": "smoltz_bundle"}] if index % 5 == 2 else [],
+                            "pendingDeathzones": [{"id": f"r{(index + 1) % 9}"}] if index % 7 == 0 else [],
+                            "recentMessages": [{"agentId": "ally", "message": "rewrite the memory, keep the lesson compact"}] if index % 8 == 0 else [],
+                        },
+                        "events": [{"type": "alert_gauge_changed", "data": {"agentId": "me", "alertGauge": index % 15}}],
+                    }
+                    action = isolated.tick(snapshot)
+                    observed_actions.add(action["type"])
+                    self.assertIn(action["type"], {"equip", "move", "rest", "pickup", "use_item", "attack", "explore"})
+                    if index % 6 == 0:
+                        isolated.memory.rewrite()
+                        isolated.dossiers.save(encrypt=True)
+                        isolated = isolated.reload()
+                self.assertTrue(observed_actions.intersection({"equip", "pickup", "use_item"}))
+                self.assertLessEqual(len(isolated.memory.data["turns"]), isolated.memory.max_short_turns)
+                self.assertLessEqual(len(isolated.memory.data["lessons"]), isolated.memory.max_lessons)
         finally:
             if old_pin is None:
                 os.environ.pop("CERBERUS_PIN", None)
@@ -3966,6 +4056,21 @@ class HardeningTests(unittest.TestCase):
             runtime_state.write_json = old_write_json  # type: ignore[assignment]
 
         self.assertEqual(messages[-1]["message"], "still alive")
+
+    def test_runtime_state_atomic_write_preserves_previous_cache_on_replace_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "runtime.json"
+            runtime_state.write_json(path, {"state": "healthy", "count": 1})
+            original = path.read_text(encoding="utf-8")
+            with mock.patch("memory_system.Path.replace", side_effect=OSError("replace blocked")):
+                ok = runtime_state.write_json(path, {"state": "corrupt", "count": 2})
+            final_text = path.read_text(encoding="utf-8")
+            reloaded = runtime_state.read_json(path)
+
+        self.assertFalse(ok)
+        self.assertEqual(final_text, original)
+        self.assertEqual(reloaded["state"], "healthy")
+        self.assertEqual(reloaded["count"], 1)
 
     def test_owner_messages_persist_under_memory_dir(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")

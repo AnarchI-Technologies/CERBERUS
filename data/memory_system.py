@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -63,6 +64,24 @@ def scrub_scalar(value: Any, *, limit: int = 160) -> str:
     if len(text) > limit:
         return text[: limit - 1] + "~"
     return text
+
+
+def atomic_write_text(path: str | Path, text: str, *, encoding: str = "utf-8") -> Path:
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{out.name}.", suffix=".tmp", dir=str(out.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as handle:
+            handle.write(text)
+        tmp_path.replace(out)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return out
 
 
 def secret_like_key(key: str) -> bool:
@@ -319,7 +338,8 @@ class CompactMemoryStore:
                 )
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
+        atomic_write_text(
+            self.path,
             json.dumps(self.data, ensure_ascii=True, separators=(",", ":")),
             encoding="utf-8",
         )
