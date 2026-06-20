@@ -1149,7 +1149,13 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 envelope = action_envelope(action)
                 await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
                 append_action_audit({"kind": "action_sent", "action": action, "reason": str(action.get("reason") or ""), "state": "playing"})
-                update_status(last_action=action, last_action_at=int(time.time()), current_intent=runtime_intent(action), state="playing")
+                update_status(
+                    last_action=action,
+                    last_action_at=int(time.time()),
+                    current_intent=runtime_intent(action),
+                    last_public_thought=envelope.get("thought", ""),
+                    state="playing",
+                )
             elif snapshot and not gameplay_ready:
                 update_status(state="waiting_for_running_game", last_error="joined but waiting for running game frame")
         update_status(state="socket_closed", last_error="websocket closed without terminal game frame")

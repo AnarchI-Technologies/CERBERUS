@@ -104,6 +104,7 @@ class StreamDashboardCortex:
             "host": PUBLIC_NAME,
             "mood": stream_mood(runtime),
             "status": stream_status_line(runtime, game_id),
+            "thought": clean_public_text(runtime.get("last_public_thought", ""), max_len=180),
             "current_game_id": game_id,
             "spectate_url": self.spectate_url(game_id),
             "runtime": {

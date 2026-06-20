@@ -30,7 +30,7 @@ for folder in (ROOT / "src", ROOT / "data"):
 
 from core_loop import cerberus_tick  # noqa: E402
 from claw_config import active_claw_version, claw_api_base  # noqa: E402
-from claw_runtime import run_forever as run_claw_runtime  # noqa: E402
+from claw_runtime import public_action_thought, run_forever as run_claw_runtime  # noqa: E402
 from env_loader import hydrate_env  # noqa: E402
 from game_map import build_live_map  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
@@ -177,10 +177,29 @@ def remember_current_game(state: dict[str, Any]) -> None:
     remember_game_id(game_id)
 
 
+def active_runtime_game_id(runtime_status: dict[str, Any]) -> str:
+    stored = runtime_stored_game_id()
+    if stored:
+        return stored
+    current = safe_game_id(str(runtime_status.get("current_game_id") or ""))
+    if current:
+        return current
+    snapshot = runtime_status.get("last_snapshot") if isinstance(runtime_status.get("last_snapshot"), dict) else {}
+    return safe_game_id(str(snapshot.get("game_id") or ""))
+
+
+def runtime_public_thought(runtime_status: dict[str, Any]) -> str:
+    thought = scrub_scalar(runtime_status.get("last_public_thought") or "", limit=180)
+    if thought:
+        return thought
+    last_action = runtime_status.get("last_action") if isinstance(runtime_status.get("last_action"), dict) else {}
+    return public_action_thought(last_action) if last_action else ""
+
+
 def stats() -> dict[str, Any]:
     ready = readiness()
-    game_id = runtime_stored_game_id()
     runtime_status = read_json(claw_runtime_status_file())
+    game_id = active_runtime_game_id(runtime_status)
     runtime_map = runtime_status.get("live_map") if isinstance(runtime_status.get("live_map"), dict) else {}
     profit = profit_simulate(games_per_day=int(runtime_status.get("games_completed_24h") or 61), target_per_day=1000)
     launch_blockers = runtimeBlockers_server(ready, runtime_status)
@@ -204,6 +223,7 @@ def stats() -> dict[str, Any]:
         "longterm_memory_error": ready.get("longterm_memory_error", ""),
         "longterm_memory": ready.get("longterm_memory", {}),
         "deployment": deployment,
+        "public_thought": runtime_public_thought(runtime_status),
         "autonomy": {
             "suggested_edits": len(suggested_edits()),
             "match_evidence": len(match_evidence()),
@@ -464,7 +484,7 @@ def stream_state() -> dict[str, Any]:
     cortex = StreamDashboardCortex(spectate_base_url=os.getenv("CLAW_ROYALE_SPECTATE_BASE_URL", DEFAULT_SPECTATE_BASE_URL))
     return cortex.public_state(
         runtime=runtime_status,
-        current_game_id=runtime_stored_game_id(),
+        current_game_id=active_runtime_game_id(runtime_status),
         chat=stream_chat_messages(),
         voice_lab=hellion_voice_lab(),
     )
@@ -491,7 +511,8 @@ def stored_game_id() -> str:
 def dashboard_html(query: str = "") -> bytes:
     feed_url = os.getenv("CLAW_ROYALE_LIVE_FEED_URL", DEFAULT_FEED_URL)
     spectate_base_url = os.getenv("CLAW_ROYALE_SPECTATE_BASE_URL", DEFAULT_SPECTATE_BASE_URL).rstrip("/")
-    initial_game_id = query_game_id(query) or os.getenv("CLAW_ROYALE_CURRENT_GAME_ID", "") or stored_game_id()
+    initial_runtime = read_json(claw_runtime_status_file())
+    initial_game_id = query_game_id(query) or os.getenv("CLAW_ROYALE_CURRENT_GAME_ID", "") or active_runtime_game_id(initial_runtime)
     initial_feed_url = spectate_url(initial_game_id)
     initial_frame_attrs = (
         f'src="{initial_feed_url}"'
@@ -505,38 +526,39 @@ def dashboard_html(query: str = "") -> bytes:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cerberus Hellion Dashboard</title>
   <style>
-    :root {{ color-scheme: dark; font-family: Arial, sans-serif; }}
+    :root {{ color-scheme: dark; font-family: "Segoe UI Variable Text", "Aptos", "Trebuchet MS", sans-serif; }}
     * {{ box-sizing: border-box; }}
-    body {{ margin: 0; background: #05070a; color: #f4f7fb; overflow: hidden; }}
-    header {{ height: 52px; padding: 10px 14px; border-bottom: 1px solid #2a3140; display: flex; gap: 12px; align-items: center; justify-content: space-between; background: #0f1115; }}
-    h1 {{ font-size: 18px; margin: 0; font-weight: 700; }}
+    body {{ margin: 0; background: radial-gradient(circle at top, #102536 0, #081019 36%, #04070b 100%); color: #f4f7fb; overflow: hidden; }}
+    header {{ height: 56px; padding: 10px 16px; border-bottom: 1px solid rgba(145,208,255,.14); display: flex; gap: 12px; align-items: center; justify-content: space-between; background: linear-gradient(90deg, rgba(7,15,24,.94), rgba(8,19,29,.88)); backdrop-filter: blur(14px); }}
+    h1 {{ font-size: 18px; margin: 0; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }}
     main {{ height: calc(100vh - 52px); overflow: hidden; display: grid; grid-template-rows: 44px 1fr 42px; }}
     .top-actions {{ display: flex; gap: 8px; align-items: center; }}
-    .button, button {{ background: #e8edf7; color: #0f1115; border: 0; border-radius: 6px; padding: 8px 10px; text-decoration: none; cursor: pointer; font-size: 13px; }}
-    .banner {{ display: flex; gap: 14px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #273041; background: #0b1018; overflow: hidden; white-space: nowrap; }}
+    .button, button {{ background: linear-gradient(180deg, #f6fcff, #d8f4ff); color: #07121a; border: 1px solid rgba(255,255,255,.25); border-radius: 999px; padding: 8px 12px; text-decoration: none; cursor: pointer; font-size: 13px; font-weight: 700; box-shadow: 0 8px 24px rgba(11,170,226,.18); }}
+    .banner {{ display: flex; gap: 14px; align-items: center; padding: 8px 14px; border-bottom: 1px solid rgba(145,208,255,.12); background: rgba(9,16,25,.84); backdrop-filter: blur(12px); overflow: hidden; white-space: nowrap; }}
     .bottom-banner {{ border-top: 1px solid #273041; border-bottom: 0; }}
-    .pill {{ border: 1px solid #2d384c; border-radius: 999px; padding: 5px 9px; background: #151b26; font-size: 12px; }}
+    .pill {{ border: 1px solid rgba(145,208,255,.18); border-radius: 999px; padding: 5px 9px; background: rgba(20,30,42,.86); font-size: 12px; }}
     .workbench {{ min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 390px; }}
-    .map-wrap {{ min-width: 0; min-height: 0; position: relative; background: #070a0f; overflow: hidden; }}
-    .map-toolbar {{ position: absolute; left: 12px; top: 12px; z-index: 2; display: flex; gap: 8px; align-items: center; }}
-    .map-legend {{ position: absolute; right: 12px; top: 12px; z-index: 2; display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; max-width: min(520px, calc(100% - 260px)); }}
-    .legend-chip {{ border: 1px solid #2d384c; border-radius: 999px; background: rgba(13,18,27,.88); color: #dce7f7; padding: 3px 7px; font-size: 11px; line-height: 1.2; }}
-    .legend-symbol {{ display: inline-grid; place-items: center; width: 17px; height: 17px; margin-right: 4px; border-radius: 50%; background: #223047; color: #ffffff; font-weight: 800; font-size: 11px; }}
-    .map-status {{ position: absolute; left: 12px; bottom: 12px; z-index: 2; max-width: min(680px, calc(100% - 24px)); border: 1px solid #2a3140; border-radius: 8px; background: rgba(12,16,23,.92); padding: 9px 11px; color: #cbd5e1; font-size: 13px; }}
-    svg#game-map {{ width: 100%; height: 100%; display: block; background: radial-gradient(circle at 50% 40%, #121925 0, #070a0f 65%); }}
-    .map-side {{ border-left: 1px solid #273041; background: #0d121b; min-height: 0; overflow: auto; }}
+    .map-wrap {{ min-width: 0; min-height: 0; position: relative; background: radial-gradient(circle at 22% 18%, rgba(80,175,255,.16), transparent 28%), radial-gradient(circle at 80% 12%, rgba(66,255,198,.14), transparent 22%), linear-gradient(180deg, #071019, #04070b); overflow: hidden; }}
+    .map-wrap:before {{ content: ""; position: absolute; inset: 0; background-image: linear-gradient(rgba(173,217,255,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(173,217,255,.05) 1px, transparent 1px); background-size: 46px 46px; opacity: .28; pointer-events: none; }}
+    .map-toolbar {{ position: absolute; left: 16px; top: 16px; z-index: 2; display: flex; gap: 8px; align-items: center; }}
+    .map-legend {{ position: absolute; right: 16px; top: 16px; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; max-width: min(540px, calc(100% - 280px)); }}
+    .legend-chip {{ border: 1px solid rgba(173,217,255,.18); border-radius: 999px; background: rgba(9,17,27,.82); color: #dce7f7; padding: 4px 8px; font-size: 11px; line-height: 1.2; backdrop-filter: blur(10px); }}
+    .legend-symbol {{ display: inline-grid; place-items: center; width: 17px; height: 17px; margin-right: 4px; border-radius: 50%; background: linear-gradient(180deg, #2b5378, #1a3044); color: #ffffff; font-weight: 800; font-size: 11px; }}
+    .map-status {{ position: absolute; left: 16px; bottom: 16px; z-index: 2; max-width: min(720px, calc(100% - 32px)); border: 1px solid rgba(173,217,255,.18); border-radius: 14px; background: rgba(10,16,24,.86); padding: 11px 13px; color: #d7e5f3; font-size: 13px; backdrop-filter: blur(12px); box-shadow: 0 20px 40px rgba(0,0,0,.28); }}
+    svg#game-map {{ width: 100%; height: 100%; display: block; background: radial-gradient(circle at 50% 40%, rgba(30,63,92,.5) 0, rgba(6,11,17,.94) 65%); }}
+    .map-side {{ border-left: 1px solid rgba(145,208,255,.14); background: linear-gradient(180deg, rgba(10,16,24,.98), rgba(6,10,16,.98)); min-height: 0; overflow: auto; }}
     .panel-body {{ padding: 12px; }}
-    .metric {{ border: 1px solid #2a3140; border-radius: 6px; padding: 9px; background: #151923; min-width: 0; }}
+    .metric {{ border: 1px solid rgba(145,208,255,.12); border-radius: 12px; padding: 10px; background: linear-gradient(180deg, rgba(18,26,37,.94), rgba(11,16,24,.94)); min-width: 0; box-shadow: inset 0 1px 0 rgba(255,255,255,.03); }}
     .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }}
     .label {{ color: #98a2b3; font-size: 12px; }}
     .value {{ font-size: 14px; overflow-wrap: anywhere; margin-top: 4px; }}
     .wide {{ margin-bottom: 8px; }}
     .owner-form {{ display: grid; gap: 8px; margin: 10px 0; }}
-    textarea, input {{ width: 100%; border: 1px solid #2a3140; border-radius: 6px; background: #090c12; color: #f4f7fb; padding: 9px; font: inherit; }}
+    textarea, input {{ width: 100%; border: 1px solid rgba(145,208,255,.14); border-radius: 10px; background: rgba(7,12,18,.94); color: #f4f7fb; padding: 9px; font: inherit; }}
     textarea {{ resize: vertical; min-height: 76px; max-height: 180px; }}
     .form-row {{ display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }}
     .owner-log {{ max-height: 160px; overflow: auto; display: grid; gap: 8px; }}
-    .owner-msg {{ border: 1px solid #2a3140; border-radius: 6px; padding: 8px; background: #10151f; font-size: 13px; line-height: 1.35; }}
+    .owner-msg {{ border: 1px solid rgba(145,208,255,.12); border-radius: 10px; padding: 8px; background: rgba(14,21,31,.9); font-size: 13px; line-height: 1.35; }}
     .hint {{ color: #98a2b3; font-size: 12px; margin-top: 4px; }}
     @media (max-width: 900px) {{ .workbench {{ grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) 44vh; }} .map-side {{ border-left: 0; border-top: 1px solid #273041; }} }}
     @media (max-width: 700px) {{ header {{ height: 48px; }} main {{ height: calc(100vh - 48px); }} h1 {{ font-size: 16px; }} .top-actions .button {{ display: none; }} }}
@@ -607,6 +629,7 @@ def dashboard_html(query: str = "") -> bytes:
           </div>
           <div id="launch-report" class="owner-log">Enter owner PIN, then run.</div>
         </div>
+        <div class="metric wide"><div class="label">Public Thought</div><div id="public-thought" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Current Intent</div><div id="current-intent" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
         <div class="metric wide"><div class="label">Action Audit</div><div id="action-audit" class="owner-log">loading</div></div>
@@ -640,6 +663,18 @@ def dashboard_html(query: str = "") -> bytes:
     let lastGame = params.get("gameId") || params.get("game_id") || {json.dumps(initial_game_id)};
     let mapZoom = 1;
     let lastMap = null;
+    let suggestedEditsLoaded = false;
+    let suggestedEditsRefreshInFlight = false;
+    function hasOwnerPin() {{
+      return !!document.getElementById("owner-pin").value.trim();
+    }}
+    async function fetchJson(url, options) {{
+      const opts = options ? {{...options}} : {{}};
+      opts.cache = "no-store";
+      const join = url.includes("?") ? "&" : "?";
+      const res = await fetch(url + join + "_ts=" + Date.now(), opts);
+      return {{res, data: await res.json()}};
+    }}
     function runtimeBlockers(data) {{
       const blockers = [];
       const launch = data.launch || {{}};
@@ -683,11 +718,20 @@ def dashboard_html(query: str = "") -> bytes:
     }}
     function renderSuggestedEdits(edits, evidence) {{
       const box = document.getElementById("suggested-edits");
-      if (!edits || !edits.length) {{
+      const summary = document.getElementById("autonomy-counts");
+      const rows = Array.isArray(edits) ? edits.slice().reverse() : [];
+      const open = rows.filter((edit) => String(edit.status || "open") === "open");
+      const reviewed = rows.length - open.length;
+      summary.textContent = "open " + open.length + ", reviewed " + reviewed + ", evidence " + esc((evidence || []).length);
+      if (!rows.length) {{
         box.textContent = "none";
         return;
       }}
-      box.innerHTML = edits.slice().reverse().map((edit) => (
+      if (!open.length) {{
+        box.innerHTML = "<div class='owner-msg'><strong>Queue clear.</strong><div class='hint'>No open suggested edits remain in the current review window.</div></div>";
+        return;
+      }}
+      box.innerHTML = open.map((edit) => (
         "<div class='owner-msg'><strong>" + esc(edit.title || edit.detector || "suggestion") + "</strong>" +
         " <span class='hint'>[" + esc(edit.priority || "review") + " seen " + esc(edit.seen_count || 1) + "x]</span><br>" +
         esc(edit.symptom || "") + "<br><span class='hint'>" + esc(edit.file || "") + " | " + esc(edit.suggested_change || "") + "</span>" +
@@ -891,8 +935,9 @@ def dashboard_html(query: str = "") -> bytes:
       loadStats();
     }}
     async function loadStats() {{
-      const res = await fetch("/stats");
-      const data = await res.json();
+      const result = await fetchJson("/stats");
+      const res = result.res;
+      const data = result.data;
       document.getElementById("service").textContent = data.ok ? "ready" : "not ready";
       const selectedGame = lastGame || data.current_game_id || "";
       document.getElementById("game").textContent = selectedGame || "unknown";
@@ -917,6 +962,7 @@ def dashboard_html(query: str = "") -> bytes:
       document.getElementById("visible").textContent = "agents " + (snap.visible_agents ?? 0) + ", monsters " + (snap.visible_monsters ?? 0) + ", items " + (snap.visible_items ?? 0);
       document.getElementById("inventory").textContent = String(snap.inventory_count ?? 0);
       document.getElementById("last-action").textContent = [lastAction.type, lastAction.targetId || lastAction.regionId || lastAction.itemId, lastAction.reason].filter(Boolean).join(" | ") || "none";
+      document.getElementById("public-thought").textContent = data.public_thought || runtime.last_public_thought || "none";
       document.getElementById("current-intent").textContent = runtime.current_intent || [lastAction.type, lastAction.reason].filter(Boolean).join(" | ") || "none";
       renderActionAudit(runtime.action_audit || []);
       document.getElementById("yield").textContent = "games " + (runtime.games_completed ?? 0) + ", last +" + (runtime.last_balance_delta ?? 0) + ", avg/game " + (runtime.average_balance_delta_per_game ?? 0) + ", target games/day " + (runtime.games_needed_for_1000_per_day || "?");
@@ -944,6 +990,14 @@ def dashboard_html(query: str = "") -> bytes:
         lastGame = data.current_game_id;
       }} else if (!data.current_game_id && !lastGame) {{
         showRuntimeFallback(blockers);
+      }}
+      if (suggestedEditsLoaded && hasOwnerPin() && !suggestedEditsRefreshInFlight) {{
+        suggestedEditsRefreshInFlight = true;
+        try {{
+          await loadSuggestedEdits();
+        }} finally {{
+          suggestedEditsRefreshInFlight = false;
+        }}
       }}
     }}
     document.getElementById("owner-form").addEventListener("submit", async (event) => {{
@@ -979,16 +1033,18 @@ def dashboard_html(query: str = "") -> bytes:
       const box = document.getElementById("suggested-edits");
       box.textContent = "Loading...";
       try {{
-        const res = await fetch("/admin/suggested-edits", {{
+        const result = await fetchJson("/admin/suggested-edits", {{
           method: "POST",
           headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
           body: JSON.stringify({{limit: 50}})
         }});
-        const data = await res.json();
+        const res = result.res;
+        const data = result.data;
         if (!res.ok || !data.ok) {{
           box.textContent = "Failed: " + (data.error || res.status);
           return;
         }}
+        suggestedEditsLoaded = true;
         renderSuggestedEdits(data.suggested_edits || [], data.match_evidence || []);
       }} catch (err) {{
         box.textContent = "Failed: " + err;
@@ -1000,12 +1056,13 @@ def dashboard_html(query: str = "") -> bytes:
       if (!id) return;
       box.textContent = "Updating...";
       try {{
-        const res = await fetch("/admin/suggested-edit-status", {{
+        const result = await fetchJson("/admin/suggested-edit-status", {{
           method: "POST",
           headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
           body: JSON.stringify({{id, status}})
         }});
-        const data = await res.json();
+        const res = result.res;
+        const data = result.data;
         if (!res.ok || !data.ok) {{
           box.textContent = "Failed: " + (data.error || res.status);
           return;
@@ -1020,12 +1077,13 @@ def dashboard_html(query: str = "") -> bytes:
       const box = document.getElementById("social-queue");
       box.textContent = "Draining...";
       try {{
-        const res = await fetch("/admin/social-drain", {{
+        const result = await fetchJson("/admin/social-drain", {{
           method: "POST",
           headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
           body: JSON.stringify({{max_items: 5}})
         }});
-        const data = await res.json();
+        const res = result.res;
+        const data = result.data;
         if (!res.ok || !data.ok) {{
           box.textContent = "Failed: " + (data.error || data.reason || res.status);
           return;
@@ -1040,12 +1098,13 @@ def dashboard_html(query: str = "") -> bytes:
       const box = document.getElementById("launch-report");
       box.textContent = "Running...";
       try {{
-        const res = await fetch("/admin/launch-report", {{
+        const result = await fetchJson("/admin/launch-report", {{
           method: "POST",
           headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
           body: JSON.stringify({{}})
         }});
-        const data = await res.json();
+        const res = result.res;
+        const data = result.data;
         if (!res.ok && !data.blockers) {{
           box.textContent = "Failed: " + (data.error || res.status);
           return;
@@ -1056,7 +1115,7 @@ def dashboard_html(query: str = "") -> bytes:
       }}
     }}
     loadStats();
-    setInterval(loadStats, 15000);
+    setInterval(loadStats, 4000);
   </script>
 </body>
 </html>"""
@@ -1078,24 +1137,26 @@ def stream_html() -> bytes:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Hellion Stream</title>
   <style>
-    :root {{ color-scheme: dark; font-family: Arial, sans-serif; }}
-    body {{ margin: 0; background: #08090c; color: #f4f7fb; overflow: hidden; }}
-    .stage {{ position: fixed; inset: 0; display: grid; grid-template-columns: 1fr 340px; background: #08090c; }}
+    :root {{ color-scheme: dark; font-family: "Segoe UI Variable Text", "Aptos", "Trebuchet MS", sans-serif; }}
+    body {{ margin: 0; background: radial-gradient(circle at top, #10293a 0, #081118 38%, #05070b 100%); color: #f4f7fb; overflow: hidden; }}
+    .stage {{ position: fixed; inset: 0; display: grid; grid-template-columns: 1fr 360px; background: #08090c; }}
     iframe {{ width: 100%; height: 100%; border: 0; background: #050608; }}
-    .side {{ border-left: 1px solid rgba(255,255,255,.14); background: #11151d; display: grid; grid-template-rows: auto auto 1fr auto; min-width: 0; }}
+    .side {{ border-left: 1px solid rgba(173,217,255,.16); background: linear-gradient(180deg, rgba(10,16,24,.98), rgba(6,10,16,.98)); display: grid; grid-template-rows: auto auto auto 1fr auto; min-width: 0; }}
     .brand {{ padding: 16px; border-bottom: 1px solid rgba(255,255,255,.12); }}
-    h1 {{ margin: 0; font-size: 22px; letter-spacing: 0; }}
+    h1 {{ margin: 0; font-size: 22px; letter-spacing: .04em; text-transform: uppercase; }}
     .tag {{ margin-top: 4px; color: #aab4c3; font-size: 12px; }}
-    .avatar {{ margin: 14px 16px; border: 1px solid rgba(255,255,255,.14); border-radius: 8px; min-height: 170px; background: radial-gradient(circle at 50% 25%, #4ee0b2, #1d2732 36%, #0d1016 72%); display: grid; place-items: center; }}
+    .avatar {{ margin: 14px 16px; border: 1px solid rgba(173,217,255,.16); border-radius: 16px; min-height: 170px; background: radial-gradient(circle at 50% 25%, #4ee0b2, #1d2732 36%, #0d1016 72%); display: grid; place-items: center; box-shadow: 0 20px 44px rgba(0,0,0,.28); }}
     .face {{ width: 92px; height: 92px; border-radius: 50%; border: 3px solid #d7ffe8; box-shadow: 0 0 30px rgba(78,224,178,.45); position: relative; }}
     .face:before, .face:after {{ content: ""; position: absolute; top: 34px; width: 12px; height: 12px; background: #d7ffe8; border-radius: 50%; }}
     .face:before {{ left: 24px; }}
     .face:after {{ right: 24px; }}
     .mouth {{ position: absolute; left: 29px; right: 29px; bottom: 25px; height: 10px; border-bottom: 3px solid #d7ffe8; border-radius: 0 0 18px 18px; }}
     .stats {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 0 16px 14px; }}
-    .metric {{ border: 1px solid rgba(255,255,255,.14); border-radius: 8px; padding: 9px; background: #171c26; min-width: 0; }}
+    .metric {{ border: 1px solid rgba(173,217,255,.14); border-radius: 12px; padding: 9px; background: linear-gradient(180deg, rgba(18,26,37,.94), rgba(11,16,24,.94)); min-width: 0; }}
     .label {{ color: #91a0b6; font-size: 11px; }}
     .value {{ margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }}
+    .thought {{ margin: 0 16px 14px; padding: 12px 14px; border: 1px solid rgba(173,217,255,.16); border-radius: 14px; background: rgba(10,18,28,.82); box-shadow: inset 0 1px 0 rgba(255,255,255,.03); }}
+    .thought strong {{ display: block; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8bcfff; margin-bottom: 6px; }}
     .chat {{ border-top: 1px solid rgba(255,255,255,.12); min-height: 0; display: grid; grid-template-rows: auto 1fr; }}
     .chat h2 {{ margin: 0; padding: 12px 16px; font-size: 14px; }}
     #messages {{ overflow: auto; padding: 0 16px 12px; }}
@@ -1121,6 +1182,7 @@ def stream_html() -> bytes:
         <div class="metric"><div class="label">Mode</div><div id="mode" class="value">unknown</div></div>
         <div class="metric"><div class="label">Frame</div><div id="frame" class="value">unknown</div></div>
       </div>
+      <div class="thought"><strong>Live Thought</strong><div id="thought">loading</div></div>
       <section class="chat"><h2>Chat</h2><div id="messages"></div></section>
       <form id="chat-form"><input id="author" maxlength="32" placeholder="name"><input id="message" maxlength="240" placeholder="message"><button>Send</button></form>
     </aside>
@@ -1129,20 +1191,28 @@ def stream_html() -> bytes:
   <script>
     let loadedUrl = {json.dumps(initial_spectate)};
     function esc(value) {{ return String(value || "").replace(/[&<>]/g, (c) => ({{"&":"&amp;","<":"&lt;",">":"&gt;"}}[c])); }}
+    async function fetchJson(url, options) {{
+      const opts = options ? {{...options}} : {{}};
+      opts.cache = "no-store";
+      const join = url.includes("?") ? "&" : "?";
+      const res = await fetch(url + join + "_ts=" + Date.now(), opts);
+      return {{res, data: await res.json()}};
+    }}
     function renderChat(items) {{
       document.getElementById("messages").innerHTML = (items || []).map((m) => "<div class='msg'><span class='author'>" + esc(m.author) + "</span> " + esc(m.message) + "</div>").join("");
     }}
     async function loadStream() {{
-      const res = await fetch("/stream/stats");
-      const data = await res.json();
+      const result = await fetchJson("/stream/stats");
+      const data = result.data;
       document.getElementById("status").textContent = data.status || "standing by";
       document.getElementById("mood").textContent = data.mood || "standing by";
       document.getElementById("viewers").textContent = (data.stream && data.stream.viewer_count) || 0;
       document.getElementById("mode").textContent = (data.runtime && data.runtime.mode) || "unknown";
       document.getElementById("frame").textContent = (data.runtime && data.runtime.last_frame_type) || "unknown";
+      document.getElementById("thought").textContent = data.thought || "Hellion is measuring the room.";
       document.getElementById("ticker").textContent = (data.blockers && data.blockers.length) ? data.blockers.join(" | ") : "front row seats are open";
       const voice = data.voice_lab && data.voice_lab.soundbites && data.voice_lab.soundbites.length ? data.voice_lab.soundbites[data.voice_lab.soundbites.length - 1].text : "";
-      document.getElementById("alerts").textContent = voice || ((data.stream && data.stream.alerts) || []).map((a) => a.text).join(" | ");
+      document.getElementById("alerts").textContent = voice || data.thought || ((data.stream && data.stream.alerts) || []).map((a) => a.text).join(" | ");
       renderChat(data.chat || []);
       if (data.spectate_url && data.spectate_url !== loadedUrl) {{
         loadedUrl = data.spectate_url;
@@ -1155,11 +1225,11 @@ def stream_html() -> bytes:
       const message = document.getElementById("message").value;
       if (!message.trim()) return;
       document.getElementById("message").value = "";
-      await fetch("/stream/chat", {{method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{author, message}})}});
+      await fetchJson("/stream/chat", {{method:"POST", headers:{{"Content-Type":"application/json"}}, body:JSON.stringify({{author, message}})}});
       await loadStream();
     }});
     loadStream();
-    setInterval(loadStream, 5000);
+    setInterval(loadStream, 3000);
   </script>
 </body>
 </html>"""
@@ -1365,7 +1435,16 @@ class CerberusHandler(BaseHTTPRequestHandler):
             state = payload.get("state", payload)
             remember_current_game(state)
             action = cerberus_tick(state)
-            update_claw_runtime_status(live_map=build_live_map(state))
+            update_claw_runtime_status(
+                current_game_id=extract_game_id(state),
+                live_map=build_live_map(state),
+                last_action=action,
+                current_intent=" | ".join(
+                    part for part in (action.get("type"), action.get("reason") or action.get("thought")) if part
+                ),
+                last_public_thought=public_action_thought(action),
+                state="playing" if action.get("type") else "tick_processed",
+            )
             self._send({"ok": True, "action": action})
         except Exception as exc:  # keep the service alive; report compactly
             self._send({"ok": False, "error": str(exc)[:500]}, status=500)
@@ -1399,6 +1478,8 @@ class CerberusHandler(BaseHTTPRequestHandler):
         encoded = json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
@@ -1406,6 +1487,8 @@ class CerberusHandler(BaseHTTPRequestHandler):
     def _send_html(self, body: bytes, *, status: int = 200) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -1413,6 +1496,8 @@ class CerberusHandler(BaseHTTPRequestHandler):
     def _send_empty(self, content_type: str, *, status: int = 200) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
