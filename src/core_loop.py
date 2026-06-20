@@ -359,6 +359,12 @@ def _remember_event_learning_or_warn(
             if is_death_event and victim:
                 if killer == state.self.id and victim != state.self.id:
                     dossiers.record_kill(victim, name=victim_name)
+                    if int(getattr(dossiers.records.get(victim), "alliance_score", 0) or 0) > 0:
+                        dossiers.record_betrayal_by_us(
+                            victim,
+                            name=victim_name,
+                            note=f"betrayed_them@{region}",
+                        )
                     dossiers.add_social_note(victim, f"lost_to_us@{region}"[:180])
                     append_social_event(
                         {
@@ -377,9 +383,22 @@ def _remember_event_learning_or_warn(
                         source=f"event:{event_type}",
                         confidence="0.82",
                     )
+                    if int(getattr(dossiers.records.get(victim), "betrayed_them", 0) or 0) > 0:
+                        memory.remember_lesson(
+                            "alliances",
+                            f"betrayal: we cashed in on {victim_name} once the tactical reward outweighed the alliance in {region}",
+                            source=f"event:{event_type}",
+                            confidence="0.81",
+                        )
                 elif victim == state.self.id and killer != state.self.id:
                     if killer:
                         dossiers.record_killed_us(killer, name=killer_name)
+                        if int(getattr(dossiers.records.get(killer), "alliance_score", 0) or 0) > 0:
+                            dossiers.record_betrayal_by_them(
+                                killer,
+                                name=killer_name,
+                                note=f"betrayed_us@{region}",
+                            )
                         dossiers.add_social_note(killer, f"killed_us@{region}"[:180])
                         append_social_event(
                             {
@@ -398,6 +417,13 @@ def _remember_event_learning_or_warn(
                         source=f"event:{event_type}",
                         confidence="0.91",
                     )
+                    if killer and int(getattr(dossiers.records.get(killer), "betrayed_us", 0) or 0) > 0:
+                        memory.remember_lesson(
+                            "alliances",
+                            f"betrayal: {killer_name} broke a useful alliance in {region}; trust should now require stronger proof than charm",
+                            source=f"event:{event_type}",
+                            confidence="0.93",
+                        )
                     self_death_recorded = True
                 elif killer and victim and killer != victim:
                     dossiers.observe_agent(killer, name=killer_name, tendency="finishes_low_targets")

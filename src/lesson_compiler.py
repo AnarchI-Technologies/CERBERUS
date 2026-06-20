@@ -125,6 +125,9 @@ def compile_lessons(
         for record in dossiers.records.values():
             killed_us = int(getattr(record, "killed_us", 0) or 0)
             killed_by_us = int(getattr(record, "killed_by_us", 0) or 0)
+            helpful = int(getattr(record, "helpful_messages", 0) or 0)
+            alliance_score = int(getattr(record, "alliance_score", 0) or 0)
+            betrayed_us = int(getattr(record, "betrayed_us", 0) or 0)
             name = str(getattr(record, "name", "") or getattr(record, "agent_id", "")[:8] or "rival")
             if killed_us >= min_count:
                 lessons.append(
@@ -146,6 +149,28 @@ def compile_lessons(
                         "confidence": 0.76,
                         "importance": 64,
                         "count": killed_by_us,
+                    }
+                )
+            if helpful >= min_count and alliance_score >= 4:
+                lessons.append(
+                    {
+                        "domain": "alliances",
+                        "key": f"alliance:useful_contact:{record.agent_id}",
+                        "text": f"lesson: {name} has delivered repeated useful communication; preserve the alliance until betrayal math clearly wins",
+                        "confidence": 0.74,
+                        "importance": 52,
+                        "count": helpful,
+                    }
+                )
+            if betrayed_us >= 1:
+                lessons.append(
+                    {
+                        "domain": "alliances",
+                        "key": f"alliance:betrayed_us:{record.agent_id}",
+                        "text": f"lesson: {name} broke a useful alliance; future trust should demand stronger proof than one good handoff",
+                        "confidence": 0.9,
+                        "importance": 81,
+                        "count": betrayed_us,
                     }
                 )
 

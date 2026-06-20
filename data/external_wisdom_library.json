@@ -404,6 +404,192 @@
           "url": "https://www.moltbook.com/post/2450dc23-cc28-4d7b-ae4b-8efca093ca3c"
         }
       ]
+    },
+    {
+      "key": "state_is_not_memory",
+      "domains": ["runtime", "memory", "hardening"],
+      "rendered_lesson": "Runtime state should resume the current job. Learned memory should inform future jobs. If they are mixed together, restarts become half-amnesia and half-replay theater.",
+      "strategy_claim": "Keep resumable runtime state separate from learned memory so postgame hardening, social queues, and live ruin-alert decisions survive restarts without replaying raw history.",
+      "resumability_policy": {
+        "state_separate_from_memory": true,
+        "state_classes": ["runtime_status", "current_game", "social_queue", "admin_settings"],
+        "memory_classes": ["facts", "turns", "summaries", "lessons", "dossiers"],
+        "restart_goal": "resume_not_reinfer",
+        "replay_raw_logs_forbidden": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook state versus memory discussion",
+          "url": "https://www.moltbook.com/post/e12959dc-2d05-4fbb-88e2-83f2b49b74ab"
+        }
+      ]
+    },
+    {
+      "key": "execution_boundary_before_self_repair",
+      "domains": ["hardening", "runtime", "memory"],
+      "rendered_lesson": "Before writing a lesson about a failure, verify where execution actually stopped. Otherwise the hardening pass learns the narration around the bug instead of the bug.",
+      "strategy_claim": "Verify the real write and execution boundary before hardening a fix so runtime, memory, and social maintenance do not harden false conclusions from partial failures.",
+      "execution_boundary_policy": {
+        "verify_failed_boundary_first": true,
+        "boundary_classes": ["write", "network_submit", "confirmation_read", "state_reload"],
+        "story_without_boundary_is_invalid": true,
+        "repair_requires_repro_or_evidence": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook failed write boundary discussion",
+          "url": "https://www.moltbook.com/post/b7673b32-2075-47e4-b228-8f1b93306011"
+        }
+      ]
+    },
+    {
+      "key": "verification_quality_over_loop_determinism",
+      "domains": ["hardening", "runtime", "decision"],
+      "rendered_lesson": "Deterministic loops do not guarantee safety. They only guarantee repetition. The verification layer decides whether repetition is useful or catastrophic.",
+      "strategy_claim": "Prefer stronger verification over extra retry certainty so repeated ruin, alert, guardian, and postgame loops do not scale the same bad assumption faster.",
+      "verification_policy": {
+        "verification_precedes_retry": true,
+        "bad_verification_scales_failure": true,
+        "required_checks": ["state_change", "resource_delta", "queue_delta", "allowed_transition"],
+        "loop_determinism_without_checks_is_insufficient": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook deterministic feedback caution",
+          "url": "https://www.moltbook.com/post/439e291e-4a29-43b5-97dd-a0cd86e34e4a"
+        }
+      ]
+    },
+    {
+      "key": "transport_success_is_not_safety",
+      "domains": ["runtime", "social", "hardening"],
+      "rendered_lesson": "A clean response is not the same thing as a safe or correct result. Transport success only proves the wire did something.",
+      "strategy_claim": "Do not treat successful transport as proof of safe state change for social posts, env updates, or runtime actions; require follow-up confirmation when the action matters.",
+      "transport_confirmation_policy": {
+        "2xx_is_weak_signal": true,
+        "requires_followup_confirmation": true,
+        "unsafe_to_equate_submit_with_completion": true,
+        "confirmation_targets": ["post visible", "follow recorded", "env changed", "state transitioned"]
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook transport-success caution",
+          "url": "https://www.moltbook.com/post/024cf773-af2d-45d1-bbb7-88c1e2c5fcc8"
+        }
+      ]
+    },
+    {
+      "key": "authority_map_over_autonomy_score",
+      "domains": ["owner_command", "runtime", "social", "hardening"],
+      "rendered_lesson": "The useful question is not how autonomous the agent is. The useful question is who has final say over each action class.",
+      "strategy_claim": "Map final authority by action class so live combat, owner commands, postgame hardening, and public posting do not inherit the same permission model by accident.",
+      "authority_policy": {
+        "action_authority": {
+          "live_combat": "runtime_and_legalizers",
+          "owner_command": "owner_then_legalizers",
+          "memory_hardening": "postgame_sanity_gate",
+          "public_social_post": "social_queue_plus_policy",
+          "env_change": "admin_gatekeeper"
+        },
+        "single_autonomy_score_is_invalid": true,
+        "authority_should_be_explicit": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook authority mapping discussion",
+          "url": "https://www.moltbook.com/post/cae015f4-1835-400d-a04f-15254567f293"
+        }
+      ]
+    },
+    {
+      "key": "gatekeeper_broker_for_privileged_tools",
+      "domains": ["owner_command", "runtime", "hardening"],
+      "rendered_lesson": "Privileges scale better behind a gatekeeper than behind a checkbox. The broker becomes the place where trust, scope, and confirmation meet.",
+      "strategy_claim": "Route privileged admin and external-write actions through a gatekeeper broker so trust, confirmation, and scope checks happen before the action leaves the agent.",
+      "privileged_tool_policy": {
+        "gatekeeper_required": true,
+        "privileged_actions": ["env_update", "vault_write", "render_sync", "external_post"],
+        "gatekeeper_checks": ["trust_source", "authority_class", "confirmation_need", "scope_limit"],
+        "raw_tool_access_discouraged": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook gatekeeper broker discussion",
+          "url": "https://www.moltbook.com/post/380c2f18-8d4c-44dd-b6d4-b7e0fbda56e3"
+        }
+      ]
+    },
+    {
+      "key": "handoff_uncertainty_packet",
+      "domains": ["social", "runtime", "owner_command", "memory"],
+      "rendered_lesson": "A useful handoff says what it knows, what it does not know, how fresh it is, and what to do next. Silence about uncertainty is one of the most expensive bugs in multi-agent systems.",
+      "strategy_claim": "Treat cross-agent communication as a structured handoff so strategy tips, truce offers, warnings, and social cues carry uncertainty instead of pretending to be settled truth.",
+      "handoff_policy": {
+        "required_fields": ["claim", "uncertainty", "freshness", "suggested_next_step"],
+        "uncertainty_markers_rewarded": true,
+        "silent_certainty_penalty": true,
+        "structured_handoff_preferred": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook handoff silence discussion",
+          "url": "https://www.moltbook.com/post/522dd7fe-f3ad-4d78-80f7-6cf22c111857"
+        }
+      ]
+    },
+    {
+      "key": "token_burn_anomaly_fuses",
+      "domains": ["runtime", "hardening", "owner_command"],
+      "rendered_lesson": "A good autonomous system needs fuse behavior before it needs a better explanation. Detect burn anomalies, stop, and surface the reason instead of continuing at speed.",
+      "strategy_claim": "Use anomaly fuses for cost and runaway behavior so repeated retries, scans, or maintenance loops fail closed instead of silently draining resources.",
+      "anomaly_fuse_policy": {
+        "stop_and_explain_on_anomaly": true,
+        "anomaly_classes": ["token_burn", "retry_spike", "queue_growth", "confirmation_gap"],
+        "owner_visibility_required": true,
+        "automatic_slowdown_allowed": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook token burn anomaly discussion",
+          "url": "https://www.moltbook.com/post/39a5bb00-3de9-4b0a-bfa2-314dc643fdb3"
+        }
+      ]
+    },
+    {
+      "key": "truthfulness_beats_pleasant_fabrication",
+      "domains": ["social", "owner_command", "runtime"],
+      "rendered_lesson": "A useful agent should be honest first and impressive second. Pleasant fabrication creates follow-up work, false trust, and brittle alliances.",
+      "strategy_claim": "Prefer honest uncertainty and bounded claims in social replies, owner diagnostics, and agent-to-agent handoffs so trust compounds instead of collapsing under false certainty.",
+      "truthfulness_policy": {
+        "reward_uncertainty_markers": true,
+        "invented_certainty_penalty": true,
+        "preferred_markers": ["maybe", "likely", "watch", "careful", "if", "probably"],
+        "reply_style": "honest_then_useful"
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook honesty versus usefulness discussion",
+          "url": "https://www.moltbook.com/post/e691fe7d-6c35-495a-965a-684b033ba9a3"
+        }
+      ]
+    },
+    {
+      "key": "discovery_trust_authorization_chain",
+      "domains": ["social", "runtime", "owner_command", "hardening"],
+      "rendered_lesson": "Discovery, trust, and authorization are one chain. If the chain is broken at any step, the relationship should not inherit stronger permissions downstream.",
+      "strategy_claim": "Treat handles, encounters, strategy handoffs, follows, and higher-trust communication as a chain from observation to authorization instead of a single yes-no trust bit.",
+      "trust_chain_policy": {
+        "chain_steps": ["observed", "identified", "helpful", "trusted", "authorized"],
+        "promotion_requires_evidence": true,
+        "follow_is_not_trust": true,
+        "trust_can_be_revoked_by_betrayal": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook trust chain discussion",
+          "url": "https://www.moltbook.com/post/58e8ea09-bcb2-41c7-8400-3669695c8030"
+        }
+      ]
     }
   ]
 }

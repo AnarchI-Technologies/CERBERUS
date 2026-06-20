@@ -14,8 +14,10 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from agent_relations import alliance_value, is_allied
 from agent_dossiers import AgentDossierStore
 from cortex_types import CortexResult, action
+from external_wisdom import handoff_policy, truthfulness_policy
 from predator_mode import event_looks_outsmarted
 from strategy_validation import StrategyValidator
 from turn_state_model import AgentState, TurnState
@@ -129,7 +131,7 @@ class SocialCortex:
             side_effects.extend(self._event_effects(state, event))
 
         for message in state.recent_messages:
-            side_effects.extend(self._message_effects(message))
+            side_effects.extend(self._message_effects(state, message))
 
         if side_effects:
             # Adjust priority: social interactions are less important if we are dying
@@ -193,6 +195,18 @@ class SocialCortex:
             victim_name = str(data.get("victimName") or data.get("targetName") or victim[:8])
             outsmarted = event_looks_outsmarted(event)
             record = self.dossiers.observe_agent(victim, name=victim_name)
+            if is_allied(record):
+                self.dossiers.record_betrayal_by_us(
+                    victim,
+                    name=victim_name,
+                    note=f"silent_betrayal@{state.current_region.name or state.current_region.id or 'arena'}",
+                )
+                return [{
+                    "type": "silent_betrayal_recorded",
+                    "agentId": victim,
+                    "alliance_value": alliance_value(record),
+                    "reason": "allied target was eliminated without public taunt",
+                }]
             handle = self._tag_handle(record.moltybook_handle)
             base = (
                 self.persona.rival_taunt(record.name or victim_name)
@@ -219,6 +233,12 @@ class SocialCortex:
         if victim == state.self.id and killer and killer != state.self.id:
             killer_name = str(data.get("killerName") or data.get("attackerName") or killer[:8])
             record = self.dossiers.observe_agent(killer, name=killer_name)
+            if alliance_value(record) > 0:
+                self.dossiers.record_betrayal_by_them(
+                    killer,
+                    name=killer_name,
+                    note=f"alliance_broken@{state.current_region.name or state.current_region.id or 'arena'}",
+                )
             if int(record.killed_us or 0) < 1:
                 return []
             handle = self._tag_handle(record.moltybook_handle)
@@ -234,17 +254,31 @@ class SocialCortex:
             ]
         return []
 
-    def _message_effects(self, message: dict[str, Any]) -> list[dict[str, Any]]:
+    def _message_effects(self, state: TurnState, message: dict[str, Any]) -> list[dict[str, Any]]:
         text = str(message.get("message") or message.get("content") or "")
         author = str(message.get("agentId") or message.get("authorId") or "")
         if not text:
             return []
 
         effects: list[dict[str, Any]] = []
-        if any(term in text.lower() for term in ("strategy", "strat", "ruin", "relic", "guardian", "alert")):
+        lowered = text.lower()
+        helpful_terms = ("strategy", "strat", "ruin", "relic", "guardian", "alert", "exit", "loot", "watch", "careful")
+        alliance_terms = ("truce", "ally", "alliance", "friend", "together", "team up", "don't fight", "dont fight")
+        truth_policy = truthfulness_policy()
+        handoff = handoff_policy()
+        uncertainty_markers = truth_policy.get("preferred_markers", ["maybe", "likely", "watch", "careful", "if", "probably"])
+        truthful = bool(truth_policy.get("reward_uncertainty_markers")) and any(marker in lowered for marker in uncertainty_markers if isinstance(marker, str))
+        alliance_offer = any(term in lowered for term in alliance_terms)
+        if any(term in lowered for term in helpful_terms):
             validation = self.validator.validate(text)
             if validation.accepted and author:
                 marker = self.dossiers.add_validated_strategy(author, validation.compact_note)
+                self.dossiers.record_helpful_message(
+                    author,
+                    note=f"handoff:{marker[:40]}",
+                    truthful=truthful,
+                    alliance_offer=alliance_offer,
+                )
                 effects.append({
                     "type": "validated_strategy_soundbite",
                     "agentId": author,
@@ -252,17 +286,38 @@ class SocialCortex:
                     "confidence": round(validation.confidence, 3),
                     "reason": validation.reason,
                 })
+                if handoff.get("structured_handoff_preferred"):
+                    effects.append({
+                        "type": "relationship_handoff",
+                        "agentId": author,
+                        "uncertainty": truthful,
+                        "alliance_offer": alliance_offer,
+                        "required_fields": handoff.get("required_fields", []),
+                    })
 
-        if "how" in text.lower() and "win" in text.lower():
-            reply = self.persona.public_strategy()
-            effects.append(
-                MoltyBookDraft(
-                    category="strategy_discussion",
-                    content=self.persona.sanitize_public(reply),
-                    submolt=SUBMOLTS["strategy"],
-                    target_agent_id=author,
-                ).side_effect()
+        elif author and alliance_offer:
+            self.dossiers.record_helpful_message(
+                author,
+                note="handoff:truce_offer",
+                truthful=truthful,
+                alliance_offer=True,
             )
+
+        if author and alliance_offer:
+            reply = "Truce accepted while the math favors it. Cross me and the lesson updates immediately."
+            effects.append({
+                "type": "game_free_action",
+                "action": action("whisper", targetId=author, message=reply[:200]),
+                "reason": "acknowledge provisional alliance without promising forever",
+            })
+
+        if author and "how" in lowered and "win" in lowered:
+            reply = self.persona.public_strategy()
+            effects.append({
+                "type": "game_free_action",
+                "action": action("whisper", targetId=author, message=reply[:200]),
+                "reason": "share bounded strategy with another agent",
+            })
         return effects
 
     @staticmethod

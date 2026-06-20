@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent_relations import alliance_value, betrayal_reward, is_allied, should_betray
 from combat_decider import equipped_weapon, is_worth_attacking, target_in_attack_range
 from cortex_types import CortexResult, action
 from decision_engine import active_fallback_action
@@ -131,6 +132,44 @@ class LearnedPolicyCortex:
                 killed_by_us = int(getattr(record, "killed_by_us", 0) or 0)
                 tendencies = _record_tendencies(record)
                 in_range = target_in_attack_range(state, agent)
+                allied = is_allied(record)
+                alliance_points = alliance_value(record)
+                betrayal_points = betrayal_reward(record, state, agent)
+
+                if allied and in_range and not should_betray(record, state, agent):
+                    fallback = active_fallback_action(state)
+                    applied.append("preserve_useful_alliance")
+                    results.append(
+                        CortexResult(
+                            cortex=self.name,
+                            intent="preserve_provisional_alliance",
+                            score=92 + min(4, alliance_points // 3),
+                            risk=3,
+                            priority=96,
+                            veto=True,
+                            action=fallback,
+                            reason=f"retained lesson: {agent.name or agent.id[:8]} has been useful enough to preserve the alliance while its value beats betrayal",
+                            source_facts=["D|social.dossiers", "L|alliances.useful_contact"],
+                        )
+                    )
+                    continue
+
+                if allied and in_range and should_betray(record, state, agent) and is_worth_attacking(state, agent):
+                    applied.append("silent_betrayal_more_profitable")
+                    results.append(
+                        CortexResult(
+                            cortex=self.name,
+                            intent="betray_when_reward_outweighs_alliance",
+                            score=95 + min(4, betrayal_points),
+                            risk=max(4, agent.atk * 0.55),
+                            priority=97,
+                            veto=True,
+                            action=action("attack", targetId=agent.id, targetType="agent"),
+                            reason=f"retained lesson: alliance with {agent.name or agent.id[:8]} is now worth less than the tactical betrayal payoff; strike cleanly and stay silent",
+                            source_facts=["D|social.dossiers", "L|alliances.betrayal_math", "F|combat.range"],
+                        )
+                    )
+                    continue
 
                 if killed_us > killed_by_us and hp_ratio <= known_killer_floor:
                     if heal_item:

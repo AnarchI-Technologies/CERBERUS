@@ -255,6 +255,19 @@ def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
     return {"type": "action", "data": data, "thought": thought}
 
 
+def free_actions_from_side_effects(action: dict[str, Any], *, limit: int = 2) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for effect in action.get("_side_effects", []):
+        if not isinstance(effect, dict) or effect.get("type") != "game_free_action":
+            continue
+        payload = effect.get("action")
+        if isinstance(payload, dict) and payload.get("type"):
+            out.append(payload)
+        if len(out) >= max(0, limit):
+            break
+    return out
+
+
 def public_action_thought(action: dict[str, Any]) -> str:
     action_type = str(action.get("type") or "").lower()
     reason = str(action.get("reason") or action.get("thought") or "").lower()
@@ -1171,11 +1184,24 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 envelope = action_envelope(action)
                 await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
                 append_action_audit({"kind": "action_sent", "action": action, "reason": str(action.get("reason") or ""), "state": "playing"})
+                free_actions = free_actions_from_side_effects(action)
+                for free_action in free_actions:
+                    free_envelope = action_envelope(free_action)
+                    await ws.send(json.dumps(free_envelope, ensure_ascii=True, separators=(",", ":")))
+                    append_action_audit(
+                        {
+                            "kind": "free_action_sent",
+                            "action": free_action,
+                            "reason": str(free_action.get("reason") or ""),
+                            "state": "playing",
+                        }
+                    )
                 update_status(
                     last_action=action,
                     last_action_at=int(time.time()),
                     current_intent=runtime_intent(action),
                     last_public_thought=envelope.get("thought", ""),
+                    last_free_actions=free_actions,
                     state="playing",
                 )
             elif snapshot and not gameplay_ready:

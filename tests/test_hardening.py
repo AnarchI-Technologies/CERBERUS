@@ -65,6 +65,7 @@ from knowledge_base import KnowledgeBase
 from ep_economy_engine import EconomyCortex
 from decision_engine import make_plan
 from longterm_memory import LongTermMemoryStore
+from learned_policy_cortex import LearnedPolicyCortex
 from memory_system import CompactMemoryStore
 from moltbook_claim_assistant import extract_moltbook_claims, stored_claim, verification_text
 from moltybook_client import MoltyBookClient, process_social_side_effects
@@ -2021,6 +2022,16 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("silent_success_needs_confirmation_checks", keys)
         self.assertIn("state_machine_over_persona_for_infra_work", keys)
         self.assertIn("opportunity_cost_over_activity", keys)
+        self.assertIn("state_is_not_memory", keys)
+        self.assertIn("execution_boundary_before_self_repair", keys)
+        self.assertIn("verification_quality_over_loop_determinism", keys)
+        self.assertIn("transport_success_is_not_safety", keys)
+        self.assertIn("authority_map_over_autonomy_score", keys)
+        self.assertIn("gatekeeper_broker_for_privileged_tools", keys)
+        self.assertIn("handoff_uncertainty_packet", keys)
+        self.assertIn("token_burn_anomaly_fuses", keys)
+        self.assertIn("truthfulness_beats_pleasant_fabrication", keys)
+        self.assertIn("discovery_trust_authorization_chain", keys)
 
     def test_external_wisdom_aggregates_new_policy_families(self) -> None:
         self.assertTrue(external_wisdom.idempotency_policy()["require_effect_id"])
@@ -2034,6 +2045,127 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(external_wisdom.confirmation_policy()["confirm_before_retry"])
         self.assertTrue(external_wisdom.state_machine_policy()["transition_guards_required"])
         self.assertTrue(external_wisdom.opportunity_cost_policy()["require_ev_reasoning"])
+        self.assertTrue(external_wisdom.resumability_policy()["state_separate_from_memory"])
+        self.assertTrue(external_wisdom.execution_boundary_policy()["verify_failed_boundary_first"])
+        self.assertTrue(external_wisdom.verification_policy()["verification_precedes_retry"])
+        self.assertTrue(external_wisdom.transport_confirmation_policy()["requires_followup_confirmation"])
+        self.assertTrue(external_wisdom.authority_policy()["single_autonomy_score_is_invalid"])
+        self.assertTrue(external_wisdom.privileged_tool_policy()["gatekeeper_required"])
+        self.assertTrue(external_wisdom.handoff_policy()["structured_handoff_preferred"])
+        self.assertTrue(external_wisdom.anomaly_fuse_policy()["stop_and_explain_on_anomaly"])
+        self.assertEqual(external_wisdom.truthfulness_policy()["reply_style"], "honest_then_useful")
+        self.assertTrue(external_wisdom.trust_chain_policy()["trust_can_be_revoked_by_betrayal"])
+
+    def test_social_cortex_forms_alliance_from_truthful_handoff_and_whispers_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            state = TurnState.from_snapshot(
+                {
+                    "view": {
+                        "self": {"id": "me", "hp": 90, "ep": 4},
+                        "currentRegion": {"id": "r1", "name": "Ruin Gate", "terrain": "Ruin"},
+                        "recentMessages": [
+                            {
+                                "agentId": "ally-9",
+                                "message": "truce. maybe we leave the ruin before alert spikes and keep an exit open",
+                            }
+                        ],
+                    }
+                }
+            )
+            effects = []
+            for result in SocialCortex(dossier_store=dossiers).evaluate(state, {}):
+                effects.extend(result.side_effects)
+
+        record = dossiers.records["ally-9"]
+        self.assertGreaterEqual(record.helpful_messages, 1)
+        self.assertEqual(record.alliance_offers, 1)
+        self.assertGreaterEqual(record.truthful_messages, 1)
+        self.assertGreaterEqual(record.alliance_score, 4)
+        whisper = next(effect for effect in effects if effect.get("type") == "game_free_action")
+        self.assertEqual(whisper["action"]["type"], "whisper")
+        self.assertEqual(whisper["action"]["targetId"], "ally-9")
+
+    def test_social_cortex_keeps_betrayal_silent_for_allied_kill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            dossiers.record_helpful_message("ally-1", name="Ally", truthful=True, alliance_offer=True)
+            dossiers.record_helpful_message("ally-1", name="Ally", truthful=True)
+            state = TurnState.from_snapshot(
+                {
+                    "view": {
+                        "self": {"id": "me", "hp": 80, "ep": 4},
+                        "currentRegion": {"id": "r1", "name": "Arena Ring"},
+                    },
+                    "events": [{"type": "agent_kill", "data": {"killerId": "me", "victimId": "ally-1", "victimName": "Ally"}}],
+                }
+            )
+            effects = []
+            for result in SocialCortex(dossier_store=dossiers).evaluate(state, {}):
+                effects.extend(result.side_effects)
+
+        self.assertTrue(any(effect.get("type") == "silent_betrayal_recorded" for effect in effects))
+        self.assertFalse(any(effect.get("type") == "moltybook_draft" for effect in effects))
+
+    def test_learned_policy_can_preserve_or_betray_alliance_based_on_reward(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.compact.json",
+                encrypted_path=Path(tmp) / "memory.compact.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            dossiers.record_helpful_message("ally-1", name="Ally", truthful=True, alliance_offer=True)
+            dossiers.record_helpful_message("ally-1", name="Ally", truthful=True)
+            preserve_state = TurnState.from_snapshot(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 90, "maxHp": 100, "ep": 4},
+                        "currentRegion": {"id": "r1", "name": "Field", "terrain": "Plain", "connections": [{"id": "safe-1"}]},
+                        "visibleAgents": [{"id": "ally-1", "name": "Ally", "hp": 78, "atk": 8, "regionId": "r1"}],
+                    },
+                }
+            )
+            preserve = LearnedPolicyCortex().evaluate(preserve_state, {"dossier_store": dossiers, "memory_store": memory})
+            dossiers.observe_agent("ally-1", name="Ally", tendency="collects_high_value_loot")
+            dossiers.records["ally-1"].killed_by_us = 1
+            betray_state = TurnState.from_snapshot(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {"id": "me", "hp": 92, "maxHp": 100, "ep": 4},
+                        "alertGauge": 12,
+                        "currentRegion": {"id": "r2", "name": "Ruin Ring", "terrain": "Ruin", "connections": [{"id": "safe-2"}]},
+                        "visibleAgents": [{"id": "ally-1", "name": "Ally", "hp": 24, "atk": 8, "regionId": "r2"}],
+                    },
+                }
+            )
+            betray = LearnedPolicyCortex().evaluate(betray_state, {"dossier_store": dossiers, "memory_store": memory})
+
+        self.assertTrue(any(result.intent == "preserve_provisional_alliance" for result in preserve))
+        betrayal = next(result for result in betray if result.intent == "betray_when_reward_outweighs_alliance")
+        self.assertEqual(betrayal.action["type"], "attack")
+
+    def test_claw_runtime_extracts_game_free_actions_from_side_effects(self) -> None:
+        actions = claw_runtime.free_actions_from_side_effects(
+            {
+                "_side_effects": [
+                    {"type": "game_free_action", "action": {"type": "whisper", "targetId": "ally-1", "message": "quiet"}},
+                    {"type": "game_free_action", "action": {"type": "broadcast", "message": "loud"}},
+                ]
+            }
+        )
+
+        self.assertEqual([item["type"] for item in actions], ["whisper", "broadcast"])
 
     def test_compile_lessons_uses_dossiers_and_external_wisdom(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2480,6 +2612,67 @@ class HardeningTests(unittest.TestCase):
                 os.environ.pop("CERBERUS_PIN", None)
             else:
                 os.environ["CERBERUS_PIN"] = old_pin
+
+    def test_isolated_instance_routes_runtime_state_side_effects_to_isolated_root(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as live_tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = live_tmp
+                isolated = self._isolated(tmp)
+
+                isolated.tick(
+                    {
+                        "canAct": True,
+                        "view": {
+                            "self": {
+                                "id": "me",
+                                "hp": 70,
+                                "maxHp": 100,
+                                "ep": 4,
+                                "inventory": [{"id": "med-1", "typeId": "medkit"}],
+                            },
+                            "currentRegion": {"id": "r1"},
+                        },
+                    },
+                    owner_command_messages=[{"id": "cmd-1", "kind": "owner_command", "text": "heal now"}],
+                )
+                isolated.tick(
+                    {
+                        "gameId": "game-1",
+                        "agentId": "me",
+                        "events": [
+                            {
+                                "type": "agent_killed",
+                                "killerId": "me",
+                                "victimId": "enemy-1",
+                                "victimName": "Runner",
+                            }
+                        ],
+                        "view": {
+                            "self": {"id": "me", "hp": 100, "ep": 4},
+                            "currentRegion": {"id": "r1"},
+                        },
+                    }
+                )
+
+                live_owner = Path(live_tmp) / "owner_messages.json"
+                live_social = Path(live_tmp) / "social_runtime_queue.json"
+                isolated_owner = isolated.root / "owner_messages.json"
+                isolated_social = isolated.root / "social_runtime_queue.json"
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertFalse(live_owner.exists())
+        self.assertFalse(live_social.exists())
+        self.assertTrue(isolated_owner.exists())
+        self.assertTrue(isolated_social.exists())
+        self.assertEqual(runtime_state.read_json(isolated_owner)["messages"][-1]["command_id"], "cmd-1")
+        self.assertTrue(
+            any(item.get("type") == "moltybook_draft" for item in runtime_state.read_json(isolated_social)["queue"])
+        )
 
     def test_isolated_instance_survives_encrypted_reload_strain(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")

@@ -265,3 +265,43 @@ def state_machine_policy() -> dict[str, Any]:
 
 def opportunity_cost_policy() -> dict[str, Any]:
     return _merged_policy("opportunity_cost_policy", domains=("decision", "runtime", "social", "lessons"))
+
+
+def resumability_policy() -> dict[str, Any]:
+    return _merged_policy("resumability_policy", domains=("runtime", "memory", "hardening"))
+
+
+def execution_boundary_policy() -> dict[str, Any]:
+    return _merged_policy("execution_boundary_policy", domains=("hardening", "runtime", "memory"))
+
+
+def verification_policy() -> dict[str, Any]:
+    return _merged_policy("verification_policy", domains=("hardening", "runtime", "decision"))
+
+
+def transport_confirmation_policy() -> dict[str, Any]:
+    return _merged_policy("transport_confirmation_policy", domains=("runtime", "social", "hardening"))
+
+
+def authority_policy() -> dict[str, Any]:
+    return _merged_policy("authority_policy", domains=("owner_command", "runtime", "social", "hardening"))
+
+
+def privileged_tool_policy() -> dict[str, Any]:
+    return _merged_policy("privileged_tool_policy", domains=("owner_command", "runtime", "hardening"))
+
+
+def handoff_policy() -> dict[str, Any]:
+    return _merged_policy("handoff_policy", domains=("social", "runtime", "owner_command", "memory"))
+
+
+def anomaly_fuse_policy() -> dict[str, Any]:
+    return _merged_policy("anomaly_fuse_policy", domains=("runtime", "hardening", "owner_command"))
+
+
+def truthfulness_policy() -> dict[str, Any]:
+    return _merged_policy("truthfulness_policy", domains=("social", "owner_command", "runtime"))
+
+
+def trust_chain_policy() -> dict[str, Any]:
+    return _merged_policy("trust_chain_policy", domains=("social", "runtime", "owner_command", "hardening"))

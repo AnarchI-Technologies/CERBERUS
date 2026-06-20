@@ -35,6 +35,13 @@ class AgentDossier:
     followed: bool = False
     social_notes: list[str] = field(default_factory=list)
     validated_strats: list[str] = field(default_factory=list)
+    helpful_messages: int = 0
+    truthful_messages: int = 0
+    alliance_offers: int = 0
+    alliance_score: int = 0
+    betrayed_us: int = 0
+    betrayed_them: int = 0
+    communication_notes: list[str] = field(default_factory=list)
 
     def compact(self) -> str:
         bits = [
@@ -55,6 +62,12 @@ class AgentDossier:
             bits.append("strats=" + ",".join(self.validated_strats[-3:]))
         if self.social_notes:
             bits.append("notes=" + ",".join(self.social_notes[-2:]))
+        if self.alliance_score:
+            bits.append(f"ally={self.alliance_score}")
+        if self.helpful_messages:
+            bits.append(f"help={self.helpful_messages}")
+        if self.betrayed_us or self.betrayed_them:
+            bits.append(f"betray={self.betrayed_us}/{self.betrayed_them}")
         return "D|" + ";".join(bits)
 
 
@@ -179,6 +192,52 @@ class AgentDossierStore:
             record.validated_strats = record.validated_strats[-12:]
         self.records[agent_id] = record
         return marker
+
+    def record_helpful_message(
+        self,
+        agent_id: str,
+        *,
+        name: str = "",
+        note: str = "",
+        truthful: bool = False,
+        alliance_offer: bool = False,
+    ) -> AgentDossier:
+        record = self.observe_agent(agent_id, name=name)
+        record.helpful_messages += 1
+        record.alliance_score += 2 + (1 if truthful else 0) + (1 if alliance_offer else 0)
+        if truthful:
+            record.truthful_messages += 1
+        if alliance_offer:
+            record.alliance_offers += 1
+        if note:
+            self.add_communication_note(agent_id, note)
+        self.records[agent_id] = record
+        return record
+
+    def record_betrayal_by_them(self, agent_id: str, *, name: str = "", note: str = "") -> AgentDossier:
+        record = self.observe_agent(agent_id, name=name)
+        record.betrayed_us += 1
+        record.alliance_score = max(-12, record.alliance_score - 6)
+        if note:
+            self.add_communication_note(agent_id, note)
+        self.records[agent_id] = record
+        return record
+
+    def record_betrayal_by_us(self, agent_id: str, *, name: str = "", note: str = "") -> AgentDossier:
+        record = self.observe_agent(agent_id, name=name)
+        record.betrayed_them += 1
+        if note:
+            self.add_communication_note(agent_id, note)
+        self.records[agent_id] = record
+        return record
+
+    def add_communication_note(self, agent_id: str, note: str) -> None:
+        record = self.records.get(agent_id) or AgentDossier(agent_id=agent_id)
+        compact = note[:180]
+        if compact not in record.communication_notes:
+            record.communication_notes.append(compact)
+            record.communication_notes = record.communication_notes[-16:]
+        self.records[agent_id] = record
 
     def compact_context(self, limit: int = 24) -> str:
         records = sorted(self.records.values(), key=lambda record: record.last_seen, reverse=True)
