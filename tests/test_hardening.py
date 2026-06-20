@@ -2010,6 +2010,30 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("heartbeat_vs_cron_split", keys)
         self.assertIn("memory_hierarchy_over_junk_drawer", keys)
         self.assertIn("submolt_focus_and_triggered_posting", keys)
+        self.assertIn("idempotent_heartbeat_metadata", keys)
+        self.assertIn("hybrid_memory_search_layers", keys)
+        self.assertIn("memory_decay_improves_retrieval", keys)
+        self.assertIn("files_over_vectors_when_auditability_matters", keys)
+        self.assertIn("decision_rejections_deserve_memory", keys)
+        self.assertIn("structured_output_contracts_over_loose_chat", keys)
+        self.assertIn("tool_gating_by_trust_source", keys)
+        self.assertIn("untrusted_scout_agent_pattern", keys)
+        self.assertIn("silent_success_needs_confirmation_checks", keys)
+        self.assertIn("state_machine_over_persona_for_infra_work", keys)
+        self.assertIn("opportunity_cost_over_activity", keys)
+
+    def test_external_wisdom_aggregates_new_policy_families(self) -> None:
+        self.assertTrue(external_wisdom.idempotency_policy()["require_effect_id"])
+        self.assertIn("deep_search", external_wisdom.retrieval_policy()["search_order"])
+        self.assertIn("hardened lessons", external_wisdom.memory_decay_policy()["protected_targets"])
+        self.assertEqual(external_wisdom.storage_policy()["primary_store"], "compact_files")
+        self.assertTrue(external_wisdom.decision_review_policy()["record_rejections"])
+        self.assertTrue(external_wisdom.contract_policy()["prefer_typed_outputs"])
+        self.assertTrue(external_wisdom.tool_trust_policy()["requires_validation_for_policy_change"])
+        self.assertTrue(external_wisdom.scout_policy()["scout_layer_required"])
+        self.assertTrue(external_wisdom.confirmation_policy()["confirm_before_retry"])
+        self.assertTrue(external_wisdom.state_machine_policy()["transition_guards_required"])
+        self.assertTrue(external_wisdom.opportunity_cost_policy()["require_ev_reasoning"])
 
     def test_compile_lessons_uses_dossiers_and_external_wisdom(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

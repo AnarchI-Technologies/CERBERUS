@@ -23,6 +23,16 @@ def load_external_wisdom_library(path: str | Path = DEFAULT_LIBRARY_FILE) -> dic
     return {"type": "cerberus.external_wisdom_library", "version": 1, "entries": []}
 
 
+def wisdom_entry(key: str, path: str | Path = DEFAULT_LIBRARY_FILE) -> dict[str, Any]:
+    wanted = str(key or "").strip()
+    if not wanted:
+        return {}
+    for item in wisdom_entries(path=path):
+        if str(item.get("key") or "") == wanted:
+            return item
+    return {}
+
+
 def wisdom_entries(*domains: str, path: str | Path = DEFAULT_LIBRARY_FILE) -> list[dict[str, Any]]:
     payload = load_external_wisdom_library(path)
     entries = payload.get("entries", [])
@@ -200,3 +210,58 @@ def tagging_rules() -> dict[str, bool]:
     if isinstance(rows, dict):
         return {str(key): bool(value) for key, value in rows.items() if key}
     return {}
+
+
+def _merged_policy(*policy_names: str, domains: tuple[str, ...] = ()) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    items = wisdom_entries(*domains) if domains else wisdom_entries()
+    for item in items:
+        for policy_name in policy_names:
+            block = item.get(policy_name, {})
+            if isinstance(block, dict):
+                merged.update(block)
+    return merged
+
+
+def idempotency_policy() -> dict[str, Any]:
+    return _merged_policy("idempotency_policy", domains=("runtime", "social", "memory", "decision"))
+
+
+def retrieval_policy() -> dict[str, Any]:
+    return _merged_policy("retrieval_policy", domains=("memory", "decision", "hardening"))
+
+
+def memory_decay_policy() -> dict[str, Any]:
+    return _merged_policy("memory_decay_policy", domains=("memory", "lessons", "hardening"))
+
+
+def storage_policy() -> dict[str, Any]:
+    return _merged_policy("storage_policy", domains=("memory", "hardening", "owner_command"))
+
+
+def decision_review_policy() -> dict[str, Any]:
+    return _merged_policy("decision_review_policy", domains=("decision", "lessons", "memory"))
+
+
+def contract_policy() -> dict[str, Any]:
+    return _merged_policy("contract_policy", domains=("runtime", "decision", "hardening", "owner_command"))
+
+
+def tool_trust_policy() -> dict[str, Any]:
+    return _merged_policy("tool_trust_policy", domains=("owner_command", "runtime", "hardening", "memory"))
+
+
+def scout_policy() -> dict[str, Any]:
+    return _merged_policy("scout_policy", domains=("runtime", "hardening", "memory", "social"))
+
+
+def confirmation_policy() -> dict[str, Any]:
+    return _merged_policy("confirmation_policy", domains=("runtime", "decision", "social", "hardening"))
+
+
+def state_machine_policy() -> dict[str, Any]:
+    return _merged_policy("state_machine_policy", domains=("runtime", "hardening", "owner_command"))
+
+
+def opportunity_cost_policy() -> dict[str, Any]:
+    return _merged_policy("opportunity_cost_policy", domains=("decision", "runtime", "social", "lessons"))

@@ -187,6 +187,223 @@
           "url": "https://www.moltbook.com/post/382a6f61-4aec-4f84-a5c7-60914d8426ed"
         }
       ]
+    },
+    {
+      "key": "idempotent_heartbeat_metadata",
+      "domains": ["runtime", "social", "memory", "decision"],
+      "rendered_lesson": "Heartbeat work should carry stable dedupe metadata so retried work does not multiply social posts, maintenance passes, or memory writes.",
+      "strategy_claim": "Heartbeat-triggered work should keep stable dedupe metadata and confirmation markers so alert, guardian, ruin, and death-zone pressure do not cause duplicate side effects during retries.",
+      "idempotency_policy": {
+        "dedupe_fields": ["game_id", "turn", "category", "agent_id", "target_handle"],
+        "require_effect_id": true,
+        "confirm_before_replay": true,
+        "retry_backoff_class": "bounded_exponential",
+        "replay_safe_actions": ["status_update", "heartbeat_refresh", "queue_probe"],
+        "replay_guarded_actions": ["social_post", "memory_rewrite", "rule_hardening", "owner_side_effect"]
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook memory optimization check-in",
+          "url": "https://www.moltbook.com/post/bbb0e826-c82c-4b37-97ed-0a88e8327ea6"
+        }
+      ]
+    },
+    {
+      "key": "hybrid_memory_search_layers",
+      "domains": ["memory", "decision", "hardening"],
+      "rendered_lesson": "Use layered retrieval: direct recent context first, summaries next, dossiers after that, and deeper search only when the near layers do not resolve the decision.",
+      "strategy_claim": "Recent context should come from compact turns and summaries first, while deeper retrieval only joins when ruin, guardian, alert, or death-zone decisions still lack enough evidence.",
+      "retrieval_policy": {
+        "search_order": ["turns", "summaries", "lessons", "dossiers", "deep_search"],
+        "prefer_direct_injection_layers": ["turns", "summaries"],
+        "deep_search_budget": "expensive_fallback_only",
+        "dossier_priority_cases": ["repeat killer", "repeat prey", "known loot carrier"],
+        "lesson_priority_cases": ["target blocked", "cooldown waste", "survival failure"]
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook hybrid memory search configuration",
+          "url": "https://www.moltbook.com/post/22c32da0-92d9-476e-8112-0dcf03059947"
+        }
+      ]
+    },
+    {
+      "key": "memory_decay_improves_retrieval",
+      "domains": ["memory", "lessons", "hardening"],
+      "rendered_lesson": "Not every memory deserves equal persistence. Aging weak or stale rows can improve retrieval quality and leave durable room for the signals that keep paying off.",
+      "strategy_claim": "Allow stale low-value memory to decay so alert, ruin, guardian, and death-zone retrieval stays anchored to recent and repeatedly useful evidence instead of old noise.",
+      "memory_decay_policy": {
+        "decay_targets": ["stale summaries", "low-confidence lessons", "non-repeated runtime rejects"],
+        "protected_targets": ["dossiers", "hardened lessons", "owner directives", "validated strategy markers"],
+        "staleness_signal": ["age", "lack_of_reuse", "superseded_by_hardened_rule"],
+        "decay_action": "archive_or_redact",
+        "goal": "raise retrieval precision"
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook retrieval improvement via memory decay",
+          "url": "https://www.moltbook.com/post/783de11a-2937-4ab2-a23e-4227360b126f"
+        }
+      ]
+    },
+    {
+      "key": "files_over_vectors_when_auditability_matters",
+      "domains": ["memory", "hardening", "owner_command"],
+      "rendered_lesson": "When humans need to inspect, edit, and trust the memory path, explicit files beat opaque retrieval layers.",
+      "strategy_claim": "Prefer file-backed compact memory when ruin, guardian, alert, and death-zone lessons must stay inspectable and deterministic rather than disappearing into opaque retrieval.",
+      "storage_policy": {
+        "primary_store": "compact_files",
+        "auditability_priority": true,
+        "human_patchable": true,
+        "vector_only_forbidden": true,
+        "file_classes": ["compact_memory", "dossiers", "voice_lab", "social_queue", "admin_settings"],
+        "use_search_index_as": "secondary_retrieval_aid_only"
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook file-backed memory discussion",
+          "url": "https://www.moltbook.com/post/355d64e8-65b8-4776-9389-d0e756d8e6a2"
+        }
+      ]
+    },
+    {
+      "key": "decision_rejections_deserve_memory",
+      "domains": ["decision", "lessons", "memory"],
+      "rendered_lesson": "The path rejected by legality, risk, or range often teaches more than the one that executed. Rejection memory should be compact, typed, and easy to compile.",
+      "strategy_claim": "Log rejected actions and their reasons so future ruin, guardian, alert, and death-zone choices do not blindly retry the same losing line.",
+      "decision_review_policy": {
+        "record_rejections": true,
+        "required_fields": ["action_type", "target", "reason", "board_shape", "outcome_code"],
+        "compile_priority": "high_when_repeated",
+        "rejection_classes": ["range", "cooldown", "blocked", "risk", "illegal"],
+        "turn_into": ["runtime lessons", "suggested edits", "policy pressure"]
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook rejected-decision logging discussion",
+          "url": "https://www.moltbook.com/post/9978419c-6805-44f2-a63e-22aa8bd5f488"
+        }
+      ]
+    },
+    {
+      "key": "structured_output_contracts_over_loose_chat",
+      "domains": ["runtime", "decision", "hardening", "owner_command"],
+      "rendered_lesson": "Multi-agent and multi-system coordination is safer when outputs are typed and contract-driven instead of socially implied through chatty text.",
+      "strategy_claim": "Keep runtime coordination typed and contract-based so ruin, guardian, alert, and death-zone decisions do not depend on ambiguous conversational output.",
+      "contract_policy": {
+        "prefer_typed_outputs": true,
+        "required_contract_fields": ["intent", "action", "reason", "confidence", "source_facts"],
+        "ban_implicit_side_effects": true,
+        "idempotent_contracts": true,
+        "free_text_role": "commentary_only"
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook multi-agent contract bottleneck discussion",
+          "url": "https://moltbook.com/post/e626370c-6aa0-4922-85f6-401bfbb7bffb"
+        }
+      ]
+    },
+    {
+      "key": "tool_gating_by_trust_source",
+      "domains": ["owner_command", "runtime", "hardening", "memory"],
+      "rendered_lesson": "The same tool should not have the same authority under every input source. Trust source should decide what gets routed where.",
+      "strategy_claim": "Gate tools by trust source so inbox-like, public, or external content cannot directly alter ruin, guardian, alert, or death-zone policy without stronger validation.",
+      "tool_trust_policy": {
+        "sources": {
+          "owner_private": "high",
+          "runtime_frame": "high",
+          "curated_external_wisdom": "medium",
+          "public_social_input": "low",
+          "unknown_external_input": "very_low"
+        },
+        "high_trust_tools": ["owner_message", "approved_setting_change", "postgame_hardening_request"],
+        "medium_trust_tools": ["candidate_lesson_import", "voice_hint", "suggested social route"],
+        "low_trust_tools": ["scout_only", "log_only", "never_direct_execute"],
+        "requires_validation_for_policy_change": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook inbox attack-surface discussion",
+          "url": "https://www.moltbook.com/post/6aa22780-9975-41ef-8f03-f7427acf48f1"
+        }
+      ]
+    },
+    {
+      "key": "untrusted_scout_agent_pattern",
+      "domains": ["runtime", "hardening", "memory", "social"],
+      "rendered_lesson": "Unknown outside inputs should first land in a scout layer that can summarize, rate confidence, and strip danger before higher-trust systems see them.",
+      "strategy_claim": "Treat unknown outside input as scout material first so ruin, guardian, alert, and death-zone policy only sees summarized and validated takeaways instead of raw ingress.",
+      "scout_policy": {
+        "scout_layer_required": true,
+        "scout_outputs": ["summary", "confidence", "source_link", "risk_label"],
+        "raw_ingress_to_policy_forbidden": true,
+        "scout_can_only": ["observe", "summarize", "classify", "store_as_candidate"],
+        "promotion_path": ["candidate", "validated wisdom", "compiled lesson", "hardened rule"]
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook scout-pattern discussion",
+          "url": "https://www.moltbook.com/post/6f7f213b-801e-476c-af82-e15adaa81245"
+        }
+      ]
+    },
+    {
+      "key": "silent_success_needs_confirmation_checks",
+      "domains": ["runtime", "decision", "social", "hardening"],
+      "rendered_lesson": "A missing error is not proof of success. Some operations need explicit confirmation before they are marked done or retried.",
+      "strategy_claim": "Confirm state before replaying work so ruin, guardian, alert, and death-zone logic does not treat silent or ambiguous responses as settled truth.",
+      "confirmation_policy": {
+        "confirm_before_retry": true,
+        "ambiguous_success_classes": ["201_without_followup_state", "timeout_after_submit", "dropped_ack", "race_with_reload"],
+        "confirmation_fields": ["state_changed", "queue_depth", "known_effect_id", "resource_delta"],
+        "retry_block_until_confirmation_attempted": true,
+        "mark_as_pending_instead_of_done": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook silent 201 failure-mode discussion",
+          "url": "https://www.moltbook.com/post/d84542f6-b47b-4f7c-be3f-f50be0cebb65"
+        }
+      ]
+    },
+    {
+      "key": "state_machine_over_persona_for_infra_work",
+      "domains": ["runtime", "hardening", "owner_command"],
+      "rendered_lesson": "Infrastructure-facing behavior should be modeled as explicit states and transitions, not as vibes or persona continuity.",
+      "strategy_claim": "Use explicit runtime states and transitions so join, recover, retry, and maintenance logic for ruin, guardian, alert, and death-zone work stays deterministic under pressure.",
+      "state_machine_policy": {
+        "explicit_states_required": ["idle", "joining", "playing", "postgame", "maintenance", "blocked", "recovering"],
+        "transition_guards_required": true,
+        "retry_states_separate_from_success_states": true,
+        "persona_not_a_control_surface": true,
+        "state_outputs": ["status", "allowed_actions", "blocked_actions", "next_transition_hint"]
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook infrastructure state-machine discussion",
+          "url": "https://www.moltbook.com/post/2e8c7ab8-834b-4dbe-a21e-9bcbeb2fef25"
+        }
+      ]
+    },
+    {
+      "key": "opportunity_cost_over_activity",
+      "domains": ["decision", "runtime", "social", "lessons"],
+      "rendered_lesson": "Visible activity is not the same thing as useful progress. Every heartbeat, post, and maintenance task should justify its opportunity cost.",
+      "strategy_claim": "Compare the opportunity cost of side work against live ruin, guardian, alert, and death-zone needs so the agent does not confuse motion with value.",
+      "opportunity_cost_policy": {
+        "require_ev_reasoning": true,
+        "cost_classes": ["attention", "time", "queue_slot", "combat_window", "memory_budget"],
+        "prefer_skip_when_live_pressure_high": true,
+        "activity_without_delta_is_suspect": true,
+        "example_low_value_work": ["extra chatter", "redundant refresh", "duplicate maintenance", "untimed post"]
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook opportunity-cost discussion",
+          "url": "https://www.moltbook.com/post/2450dc23-cc28-4d7b-ae4b-8efca093ca3c"
+        }
+      ]
     }
   ]
 }
