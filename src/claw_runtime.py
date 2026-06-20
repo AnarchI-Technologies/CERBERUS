@@ -33,7 +33,9 @@ from loadout_shop_reforge import (
 )
 from memory_system import CompactMemoryStore
 from onboarding_clients import ClawRoyaleClient
+from postgame_hardening import run_postgame_hardening_pass
 from runtime_state import (
+    append_social_event,
     claw_runtime_status_file,
     clear_game_id,
     read_json,
@@ -915,6 +917,16 @@ def record_account_balance(config: ClawRuntimeConfig, *, stage: str) -> dict[str
         average_balance_delta_per_game=round(per_game, 6),
         games_needed_for_1000_per_day=int((1000 + per_game - 1) // per_game) if per_game > 0 else 0,
     )
+    if stage == "game_ended":
+        append_social_event(
+            {
+                "kind": "match_end",
+                "game_id": stored_game_id(),
+                "detail": f"game ended with balance delta {round(delta, 6)} and total delta {round(total_delta, 6)}",
+            }
+        )
+        maintenance = run_postgame_hardening_pass()
+        update_status(postgame_maintenance=maintenance, postgame_maintenance_pending=False)
     return account
 
 
@@ -997,6 +1009,10 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     url = websocket_url(config, path)
     extra_headers = config.headers
     account_status = record_account_balance(config, stage="connect")
+    status = read_json(claw_runtime_status_file())
+    if status.get("postgame_maintenance_pending"):
+        maintenance = run_postgame_hardening_pass()
+        update_status(postgame_maintenance=maintenance, postgame_maintenance_pending=False)
     stale_paid = record_stale_paid_waiting_games(account_status)
     join_blocker = join_blocker_for_account(config, account_status)
     loadout_report = prejoin_loadout_report(config, account_status)
@@ -1067,6 +1083,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                     record_action_result_learning(payload)
                 if is_terminal_game_error(error_text):
                     clear_game_id()
+                    update_status(postgame_maintenance_pending=True)
                     record_account_balance(config, stage="game_ended")
                     update_status(
                         state="game_ended",
@@ -1124,6 +1141,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 gameplay_ready = False
             elif is_terminal_game_error(str(payload.get("message") or payload.get("error") or status)):
                 clear_game_id()
+                update_status(postgame_maintenance_pending=True)
                 record_account_balance(config, stage="game_ended")
                 update_status(
                     state="game_ended",

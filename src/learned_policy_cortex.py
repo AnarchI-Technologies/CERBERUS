@@ -12,6 +12,7 @@ from combat_decider import equipped_weapon, is_worth_attacking, target_in_attack
 from cortex_types import CortexResult, action
 from decision_engine import active_fallback_action
 from free_action_abuse import best_ground_weapon, weapon_bonus_for_item
+from hardened_strategy import load_hardened_strategy_rules
 from memory_system import CompactMemoryStore
 from runtime_state import match_evidence, suggested_edits
 from turn_state_model import TurnState
@@ -95,10 +96,15 @@ class LearnedPolicyCortex:
         applied: list[str] = []
         deaths = death_pressure(store)
         failure_pressure = learned_failure_pressure()
+        rules = load_hardened_strategy_rules().get("rules", {})
+        heal_floor = float(rules.get("heal_hp_ratio_floor", 0.68) or 0.68)
+        known_killer_floor = float(rules.get("known_killer_hp_ratio_floor", 0.72) or 0.72)
+        finisher_floor = float(rules.get("observed_finisher_hp_ratio_floor", 0.70) or 0.70)
+        repeat_prey_min_kills = int(rules.get("repeat_prey_min_kills", 1) or 1)
 
         heal_item = state.best_heal_item()
         hp_ratio = state.self.hp / max(1, state.self.max_hp)
-        if state.can_take_main_action and heal_item and deaths and hp_ratio <= 0.68:
+        if state.can_take_main_action and heal_item and deaths and hp_ratio <= heal_floor:
             applied.append("earlier_heal_after_death_lessons")
             results.append(
                 CortexResult(
@@ -126,7 +132,7 @@ class LearnedPolicyCortex:
                 tendencies = _record_tendencies(record)
                 in_range = target_in_attack_range(state, agent)
 
-                if killed_us > killed_by_us and hp_ratio <= 0.72:
+                if killed_us > killed_by_us and hp_ratio <= known_killer_floor:
                     if heal_item:
                         applied.append("heal_before_known_killer")
                         results.append(
@@ -158,7 +164,7 @@ class LearnedPolicyCortex:
                             )
                         )
 
-                if "finishes_low_targets" in tendencies and hp_ratio <= 0.7:
+                if "finishes_low_targets" in tendencies and hp_ratio <= finisher_floor:
                     if heal_item:
                         applied.append("heal_before_observed_finisher")
                         results.append(
@@ -191,7 +197,7 @@ class LearnedPolicyCortex:
                         )
 
                 if (
-                    killed_by_us > 0
+                    killed_by_us >= repeat_prey_min_kills
                     and killed_us == 0
                     and in_range
                     and not state.is_low_hp

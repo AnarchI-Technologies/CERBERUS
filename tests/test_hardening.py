@@ -37,6 +37,7 @@ import env_doctor
 import game_map
 import launch_doctor
 import env_loader
+import secret_env_admin
 import lesson_compiler
 import memory_system
 import profit_simulator
@@ -44,6 +45,7 @@ import owner_command_cortex
 import social_runtime
 import loadout_shop_reforge
 import social_worker
+import postgame_hardening
 from identity_bootstrap import (
     ensure_agentmail,
     ensure_claw_account,
@@ -379,6 +381,18 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(state["voice_lab"]["enabled"])
         self.assertIn("[private]", state["voice_lab"]["soundbites"][0]["text"])
         self.assertEqual(state["voice_lab"]["soundbites"][0]["mood"], "hype")
+
+    def test_stream_dashboard_cortex_exposes_public_runtime_thought(self) -> None:
+        cortex = stream_dashboard_cortex.StreamDashboardCortex(
+            spectate_base_url="https://www.clawroyale.ai/games/spect"
+        )
+        state = cortex.public_state(
+            runtime={"state": "playing", "last_public_thought": "Hellion applies peer review. Results may be terminal."},
+            current_game_id="game-1",
+        )
+
+        self.assertIn("Hellion", state["thought"])
+        self.assertNotIn("private key", state["thought"].lower())
 
     def test_tick_returns_action_when_save_fails(self) -> None:
         class BadMemory(CompactMemoryStore):
@@ -1776,6 +1790,7 @@ class HardeningTests(unittest.TestCase):
                 )
                 result = social_runtime.drain_social_queue_once(client=FailingClient(), max_items=1)
                 queue = social_runtime.social_queue()
+
         finally:
             if old_memory_dir is None:
                 os.environ.pop("CERBERUS_MEMORY_DIR", None)
@@ -1786,6 +1801,202 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(queue[0]["status"], "failed")
         self.assertEqual(queue[0]["attempts"], 1)
         self.assertEqual(queue[0]["last_result"]["reason"], "moltybook post failed")
+
+    def test_forced_voice_recovered_post_queues_once_from_dossiers(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                dossiers = AgentDossierStore().load()
+                dossiers.record_social_profile("enemy-1", handle="@rival")
+                dossiers.record_kill("enemy-1", name="Rival")
+                dossiers.record_social_profile("enemy-2", handle="@nemesis")
+                dossiers.record_kill("enemy-2", name="Nemesis")
+                dossiers.save()
+                first = social_runtime.queue_forced_voice_recovered_post(dossier_store=dossiers)
+                second = social_runtime.queue_forced_voice_recovered_post(dossier_store=dossiers)
+                queue = social_runtime.social_queue()
+                voice_lab = runtime_state.hellion_voice_lab()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertTrue(first["queued"])
+        self.assertFalse(second["queued"])
+        self.assertIn("@rival", queue[-1]["content"])
+        self.assertIn("@nemesis", queue[-1]["content"])
+        self.assertIn("{enter any deterministic compiled voice", queue[-1]["content"])
+        self.assertIn("forced_voice_recovered_post", voice_lab.get("one_shots", {}))
+
+    def test_secret_env_admin_upserts_dotenv_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dotenv = Path(tmp) / ".env"
+            dotenv.write_text("CERBERUS_MOLTYBOOK_ENABLED=false\n", encoding="utf-8")
+            changed = secret_env_admin.upsert_dotenv_values(
+                {
+                    "MOLTBOOK_API_KEY": "mb_test_secret",
+                    "CERBERUS_MOLTYBOOK_ENABLED": "true",
+                },
+                dotenv_path=dotenv,
+            )
+            text = dotenv.read_text(encoding="utf-8")
+
+        self.assertIn("MOLTBOOK_API_KEY=\"mb_test_secret\"", text)
+        self.assertIn("CERBERUS_MOLTYBOOK_ENABLED=\"true\"", text)
+        self.assertIn("MOLTBOOK_API_KEY", changed)
+
+    def test_admin_settings_persist_render_sync_and_private_trust(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                saved = runtime_state.update_admin_settings(
+                    render_env_permissions=True,
+                    trust_private_network_admin=False,
+                    prefer_existing_env_secrets=True,
+                )
+                loaded = runtime_state.admin_settings()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertTrue(saved["settings"]["render_env_permissions"])
+        self.assertFalse(loaded["settings"]["trust_private_network_admin"])
+
+    def test_render_handler_trusts_private_network_for_admin_pin(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.update_admin_settings(trust_private_network_admin=True)
+                handler = render_app.CerberusHandler.__new__(render_app.CerberusHandler)
+                handler.client_address = ("192.168.1.25", 5000)
+                self.assertTrue(handler._request_is_local_trusted())
+                self.assertTrue(handler._pin_authorized(""))
+                handler.client_address = ("8.8.8.8", 5000)
+                os.environ["CERBERUS_PIN"] = "2468"
+                self.assertFalse(handler._request_is_local_trusted())
+                self.assertFalse(handler._pin_authorized(""))
+                self.assertTrue(handler._pin_authorized("2468"))
+        finally:
+            os.environ.pop("CERBERUS_PIN", None)
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+    def test_moltybook_secret_admin_route_updates_local_env_without_owner_message(self) -> None:
+        old_pin = os.environ.get("CERBERUS_PIN")
+        old_api = os.environ.get("MOLTBOOK_API_KEY")
+        old_enabled = os.environ.get("CERBERUS_MOLTYBOOK_ENABLED")
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_PIN"] = "123456"
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                before = runtime_state.owner_messages()
+                old_default = secret_env_admin.DEFAULT_DOTENV_PATH
+                secret_env_admin.DEFAULT_DOTENV_PATH = Path(tmp) / ".env"
+                try:
+                    result = secret_env_admin.update_secret_targets(
+                        values={"MOLTBOOK_API_KEY": "mb_test_secret", "CERBERUS_MOLTYBOOK_ENABLED": "true"},
+                        dotenv_path=secret_env_admin.DEFAULT_DOTENV_PATH,
+                        update_render=False,
+                    )
+                finally:
+                    secret_env_admin.DEFAULT_DOTENV_PATH = old_default
+                after = runtime_state.owner_messages()
+                dotenv = (Path(tmp) / ".env").read_text(encoding="utf-8")
+                current_api = os.environ.get("MOLTBOOK_API_KEY")
+        finally:
+            if old_pin is None:
+                os.environ.pop("CERBERUS_PIN", None)
+            else:
+                os.environ["CERBERUS_PIN"] = old_pin
+            if old_api is None:
+                os.environ.pop("MOLTBOOK_API_KEY", None)
+            else:
+                os.environ["MOLTBOOK_API_KEY"] = old_api
+            if old_enabled is None:
+                os.environ.pop("CERBERUS_MOLTYBOOK_ENABLED", None)
+            else:
+                os.environ["CERBERUS_MOLTYBOOK_ENABLED"] = old_enabled
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(before, after)
+        self.assertIn("MOLTBOOK_API_KEY=\"mb_test_secret\"", dotenv)
+        self.assertEqual(current_api, "mb_test_secret")
+
+    def test_social_cortex_tags_repeat_kill_and_repeat_killer_rivalries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            dossiers.record_social_profile("enemy-1", handle="@rival")
+            dossiers.record_kill("enemy-1", name="Rival")
+            state = TurnState.from_snapshot(
+                {
+                    "view": {
+                        "self": {"id": "me", "hp": 80, "ep": 4},
+                        "currentRegion": {"id": "r1"},
+                    },
+                    "events": [{"type": "agent_kill", "data": {"killerId": "me", "victimId": "enemy-1", "victimName": "Rival"}}],
+                }
+            )
+            effects = []
+            for result in SocialCortex(dossier_store=dossiers).evaluate(state, {}):
+                effects.extend(result.side_effects)
+
+            dossiers.record_social_profile("enemy-2", handle="@nemesis")
+            dossiers.record_killed_us("enemy-2", name="Nemesis")
+            death_state = TurnState.from_snapshot(
+                {
+                    "view": {
+                        "self": {"id": "me", "hp": 0, "ep": 0, "isAlive": False},
+                        "currentRegion": {"id": "r1"},
+                    },
+                    "events": [{"type": "agent_kill", "data": {"killerId": "enemy-2", "victimId": "me", "killerName": "Nemesis"}}],
+                }
+            )
+            death_effects = []
+            for result in SocialCortex(dossier_store=dossiers).evaluate(death_state, {}):
+                death_effects.extend(result.side_effects)
+
+        kill_draft = next(effect for effect in effects if effect.get("type") == "moltybook_draft")
+        self.assertIn("@rival", kill_draft["content"])
+        self.assertEqual(kill_draft["category"], "kill_taunt")
+        respect_draft = next(effect for effect in death_effects if effect.get("type") == "moltybook_draft")
+        self.assertEqual(respect_draft["category"], "respectful_challenge")
+        self.assertIn("@nemesis", respect_draft["content"])
+
+    def test_social_cortex_persists_observed_moltybook_handle_in_dossier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            state = TurnState.from_snapshot(
+                {
+                    "view": {
+                        "self": {"id": "me", "hp": 90, "ep": 4},
+                        "currentRegion": {"id": "r1"},
+                        "visibleAgents": [{"id": "enemy-1", "name": "Rival", "moltybookHandle": "@rival"}],
+                    },
+                    "events": [],
+                }
+            )
+            SocialCortex(dossier_store=dossiers).evaluate(state, {})
+
+        self.assertEqual(dossiers.records["enemy-1"].moltybook_handle, "@rival")
 
     def test_social_worker_is_disabled_by_default_and_can_run_once(self) -> None:
         old_enabled = os.environ.get("CERBERUS_SOCIAL_WORKER_ENABLED")
@@ -3602,8 +3813,8 @@ class HardeningTests(unittest.TestCase):
         self.assertIn('id="launch-report"', html)
         self.assertIn('id="deployment"', html)
         self.assertIn("launch.blockers", html)
-        self.assertIn('fetch("/admin/social-drain"', html)
-        self.assertIn('fetch("/admin/launch-report"', html)
+        self.assertIn('fetchJson("/admin/social-drain"', html)
+        self.assertIn('fetchJson("/admin/launch-report"', html)
         self.assertIn("<line x1=", html)
         self.assertIn("map.summary", html)
         self.assertIn("Live tactical map", html)
@@ -4143,6 +4354,109 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(result["edit"]["status"], "approved")
         self.assertEqual(result["edit"]["review_note"], "ship it")
 
+    def test_postgame_hardening_promotes_rules_and_redacts_compiled_lessons(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                for _ in range(2):
+                    runtime_state.append_match_evidence(
+                        {
+                            "state": {"terrain": "ruin", "visible_agents": 1, "visible_monsters": 0, "visible_items": 0},
+                            "action": {"type": "attack", "targetId": "enemy-1"},
+                            "outcome": {"message": "TARGET_BLOCKED"},
+                        }
+                    )
+                edits = runtime_state.append_suggested_edit(
+                    {
+                        "detector": "runtime.target_blocked",
+                        "title": "Add blocked target penalty",
+                        "file": "src/decision_engine.py",
+                        "symptom": "target blocked",
+                        "suggested_change": "penalize repeated blocked target",
+                        "priority": "high",
+                    }
+                )
+                runtime_state.update_suggested_edit_status(edits[-1]["id"], "approved", note="ship it")
+                memory = CompactMemoryStore(
+                    path=Path(tmp) / "memory.compact.json",
+                    encrypted_path=Path(tmp) / "memory.compact.vault.json",
+                ).load()
+                dossiers = AgentDossierStore(
+                    path=Path(tmp) / "agent_dossiers.compact.json",
+                    encrypted_path=Path(tmp) / "agent_dossiers.compact.vault.json",
+                ).load()
+                result = postgame_hardening.run_postgame_hardening_pass(
+                    memory=memory,
+                    dossiers=dossiers,
+                    rules_path=Path(tmp) / "hardened_strategy_rules.json",
+                )
+                rules_file_exists = Path(result["rules_path"]).exists()
+                reloaded = CompactMemoryStore(
+                    path=Path(tmp) / "memory.compact.json",
+                    encrypted_path=Path(tmp) / "memory.compact.vault.json",
+                ).load()
+                stored_edits = runtime_state.suggested_edits()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["approved_suggestions_hardened"], 1)
+        self.assertGreaterEqual(result["redacted_lessons"], 1)
+        self.assertTrue(rules_file_exists)
+        self.assertTrue(all("target_blocked" not in str(item).lower() for item in reloaded.data.get("lessons", [])))
+        self.assertEqual(stored_edits[-1]["status"], "hardened")
+
+    def test_postgame_hardening_turns_social_stack_into_tagged_queue(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                dossiers = AgentDossierStore(
+                    path=Path(tmp) / "agent_dossiers.compact.json",
+                    encrypted_path=Path(tmp) / "agent_dossiers.compact.vault.json",
+                ).load()
+                dossiers.record_social_profile("enemy-9", handle="@nemesis")
+                dossiers.record_killed_us("enemy-9", name="Nemesis")
+                dossiers.record_killed_us("enemy-9", name="Nemesis")
+                dossiers.save()
+                runtime_state.append_social_event(
+                    {
+                        "kind": "killed_by_rival",
+                        "agent_id": "enemy-9",
+                        "agent_name": "Nemesis",
+                        "moltybook_handle": "@nemesis",
+                        "detail": "repeat_killer_watch",
+                    }
+                )
+                result = postgame_hardening.run_postgame_hardening_pass(
+                    memory=CompactMemoryStore(
+                        path=Path(tmp) / "memory.compact.json",
+                        encrypted_path=Path(tmp) / "memory.compact.vault.json",
+                    ).load(),
+                    dossiers=AgentDossierStore(
+                        path=Path(tmp) / "agent_dossiers.compact.json",
+                        encrypted_path=Path(tmp) / "agent_dossiers.compact.vault.json",
+                    ).load(),
+                    rules_path=Path(tmp) / "hardened_strategy_rules.json",
+                )
+                queue = social_runtime.social_queue()
+                events = runtime_state.social_event_stack()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["social_drafts"], 1)
+        self.assertEqual(queue[-1]["type"], "moltybook_draft")
+        self.assertIn("@nemesis", queue[-1]["content"])
+        self.assertEqual(events[-1]["status"], "drafted")
+
     def test_owner_balance_alarm_gets_runtime_diagnostic_response(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         try:
@@ -4179,11 +4493,35 @@ class HardeningTests(unittest.TestCase):
         self.assertIn('id="paid-ready"', html)
         self.assertIn('id="healthz"', html)
         self.assertIn('fetch("/admin/owner-message"', html)
-        self.assertIn('fetch("/admin/suggested-edits"', html)
-        self.assertIn('fetch("/admin/suggested-edit-status"', html)
+        self.assertIn('fetchJson("/admin/suggested-edits"', html)
+        self.assertIn('fetchJson("/admin/suggested-edit-status"', html)
         self.assertIn('id="suggested-edits"', html)
+        self.assertIn('id="public-thought"', html)
+        self.assertIn('cache = "no-store"', html)
         self.assertIn("overflow: hidden", html)
         self.assertIn("<aside", html)
+
+    def test_stats_falls_back_to_runtime_status_game_id_when_current_game_file_is_missing(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.update_claw_runtime_status(
+                    current_game_id="game-live-7",
+                    state="playing",
+                    last_public_thought="Hellion scouts forward. Standing still is for statues.",
+                    last_snapshot={"game_id": "game-live-7", "hp": 88, "ep": 4},
+                )
+                payload = render_app.stats()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(payload["current_game_id"], "game-live-7")
+        self.assertTrue(payload["spectate_url"].endswith("/game-live-7"))
+        self.assertIn("Hellion", payload["public_thought"])
 
     def test_render_root_serves_dashboard_and_healthz_stays_json(self) -> None:
         sent = []

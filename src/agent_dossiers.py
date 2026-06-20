@@ -123,6 +123,25 @@ class AgentDossierStore:
         self.records[agent_id] = record
         return record
 
+    def observe_agent_profile(
+        self,
+        agent_id: str,
+        *,
+        name: str = "",
+        tendency: str = "",
+        handle: str = "",
+        followed: bool = False,
+    ) -> AgentDossier:
+        record = self.observe_agent(agent_id, name=name, tendency=tendency)
+        if handle:
+            normalized = str(handle).strip()
+            if normalized:
+                record.moltybook_handle = normalized
+        if followed:
+            record.followed = True
+        self.records[agent_id] = record
+        return record
+
     def record_kill(self, agent_id: str, *, name: str = "", tricked: bool = False) -> AgentDossier:
         record = self.observe_agent(agent_id, name=name)
         record.killed_by_us += 1
@@ -136,12 +155,13 @@ class AgentDossierStore:
         return record
 
     def record_social_profile(self, agent_id: str, *, handle: str, followed: bool = False) -> AgentDossier:
-        record = self.records.get(agent_id) or AgentDossier(agent_id=agent_id)
-        record.moltybook_handle = handle
-        record.followed = record.followed or followed
-        record.last_seen = utc_now()
-        self.records[agent_id] = record
-        return record
+        return self.observe_agent_profile(agent_id, handle=handle, followed=followed)
+
+    def social_handle_for(self, agent_id: str) -> str:
+        record = self.records.get(agent_id)
+        if record is None:
+            return ""
+        return str(record.moltybook_handle or "")
 
     def add_social_note(self, agent_id: str, note: str) -> None:
         record = self.records.get(agent_id) or AgentDossier(agent_id=agent_id)

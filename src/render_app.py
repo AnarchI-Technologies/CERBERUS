@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import asyncio
 import threading
+import ipaddress
 import requests
 import websockets
 from html import escape
@@ -37,6 +38,7 @@ from longterm_memory import LongTermMemoryStore  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now  # noqa: E402
 from owner_command_cortex import acknowledge_owner_command, command_categories, directive_text  # noqa: E402
 from profit_simulator import simulate as profit_simulate  # noqa: E402
+from secret_env_admin import resolve_secret_value, update_secret_targets  # noqa: E402
 from social_runtime import drain_social_queue_once, social_queue  # noqa: E402
 from runtime_state import (
     append_hellion_owner_response,
@@ -44,6 +46,7 @@ from runtime_state import (
     append_stream_chat,
     claw_runtime_status_file,
     hellion_voice_lab,
+    admin_settings,
     match_evidence,
     owner_messages,
     read_json,
@@ -54,6 +57,7 @@ from runtime_state import (
     suggested_edits,
     update_suggested_edit_status,
     update_claw_runtime_status,
+    update_admin_settings,
 )  # noqa: E402
 from stream_dashboard_cortex import StreamDashboardCortex, chat_message  # noqa: E402
 
@@ -75,6 +79,9 @@ def readiness() -> dict[str, Any]:
             "AGENTMAIL_API_KEY",
             "AGENTMAIL_INBOX_ID",
             "AGENTMAIL_EMAIL",
+            "MOLTBOOK_API_KEY",
+            "MOLTYBOOK_API_KEY",
+            "CERBERUS_MOLTYBOOK_ENABLED",
             "CLAW_ROYALE_API_KEY",
             "CLAW_ROYALE_ERC8004_ID",
             "CLAW_ROYALE_RUNTIME_ENABLED",
@@ -97,6 +104,8 @@ def readiness() -> dict[str, Any]:
         "AGENTMAIL_API_KEY": bool(os.getenv("AGENTMAIL_API_KEY")),
         "AGENTMAIL_INBOX_ID": bool(os.getenv("AGENTMAIL_INBOX_ID")),
         "AGENTMAIL_EMAIL": bool(os.getenv("AGENTMAIL_EMAIL")),
+        "MOLTBOOK_API_KEY": bool(os.getenv("MOLTBOOK_API_KEY") or os.getenv("MOLTYBOOK_API_KEY")),
+        "CERBERUS_MOLTYBOOK_ENABLED": os.getenv("CERBERUS_MOLTYBOOK_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"},
         "CLAW_ROYALE_API_KEY": bool(os.getenv("CLAW_ROYALE_API_KEY")),
         "CLAW_ROYALE_ERC8004_ID": bool(os.getenv("CLAW_ROYALE_ERC8004_ID")),
         "CLAW_ROYALE_RUNTIME_ENABLED": claw_runtime_enabled(),
@@ -199,6 +208,7 @@ def runtime_public_thought(runtime_status: dict[str, Any]) -> str:
 def stats() -> dict[str, Any]:
     ready = readiness()
     runtime_status = read_json(claw_runtime_status_file())
+    admin = admin_settings()
     game_id = active_runtime_game_id(runtime_status)
     runtime_map = runtime_status.get("live_map") if isinstance(runtime_status.get("live_map"), dict) else {}
     profit = profit_simulate(games_per_day=int(runtime_status.get("games_completed_24h") or 61), target_per_day=1000)
@@ -247,6 +257,12 @@ def stats() -> dict[str, Any]:
         },
         "owner_messages": owner_messages(),
         "env": ready.get("env", {}),
+        "admin_settings": admin.get("settings", {}),
+        "env_state": {
+            "moltbook_api_key_present": bool(os.getenv("MOLTBOOK_API_KEY") or os.getenv("MOLTYBOOK_API_KEY")),
+            "render_api_key_present": bool(os.getenv("RENDER_API_KEY")),
+            "render_service_id_present": bool(os.getenv("RENDER_SERVICE_ID") or os.getenv("CERBERUS_RENDER_SERVICE_ID")),
+        },
     }
 
 
@@ -608,6 +624,19 @@ def dashboard_html(query: str = "") -> bytes:
           </div>
           <div id="owner-status" class="hint">Private owner channel. Stored on the Render disk.</div>
         </form>
+        <form id="moltybook-secret-form" class="owner-form">
+          <div class="label">MoltBook Secret / Admin Trust</div>
+          <input id="moltybook-api-key" type="password" placeholder="Leave blank to keep current MoltBook key">
+          <div class="form-row">
+            <label class="hint"><input id="moltybook-enabled" type="checkbox" checked> MoltBook enabled</label>
+            <label class="hint"><input id="render-sync-enabled" type="checkbox"> Push env updates to Render too</label>
+          </div>
+          <div class="form-row">
+            <label class="hint"><input id="trust-private-admin" type="checkbox" checked> Trust local/private network for admin</label>
+            <button type="submit">Apply Secret Settings</button>
+          </div>
+          <div id="moltybook-secret-status" class="hint">Reuse current env-backed secrets by default. External access still requires PIN.</div>
+        </form>
         <div class="metric wide"><div class="label">Recent Owner Messages</div><div id="owner-log" class="owner-log">loading</div></div>
         <div class="metric wide"><div class="label">Route / Loot Hints</div><div id="route-hints" class="owner-log">loading</div></div>
         <div class="metric wide"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
@@ -665,6 +694,7 @@ def dashboard_html(query: str = "") -> bytes:
     let lastMap = null;
     let suggestedEditsLoaded = false;
     let suggestedEditsRefreshInFlight = false;
+    let adminSettings = {{}};
     function hasOwnerPin() {{
       return !!document.getElementById("owner-pin").value.trim();
     }}
@@ -980,6 +1010,16 @@ def dashboard_html(query: str = "") -> bytes:
       document.getElementById("bottom-memory").textContent = "memory " + (mem.items || 0) + " items | writable " + (data.memory_writable ? "yes" : "no");
       renderMap(liveMap, blockers);
       const autonomy = data.autonomy || {{}};
+      adminSettings = data.admin_settings || {{}};
+      const envState = data.env_state || {{}};
+      document.getElementById("render-sync-enabled").checked = !!adminSettings.render_env_permissions;
+      document.getElementById("trust-private-admin").checked = adminSettings.trust_private_network_admin !== false;
+      document.getElementById("moltybook-enabled").checked = !!(data.env || {{}}).CERBERUS_MOLTYBOOK_ENABLED;
+      document.getElementById("moltybook-secret-status").textContent =
+        "MoltBook key " + (envState.moltbook_api_key_present ? "present" : "missing") +
+        "; Render API " + (envState.render_api_key_present ? "present" : "missing") +
+        "; Render service id " + (envState.render_service_id_present ? "present" : "missing") +
+        "; private-network trust " + (adminSettings.trust_private_network_admin !== false ? "enabled" : "disabled");
       document.getElementById("autonomy-counts").textContent = "suggestions " + (autonomy.suggested_edits || 0) + ", evidence " + (autonomy.match_evidence || 0);
       document.getElementById("writable").textContent = data.memory_writable ? "yes" : "no";
       document.getElementById("env").textContent = Object.entries(data.env || {{}}).filter(([,v]) => v).map(([k]) => k).join(", ") || "none";
@@ -1024,6 +1064,49 @@ def dashboard_html(query: str = "") -> bytes:
         document.getElementById("owner-message").value = "";
         status.textContent = "Sent.";
         renderOwnerMessages(data.owner_messages || []);
+      }} catch (err) {{
+        status.textContent = "Failed: " + err;
+      }}
+    }});
+    document.getElementById("moltybook-secret-form").addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      const pin = document.getElementById("owner-pin").value;
+      const apiKey = document.getElementById("moltybook-api-key").value.trim();
+      const enabled = document.getElementById("moltybook-enabled").checked;
+      const renderSync = document.getElementById("render-sync-enabled").checked;
+      const trustPrivate = document.getElementById("trust-private-admin").checked;
+      const status = document.getElementById("moltybook-secret-status");
+      status.textContent = "Applying...";
+      try {{
+        const settingsResult = await fetchJson("/admin/settings", {{
+          method: "POST",
+          headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
+          body: JSON.stringify({{
+            render_env_permissions: renderSync,
+            trust_private_network_admin: trustPrivate,
+            prefer_existing_env_secrets: true
+          }})
+        }});
+        if (!settingsResult.res.ok || !settingsResult.data.ok) {{
+          status.textContent = "Settings failed: " + (settingsResult.data.error || settingsResult.res.status);
+          return;
+        }}
+        const secretResult = await fetchJson("/admin/moltybook-secret", {{
+          method: "POST",
+          headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
+          body: JSON.stringify({{
+            api_key: apiKey,
+            enabled: enabled,
+            update_render: renderSync
+          }})
+        }});
+        if (!secretResult.res.ok || !secretResult.data.ok) {{
+          status.textContent = "Secret update failed: " + (secretResult.data.error || secretResult.res.status);
+          return;
+        }}
+        document.getElementById("moltybook-api-key").value = "";
+        status.textContent = "Applied. Local .env updated" + (renderSync ? " and Render sync attempted." : ".");
+        await loadStats();
       }} catch (err) {{
         status.textContent = "Failed: " + err;
       }}
@@ -1406,6 +1489,70 @@ class CerberusHandler(BaseHTTPRequestHandler):
             )
             self._send({"ok": True, "owner_messages": messages, "ack": ack})
             return
+        if parsed.path == "/admin/settings":
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            try:
+                payload = self._read_json()
+            except Exception as exc:
+                payload = {"_body_error": str(exc)[:240]}
+            pin = self.headers.get("X-Cerberus-Pin", "") or str(payload.get("pin") or "")
+            if not self._pin_authorized(pin):
+                self._send({"ok": False, "error": "invalid_pin", "body_error": payload.get("_body_error", "")}, status=401)
+                return
+            result = update_admin_settings(
+                render_env_permissions=str(payload.get("render_env_permissions", "")).strip().lower() in {"1", "true", "yes", "on"},
+                trust_private_network_admin=str(payload.get("trust_private_network_admin", "")).strip().lower() not in {"0", "false", "no", "off"},
+                prefer_existing_env_secrets=str(payload.get("prefer_existing_env_secrets", "true")).strip().lower() not in {"0", "false", "no", "off"},
+            )
+            self._send({"ok": True, "settings": result.get("settings", {}), "updated_at": result.get("updated_at", "")})
+            return
+        if parsed.path == "/admin/moltybook-secret":
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            try:
+                payload = self._read_json()
+            except Exception as exc:
+                payload = {"_body_error": str(exc)[:240]}
+            pin = self.headers.get("X-Cerberus-Pin", "") or str(payload.get("pin") or "")
+            if not self._pin_authorized(pin):
+                self._send({"ok": False, "error": "invalid_pin", "body_error": payload.get("_body_error", "")}, status=401)
+                return
+            settings = admin_settings().get("settings", {})
+            api_key = resolve_secret_value(
+                str(payload.get("api_key") or payload.get("key") or ""),
+                "MOLTBOOK_API_KEY",
+                "MOLTYBOOK_API_KEY",
+            )
+            if not api_key:
+                self._send({"ok": False, "error": "missing_api_key"}, status=400)
+                return
+            enabled = str(payload.get("enabled", True)).strip().lower() not in {"0", "false", "no", "off"}
+            update_render = (
+                str(payload.get("update_render", settings.get("render_env_permissions", False))).strip().lower()
+                in {"1", "true", "yes", "on"}
+            )
+            result = update_secret_targets(
+                values={
+                    "MOLTBOOK_API_KEY": api_key,
+                    "CERBERUS_MOLTYBOOK_ENABLED": "true" if enabled else "false",
+                },
+                update_render=update_render,
+                render_service_id=str(payload.get("render_service_id") or ""),
+                render_api_key=str(payload.get("render_api_key") or ""),
+            )
+            self._send(
+                {
+                    "ok": True,
+                    "updated_keys": result.get("updated_keys", []),
+                    "changed_keys": result.get("changed_keys", []),
+                    "dotenv_path": result.get("dotenv_path", ""),
+                    "render_results": result.get("render_results", []),
+                }
+            )
+            return
         if parsed.path == "/admin/leave-current-game":
             if not self._authorized():
                 self._send({"ok": False, "error": "unauthorized"}, status=401)
@@ -1453,14 +1600,29 @@ class CerberusHandler(BaseHTTPRequestHandler):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
     def _authorized(self) -> bool:
+        if self._request_is_local_trusted():
+            return True
         token = os.getenv("CERBERUS_HTTP_TOKEN")
         if not token:
             return True
         return self.headers.get("Authorization") == f"Bearer {token}"
 
     def _pin_authorized(self, pin: str) -> bool:
+        if self._request_is_local_trusted():
+            return True
         expected = os.getenv("CERBERUS_PIN", "").strip()
         return bool(expected and pin and pin == expected)
+
+    def _request_is_local_trusted(self) -> bool:
+        settings = admin_settings().get("settings", {})
+        if settings.get("trust_private_network_admin") is False:
+            return False
+        host = self.client_address[0] if isinstance(self.client_address, tuple) and self.client_address else ""
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            return False
+        return bool(ip.is_loopback or ip.is_private)
 
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0") or "0")

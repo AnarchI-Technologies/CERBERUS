@@ -38,6 +38,7 @@ from owner_command_cortex import OwnerCommandCortex, action_response_for_owner_c
 from progression_cortex import ProgressionCortex
 from runtime_state import owner_messages as load_owner_messages
 from runtime_state import append_hellion_owner_response, last_hellion_response_for_command
+from runtime_state import append_social_event
 from settlement_memory import remember_settlement_lessons
 from social_cortex import SocialCortex
 from social_runtime import enqueue_social_effects
@@ -359,6 +360,17 @@ def _remember_event_learning_or_warn(
                 if killer == state.self.id and victim != state.self.id:
                     dossiers.record_kill(victim, name=victim_name)
                     dossiers.add_social_note(victim, f"lost_to_us@{region}"[:180])
+                    append_social_event(
+                        {
+                            "kind": "player_kill",
+                            "game_id": state.game_id,
+                            "agent_id": victim,
+                            "agent_name": victim_name,
+                            "moltybook_handle": getattr(dossiers.records.get(victim), "moltybook_handle", ""),
+                            "region": region,
+                            "detail": "kill",
+                        }
+                    )
                     memory.remember_lesson(
                         "combat",
                         f"success: eliminated {victim_name} in {region}; press advantage when hp and EP stay stable",
@@ -369,6 +381,17 @@ def _remember_event_learning_or_warn(
                     if killer:
                         dossiers.record_killed_us(killer, name=killer_name)
                         dossiers.add_social_note(killer, f"killed_us@{region}"[:180])
+                        append_social_event(
+                            {
+                                "kind": "killed_by_rival",
+                                "game_id": state.game_id,
+                                "agent_id": killer,
+                                "agent_name": killer_name,
+                                "moltybook_handle": getattr(dossiers.records.get(killer), "moltybook_handle", ""),
+                                "region": region,
+                                "detail": "repeat_killer_watch",
+                            }
+                        )
                     memory.remember_lesson(
                         "combat",
                         f"failure: {killer_name} eliminated us in {region}; respect their pressure and leave earlier",
