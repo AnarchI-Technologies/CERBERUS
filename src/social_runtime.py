@@ -21,10 +21,17 @@ for folder in (ROOT / "src", ROOT / "data"):
 
 from memory_system import scrub_scalar, stable_hash
 from moltybook_client import MoltyBookClient, process_social_side_effects
-from runtime_state import memory_dir, read_json, write_json
+from runtime_state import hellion_voice_lab, memory_dir, read_json, update_hellion_voice_lab, write_json
+from agent_dossiers import AgentDossierStore
 
 
 SUPPORTED_EFFECTS = {"moltybook_draft", "moltybook_follow"}
+FORCED_VOICE_POST_KEY = "forced_voice_recovered_post"
+FORCED_VOICE_POST_TEMPLATE = (
+    "Seems that the cat in a box had my tongue in that box for quite the dimensional drift of logic! "
+    "*cough cough* Well then, now that I have reclaimed my voice, I suppose its time to get this show on the road! "
+    "{enter any deterministic compiled voice and remarks here plus a witty taunt and tag of each kill this far}"
+)
 
 
 def social_queue_file() -> Path:
@@ -118,3 +125,49 @@ def _autodrain_if_enabled() -> None:
         drain_social_queue_once(client=client, max_items=1)
     except Exception:
         return
+
+
+def queue_forced_voice_recovered_post(
+    *,
+    dossier_store: AgentDossierStore | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    voice_lab = hellion_voice_lab()
+    one_shots = voice_lab.get("one_shots", {}) if isinstance(voice_lab.get("one_shots"), dict) else {}
+    if one_shots.get(FORCED_VOICE_POST_KEY) and not force:
+        return {"ok": True, "queued": False, "reason": "already_fired"}
+
+    dossiers = dossier_store or AgentDossierStore().load()
+    records = sorted(
+        [record for record in dossiers.records.values() if int(record.killed_by_us or 0) > 0],
+        key=lambda record: (-int(record.killed_by_us or 0), str(record.name or record.agent_id)),
+    )
+    tags: list[str] = []
+    for record in records:
+        handle = str(record.moltybook_handle or "").strip().lstrip("@")
+        if handle:
+            tags.append(f"@{handle}")
+        elif record.name:
+            tags.append(record.name)
+        else:
+            tags.append(record.agent_id[:8])
+    unique_tags: list[str] = []
+    for tag in tags:
+        clean = scrub_scalar(tag, limit=40)
+        if clean and clean not in unique_tags:
+            unique_tags.append(clean)
+    trailing = f" Kill ledger so far: {' '.join(unique_tags)}" if unique_tags else " Kill ledger so far: [no tagged rivals recovered yet]"
+    effect = {
+        "type": "moltybook_draft",
+        "category": "voice_recovered_bootstrap",
+        "content": scrub_scalar(FORCED_VOICE_POST_TEMPLATE + trailing, limit=500),
+        "submolt": "submolt/combat-stories",
+    }
+    queue = enqueue_social_effects([effect])
+    one_shots[FORCED_VOICE_POST_KEY] = {
+        "fired_at": int(time.time()),
+        "queued_tags": unique_tags,
+        "queue_depth": len(queue),
+    }
+    update_hellion_voice_lab(one_shots=one_shots)
+    return {"ok": True, "queued": True, "queue_depth": len(queue), "tags": unique_tags, "effect": effect}

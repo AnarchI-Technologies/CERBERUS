@@ -158,15 +158,15 @@ class SocialCortex:
             tendency = "visible_low_hp"
         elif agent.ep and agent.ep <= 2:
             tendency = "visible_low_ep"
-        self.dossiers.observe_agent(agent.id, name=agent.name, tendency=tendency)
+        self.dossiers.observe_agent_profile(
+            agent.id,
+            name=agent.name,
+            tendency=tendency,
+            handle=self._agent_handle(agent),
+        )
 
     def _follow_effects(self, agent: AgentState) -> list[dict[str, Any]]:
-        handle = (
-            agent.raw.get("moltybookHandle")
-            or agent.raw.get("moltbookHandle")
-            or agent.raw.get("socialHandle")
-            or ""
-        )
+        handle = self._agent_handle(agent) or self.dossiers.social_handle_for(agent.id)
         if not handle:
             return []
         record = self.dossiers.record_social_profile(agent.id, handle=str(handle))
@@ -193,7 +193,7 @@ class SocialCortex:
             victim_name = str(data.get("victimName") or data.get("targetName") or victim[:8])
             outsmarted = event_looks_outsmarted(event)
             record = self.dossiers.observe_agent(victim, name=victim_name)
-            handle = f"@{record.moltybook_handle.lstrip('@')}" if record.moltybook_handle else ""
+            handle = self._tag_handle(record.moltybook_handle)
             base = (
                 self.persona.rival_taunt(record.name or victim_name)
                 if int(record.killed_by_us or 0) >= 1
@@ -221,7 +221,7 @@ class SocialCortex:
             record = self.dossiers.observe_agent(killer, name=killer_name)
             if int(record.killed_us or 0) < 1:
                 return []
-            handle = f"@{record.moltybook_handle.lstrip('@')}" if record.moltybook_handle else ""
+            handle = self._tag_handle(record.moltybook_handle)
             content = f"{handle} {self.persona.respectful_challenge(record.name or killer_name)}".strip()
             return [
                 MoltyBookDraft(
@@ -264,3 +264,19 @@ class SocialCortex:
                 ).side_effect()
             )
         return effects
+
+    @staticmethod
+    def _agent_handle(agent: AgentState) -> str:
+        if not isinstance(getattr(agent, "raw", None), dict):
+            return ""
+        return str(
+            agent.raw.get("moltybookHandle")
+            or agent.raw.get("moltbookHandle")
+            or agent.raw.get("socialHandle")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _tag_handle(handle: str) -> str:
+        text = str(handle or "").strip().lstrip("@")
+        return f"@{text}" if text else ""

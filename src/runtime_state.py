@@ -57,6 +57,10 @@ def hellion_voice_lab_file() -> Path:
     return memory_dir() / "hellion_voice_lab.json"
 
 
+def admin_settings_file() -> Path:
+    return memory_dir() / "admin_settings.json"
+
+
 def owner_messages_file() -> Path:
     return memory_dir() / "owner_messages.json"
 
@@ -398,3 +402,30 @@ def last_hellion_response_for_command(command_id: str) -> dict[str, Any]:
 
 def hellion_voice_lab() -> dict[str, Any]:
     return read_json(hellion_voice_lab_file())
+
+
+def update_hellion_voice_lab(**updates: Any) -> dict[str, Any]:
+    payload = hellion_voice_lab()
+    payload.update({"updated_at": utc_now(), **updates})
+    write_json(hellion_voice_lab_file(), payload)
+    return payload
+
+
+def admin_settings() -> dict[str, Any]:
+    payload = read_json(admin_settings_file())
+    defaults = {
+        "trust_private_network_admin": True,
+        "render_env_permissions": False,
+        "prefer_existing_env_secrets": True,
+    }
+    settings = payload.get("settings", {}) if isinstance(payload.get("settings"), dict) else {}
+    return {"settings": {**defaults, **settings}, "updated_at": payload.get("updated_at", "")}
+
+
+def update_admin_settings(**updates: Any) -> dict[str, Any]:
+    payload = admin_settings()
+    settings = payload.get("settings", {})
+    settings.update(updates)
+    out = {"settings": settings, "updated_at": utc_now()}
+    write_json(admin_settings_file(), out)
+    return out
