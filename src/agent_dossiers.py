@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from memory_system import DEFAULT_MEMORY_DIR, atomic_write_text, stable_hash, utc_now
+from memory_system import DEFAULT_MEMORY_DIR, atomic_write_text, scrub_scalar, stable_hash, utc_now
 from secret_vault import read_vault, write_vault
 
 
@@ -42,6 +42,10 @@ class AgentDossier:
     betrayed_us: int = 0
     betrayed_them: int = 0
     communication_notes: list[str] = field(default_factory=list)
+    validated_handoffs: int = 0
+    failed_handoffs: int = 0
+    evidence_counts: dict[str, int] = field(default_factory=dict)
+    last_handoff_packet: dict[str, Any] = field(default_factory=dict)
 
     def compact(self) -> str:
         bits = [
@@ -68,6 +72,11 @@ class AgentDossier:
             bits.append(f"help={self.helpful_messages}")
         if self.betrayed_us or self.betrayed_them:
             bits.append(f"betray={self.betrayed_us}/{self.betrayed_them}")
+        if self.validated_handoffs or self.failed_handoffs:
+            bits.append(f"handoff={self.validated_handoffs}/{self.failed_handoffs}")
+        if self.evidence_counts:
+            ranked = sorted(self.evidence_counts.items(), key=lambda item: (-int(item[1]), str(item[0])))
+            bits.append("anchors=" + ",".join(f"{key}:{value}" for key, value in ranked[:3]))
         return "D|" + ";".join(bits)
 
 
@@ -238,6 +247,58 @@ class AgentDossierStore:
             record.communication_notes.append(compact)
             record.communication_notes = record.communication_notes[-16:]
         self.records[agent_id] = record
+
+    def record_evidence_anchor(
+        self,
+        agent_id: str,
+        anchor: str,
+        *,
+        name: str = "",
+        note: str = "",
+    ) -> AgentDossier:
+        record = self.observe_agent(agent_id, name=name)
+        key = scrub_scalar(anchor or "opponent_claim", limit=24) or "opponent_claim"
+        counts = dict(record.evidence_counts or {})
+        counts[key] = int(counts.get(key) or 0) + 1
+        record.evidence_counts = counts
+        if note:
+            self.add_communication_note(agent_id, note)
+        self.records[agent_id] = record
+        return record
+
+    def record_handoff_packet(
+        self,
+        agent_id: str,
+        packet: dict[str, Any],
+        *,
+        name: str = "",
+        validated: bool = False,
+        failed: bool = False,
+    ) -> AgentDossier:
+        record = self.observe_agent(agent_id, name=name)
+        anchor = scrub_scalar(packet.get("evidence_anchor") or "opponent_claim", limit=24) or "opponent_claim"
+        self.record_evidence_anchor(agent_id, anchor, name=name)
+        compact_packet = {
+            "intent": scrub_scalar(packet.get("intent"), limit=32),
+            "claim": scrub_scalar(packet.get("claim"), limit=120),
+            "evidence_anchor": anchor,
+            "requested_action": scrub_scalar(packet.get("requested_action"), limit=40),
+            "uncertainty": scrub_scalar(packet.get("uncertainty"), limit=24),
+        }
+        record = self.records.get(agent_id) or record
+        record.last_handoff_packet = compact_packet
+        if validated:
+            record.validated_handoffs += 1
+            record.alliance_score += 1
+        if failed:
+            record.failed_handoffs += 1
+            record.alliance_score = max(-12, record.alliance_score - 2)
+        self.add_communication_note(
+            agent_id,
+            f"packet:{compact_packet.get('intent','comment')}:{anchor}:{compact_packet.get('requested_action','log_only')}",
+        )
+        self.records[agent_id] = record
+        return record
 
     def compact_context(self, limit: int = 24) -> str:
         records = sorted(self.records.values(), key=lambda record: record.last_seen, reverse=True)

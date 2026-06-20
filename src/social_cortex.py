@@ -16,8 +16,11 @@ from typing import Any
 
 from agent_relations import alliance_value, is_allied
 from agent_dossiers import AgentDossierStore
+from communication_packets import build_handoff_packet, packet_is_complete, packet_summary
 from cortex_types import CortexResult, action
-from external_wisdom import handoff_policy, truthfulness_policy
+from divergence_fuse import record_divergence_observation
+from external_wisdom import contraction_policy, handoff_packet_policy, handoff_policy, truthfulness_policy
+from memory_system import scrub_scalar
 from predator_mode import event_looks_outsmarted
 from strategy_validation import StrategyValidator
 from turn_state_model import AgentState, TurnState
@@ -101,7 +104,20 @@ class PersonaPolicy:
 
     def sanitize_public(self, content: str) -> str:
         cleaned = LEAKY_TERMS.sub("[kept private]", content)
-        return " ".join(cleaned.split())[:500]
+        cleaned = " ".join(cleaned.split())
+        policy = contraction_policy()
+        max_sentences = int(policy.get("max_public_sentences", 2) or 2)
+        max_chars = int(policy.get("max_public_chars", 220) or 220)
+        return _bounded_reply(cleaned, max_sentences=max_sentences, max_chars=max_chars)
+
+
+def _bounded_reply(text: str, *, max_sentences: int, max_chars: int) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if max_sentences > 0:
+        parts = re.split(r"(?<=[.!?])\s+", cleaned)
+        cleaned = " ".join(part for part in parts[:max_sentences] if part)
+    limit = max(40, max_chars)
+    return scrub_scalar(cleaned, limit=limit)
 
 
 class SocialCortex:
@@ -266,10 +282,21 @@ class SocialCortex:
         alliance_terms = ("truce", "ally", "alliance", "friend", "together", "team up", "don't fight", "dont fight")
         truth_policy = truthfulness_policy()
         handoff = handoff_policy()
+        packet_policy = handoff_packet_policy()
         uncertainty_markers = truth_policy.get("preferred_markers", ["maybe", "likely", "watch", "careful", "if", "probably"])
         truthful = bool(truth_policy.get("reward_uncertainty_markers")) and any(marker in lowered for marker in uncertainty_markers if isinstance(marker, str))
         alliance_offer = any(term in lowered for term in alliance_terms)
-        if any(term in lowered for term in helpful_terms):
+        helpful = any(term in lowered for term in helpful_terms)
+        packet = build_handoff_packet(
+            text,
+            author=author,
+            helpful=helpful,
+            truthful=truthful,
+            alliance_offer=alliance_offer,
+        )
+        if author and packet_is_complete(packet):
+            self.dossiers.record_handoff_packet(author, packet)
+        if helpful:
             validation = self.validator.validate(text)
             if validation.accepted and author:
                 marker = self.dossiers.add_validated_strategy(author, validation.compact_note)
@@ -278,6 +305,16 @@ class SocialCortex:
                     note=f"handoff:{marker[:40]}",
                     truthful=truthful,
                     alliance_offer=alliance_offer,
+                )
+                self.dossiers.record_handoff_packet(author, packet, validated=True)
+                record_divergence_observation(
+                    kind="agent_handoff",
+                    subject=author,
+                    asserted_confidence=0.55 if truthful else 0.9,
+                    outcome_quality=1.0,
+                    note=packet_summary(packet),
+                    source="social_cortex.validate",
+                    evidence_anchor=str(packet.get("evidence_anchor") or ""),
                 )
                 effects.append({
                     "type": "validated_strategy_soundbite",
@@ -293,7 +330,20 @@ class SocialCortex:
                         "uncertainty": truthful,
                         "alliance_offer": alliance_offer,
                         "required_fields": handoff.get("required_fields", []),
+                        "packet_required_fields": packet_policy.get("required_packet_fields", []),
+                        "packet": packet,
                     })
+            elif author:
+                self.dossiers.record_handoff_packet(author, packet, failed=True)
+                record_divergence_observation(
+                    kind="agent_handoff",
+                    subject=author,
+                    asserted_confidence=0.55 if truthful else 0.9,
+                    outcome_quality=0.0,
+                    note=packet_summary(packet),
+                    source="social_cortex.reject",
+                    evidence_anchor=str(packet.get("evidence_anchor") or ""),
+                )
 
         elif author and alliance_offer:
             self.dossiers.record_helpful_message(
@@ -304,7 +354,9 @@ class SocialCortex:
             )
 
         if author and alliance_offer:
-            reply = "Truce accepted while the math favors it. Cross me and the lesson updates immediately."
+            reply = self.persona.sanitize_public(
+                "Truce accepted while the math favors it. Cross me and the lesson updates immediately."
+            )
             effects.append({
                 "type": "game_free_action",
                 "action": action("whisper", targetId=author, message=reply[:200]),
@@ -312,7 +364,7 @@ class SocialCortex:
             })
 
         if author and "how" in lowered and "win" in lowered:
-            reply = self.persona.public_strategy()
+            reply = self.persona.sanitize_public(self.persona.public_strategy())
             effects.append({
                 "type": "game_free_action",
                 "action": action("whisper", targetId=author, message=reply[:200]),

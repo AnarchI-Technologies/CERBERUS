@@ -295,6 +295,30 @@ def handoff_policy() -> dict[str, Any]:
     return _merged_policy("handoff_policy", domains=("social", "runtime", "owner_command", "memory"))
 
 
+def handoff_packet_policy() -> dict[str, Any]:
+    return _merged_policy("handoff_packet_policy", domains=("social", "runtime", "memory", "owner_command"))
+
+
+def evidential_policy() -> dict[str, Any]:
+    return _merged_policy("evidential_policy", domains=("social", "runtime", "memory", "decision"))
+
+
+def divergence_policy() -> dict[str, Any]:
+    return _merged_policy("divergence_policy", domains=("hardening", "runtime", "social", "owner_command"))
+
+
+def contraction_policy() -> dict[str, Any]:
+    return _merged_policy("contraction_policy", domains=("social", "owner_command", "runtime", "voice"))
+
+
+def invariant_guard_policy() -> dict[str, Any]:
+    return _merged_policy("invariant_guard_policy", domains=("hardening", "runtime", "owner_command"))
+
+
+def topology_policy() -> dict[str, Any]:
+    return _merged_policy("topology_policy", domains=("runtime", "decision", "hardening", "social"))
+
+
 def anomaly_fuse_policy() -> dict[str, Any]:
     return _merged_policy("anomaly_fuse_policy", domains=("runtime", "hardening", "owner_command"))
 

@@ -7,11 +7,12 @@ intents that still pass through action normalization and legalizers.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from combat_decider import target_in_attack_range, target_score
 from cortex_types import CortexResult, action, rest_action
-from external_wisdom import shared_public_line
+from external_wisdom import contraction_policy, shared_public_line
 from free_action_abuse import best_ground_weapon, equipped_weapon, weapon_bonus_for_item
 from turn_state_model import TurnState
 
@@ -393,12 +394,12 @@ def acknowledge_owner_command(message: dict[str, Any]) -> dict[str, str]:
     if not text:
         return {
             "status": "blocked",
-            "text": "I heard static, not a command. Give me a clear directive and I will route it.",
+            "text": _bounded_owner_text("I heard static, not a command. Give me a clear directive and I will route it."),
         }
     if not categories:
         return {
             "status": "heard_context",
-            "text": "I heard you. That does not map to a deterministic action yet, but I will keep it as owner context instead of pretending certainty.",
+            "text": _bounded_owner_text("I heard you. That does not map to a deterministic action yet, but I will keep it as owner context instead of pretending certainty."),
         }
     context_only = [
         item
@@ -409,12 +410,16 @@ def acknowledge_owner_command(message: dict[str, Any]) -> dict[str, str]:
     if context_only and not executable:
         return {
             "status": "heard_context",
-            "text": f"I heard you. I agree with the direction and will treat it as standing context: {', '.join(context_only)}.",
+            "text": _bounded_owner_text(
+                f"I heard you. I agree with the direction and will treat it as standing context: {', '.join(context_only)}."
+            ),
         }
     label = ", ".join(categories)
     return {
         "status": "agreed",
-        "text": f"I heard you. I agree with the priority and will route it as high-priority owner intent: {label}. Survival and legal action checks still outrank everything.",
+        "text": _bounded_owner_text(
+            f"I heard you. I agree with the priority and will route it as high-priority owner intent: {label}. Survival and legal action checks still outrank everything."
+        ),
     }
 
 
@@ -424,28 +429,36 @@ def action_response_for_owner_command(command: dict[str, Any], action_payload: d
     if not categories:
         return {
             "status": "heard_context",
-            "text": "I heard the command, but it did not map to a deterministic action family yet.",
+            "text": _bounded_owner_text("I heard the command, but it did not map to a deterministic action family yet."),
         }
     context_only = set(CONTEXT_CATEGORY_TERMS)
     executable = [item for item in categories if item not in context_only]
     if not executable:
         return {
             "status": "heard_context",
-            "text": f"I heard you and agree with the direction. Holding this as context: {', '.join(categories)}.",
+            "text": _bounded_owner_text(
+                f"I heard you and agree with the direction. Holding this as context: {', '.join(categories)}."
+            ),
         }
     if action_payload.get("_rejected_action"):
         return {
             "status": "blocked",
-            "text": f"I heard you, but the requested action was blocked by runtime legality. I chose {action_type} instead.",
+            "text": _bounded_owner_text(
+                f"I heard you, but the requested action was blocked by runtime legality. I chose {action_type} instead."
+            ),
         }
     if "owner directive" in str(action_payload.get("reason") or "").lower():
         return {
             "status": "executing",
-            "text": f"I heard you and I agree. Executing owner-priority action: {action_type}.",
+            "text": _bounded_owner_text(
+                f"I heard you and I agree. Executing owner-priority action: {action_type}."
+            ),
         }
     return {
         "status": "overridden",
-        "text": f"I heard you. I agree with the command, but a higher-priority safety or legality rule chose {action_type} this tick.",
+        "text": _bounded_owner_text(
+            f"I heard you. I agree with the command, but a higher-priority safety or legality rule chose {action_type} this tick."
+        ),
     }
 
 
@@ -515,7 +528,20 @@ def sanitize_public_message(text: str) -> str:
     for term in blocked:
         out = out.replace(term, "[private]")
         out = out.replace(term.title(), "[private]")
-    return out[:200]
+    return _bounded_owner_text(out, public=True)
+
+
+def _bounded_owner_text(text: str, *, public: bool = False) -> str:
+    policy = contraction_policy()
+    max_sentences = int(
+        policy.get("max_public_sentences", 2) if public else policy.get("max_owner_status_sentences", 2)
+    )
+    max_chars = int(policy.get("max_public_chars", 220) if public else policy.get("max_owner_chars", 220))
+    cleaned = " ".join(str(text or "").split())
+    if max_sentences > 0:
+        parts = re.split(r"(?<=[.!?])\s+", cleaned)
+        cleaned = " ".join(part for part in parts[:max_sentences] if part)
+    return cleaned[: max(40, max_chars)]
 
 
 def best_weapon_action(state: TurnState) -> dict[str, Any] | None:
