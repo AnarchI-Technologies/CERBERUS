@@ -16,8 +16,11 @@ from hardened_strategy import (
 )
 from external_wisdom import (
     memory_hierarchy_policy,
+    posting_prerequisites_for,
     scheduler_policy,
+    social_tone_for,
     social_policy,
+    tagging_rules,
     validated_strategy_wisdom,
     voice_guardrails,
     voice_soundbites,
@@ -133,6 +136,8 @@ def _apply_memory_hierarchy(memory: CompactMemoryStore) -> dict[str, Any]:
         dossier_never_redact=bool(policy.get("dossier_never_redact", True)),
         social_stack_separate=bool(policy.get("social_stack_separate", True)),
         memory_hierarchy="turns->summaries->lessons->dossiers",
+        memory_tiers=",".join(str(item) for item in policy.get("tier_order", []) if item),
+        lesson_redaction_after_hardening=bool(policy.get("lesson_redaction_after_hardening", True)),
     )
     return policy
 
@@ -319,6 +324,15 @@ def run_postgame_hardening_pass(
         "memory_policy": memory_policy,
         "social_policy": social_policy(),
         "scheduler_policy": scheduler_policy(),
+        "sample_social_tones": {
+            "kill_taunt": social_tone_for("kill_taunt"),
+            "match_summary": social_tone_for("match_summary"),
+        },
+        "sample_social_prerequisites": {
+            "kill_taunt": posting_prerequisites_for("kill_taunt"),
+            "match_summary": posting_prerequisites_for("match_summary"),
+        },
+        "tagging_rules": tagging_rules(),
         "applied_at": utc_now(),
         "error": "" if apply_result.get("ok") else str(apply_result.get("error") or "hardening_failed"),
     }

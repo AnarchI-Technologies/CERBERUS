@@ -59,6 +59,29 @@
       "scheduler_policy": {
         "heartbeat_lightweight_only": true,
         "postgame_batch_window": true,
+        "heartbeat_budget_ms": 250,
+        "heartbeat_allowed_work": [
+          "status_update",
+          "trigger_detection",
+          "single social autodrain",
+          "map heartbeat refresh",
+          "public thought refresh"
+        ],
+        "heartbeat_blocked_work": [
+          "memory rewrite",
+          "bulk queue drain",
+          "strategy hardening",
+          "loadout recompute",
+          "multi-source rescan"
+        ],
+        "postgame_order": [
+          "compile_lessons",
+          "apply_memory_hierarchy",
+          "harden_rules_after_sanity",
+          "hydrate_voice",
+          "turn_social_stack_into_queue",
+          "drain_social_queue"
+        ],
         "autodrain_triggers": ["midgame_kill", "post_death", "admin_bootstrap"],
         "deferred_triggers": ["postgame", "maintenance", "scheduled"]
       },
@@ -80,13 +103,27 @@
       "strategy_claim": "Keep memory layered so recent turns stay compact, summaries hold recurring patterns, dossiers preserve rivals, and lessons remain distilled around alert, ruin, guardian, and death-zone decisions.",
       "memory_policy": {
         "profile_name": "layered_compact_memory",
+        "tier_order": ["profile", "facts", "turns", "summaries", "lessons", "dossiers", "social_stack"],
+        "tier_purposes": {
+          "profile": "stable self-description and active policy flags",
+          "facts": "small durable truths worth repeated reuse",
+          "turns": "recent tactical context only",
+          "summaries": "rolled-up recurring turn windows",
+          "lessons": "distilled actionable heuristics",
+          "dossiers": "durable rival profiles and relationships",
+          "social_stack": "undrained moments waiting for posting"
+        },
         "max_short_turns": 40,
         "max_summaries": 120,
         "max_lessons": 128,
         "max_facts": 160,
         "context_bytes": 7200,
+        "turn_rollup_window": 40,
+        "prefer_summary_over_raw_turn_sprawl": true,
+        "lesson_redaction_after_hardening": true,
         "dossier_never_redact": true,
-        "social_stack_separate": true
+        "social_stack_separate": true,
+        "social_stack_never_in_agent_context": true
       },
       "source_notes": [
         {
@@ -120,6 +157,24 @@
           "voice_recovered_bootstrap": "submolt/combat-stories",
           "strategy_note": "submolt/strategy-table",
           "dev_log": "submolt/game-development"
+        },
+        "category_tones": {
+          "kill_taunt": "playful_predator",
+          "outsmart_taunt": "clever_whimsical",
+          "respectful_challenge": "respectful_rivalry",
+          "match_summary": "measured_boast",
+          "voice_recovered_bootstrap": "grand_reentry"
+        },
+        "posting_prerequisites": {
+          "kill_taunt": ["target known", "event trigger present"],
+          "respectful_challenge": ["repeat killer confirmed", "post-death or maintenance window"],
+          "match_summary": ["match settled", "postgame window"],
+          "voice_recovered_bootstrap": ["admin bootstrap event", "one-shot not already fired"]
+        },
+        "tagging_rules": {
+          "prefer_handle_over_name": true,
+          "never_tag_without_observation": false,
+          "dedupe_tags_per_post": true
         }
       },
       "source_notes": [

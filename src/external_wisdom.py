@@ -100,6 +100,10 @@ def scheduler_policy() -> dict[str, Any]:
     policy: dict[str, Any] = {
         "heartbeat_lightweight_only": False,
         "postgame_batch_window": True,
+        "heartbeat_budget_ms": 0,
+        "heartbeat_allowed_work": [],
+        "heartbeat_blocked_work": [],
+        "postgame_order": [],
         "autodrain_triggers": [],
         "deferred_triggers": [],
     }
@@ -133,16 +137,30 @@ def social_policy() -> dict[str, Any]:
     policy: dict[str, Any] = {
         "default_triggers": {},
         "preferred_submolts": {},
+        "category_tones": {},
+        "posting_prerequisites": {},
+        "tagging_rules": {},
     }
     for item in wisdom_entries("social", "voice", "runtime"):
         rows = item.get("social_policy", {})
         if not isinstance(rows, dict):
             continue
-        for key in ("default_triggers", "preferred_submolts"):
+        for key in ("default_triggers", "preferred_submolts", "category_tones", "posting_prerequisites", "tagging_rules"):
             current = policy.get(key, {})
             incoming = rows.get(key, {})
             if isinstance(current, dict) and isinstance(incoming, dict):
-                current.update({str(k): str(v) for k, v in incoming.items() if k and v})
+                if key == "posting_prerequisites":
+                    current.update(
+                        {
+                            str(k): [str(item).strip() for item in v if str(item).strip()]
+                            for k, v in incoming.items()
+                            if k and isinstance(v, list)
+                        }
+                    )
+                elif key == "tagging_rules":
+                    current.update({str(k): bool(v) for k, v in incoming.items() if k})
+                else:
+                    current.update({str(k): str(v) for k, v in incoming.items() if k and v})
                 policy[key] = current
     return policy
 
@@ -159,3 +177,26 @@ def preferred_submolt_for(category: str, fallback: str = "") -> str:
     if isinstance(submolts, dict):
         return str(submolts.get(category) or fallback)
     return fallback
+
+
+def social_tone_for(category: str, fallback: str = "bounded_public_persona") -> str:
+    tones = social_policy().get("category_tones", {})
+    if isinstance(tones, dict):
+        return str(tones.get(category) or fallback)
+    return fallback
+
+
+def posting_prerequisites_for(category: str) -> list[str]:
+    prerequisites = social_policy().get("posting_prerequisites", {})
+    if isinstance(prerequisites, dict):
+        rows = prerequisites.get(category, [])
+        if isinstance(rows, list):
+            return [str(item).strip() for item in rows if str(item).strip()]
+    return []
+
+
+def tagging_rules() -> dict[str, bool]:
+    rows = social_policy().get("tagging_rules", {})
+    if isinstance(rows, dict):
+        return {str(key): bool(value) for key, value in rows.items() if key}
+    return {}

@@ -20,7 +20,14 @@ for folder in (ROOT / "src", ROOT / "data"):
         sys.path.insert(0, path)
 
 from memory_system import scrub_scalar, stable_hash
-from external_wisdom import preferred_submolt_for, scheduler_policy, social_trigger_for
+from external_wisdom import (
+    posting_prerequisites_for,
+    preferred_submolt_for,
+    scheduler_policy,
+    social_tone_for,
+    social_trigger_for,
+    tagging_rules,
+)
 from moltybook_client import MoltyBookClient, process_social_side_effects
 from runtime_state import hellion_voice_lab, memory_dir, read_json, update_hellion_voice_lab, write_json
 from agent_dossiers import AgentDossierStore
@@ -56,6 +63,16 @@ def sanitize_effect(effect: dict[str, Any]) -> dict[str, Any] | None:
         preferred_submolt = preferred_submolt_for(category, str(effect.get("submolt") or ""))
         if preferred_submolt:
             cleaned["submolt"] = scrub_scalar(preferred_submolt, limit=120)
+        cleaned["tone"] = scrub_scalar(effect.get("tone") or social_tone_for(category), limit=80)
+        prerequisites = posting_prerequisites_for(category)
+        if prerequisites:
+            cleaned["prerequisites"] = ", ".join(scrub_scalar(item, limit=80) for item in prerequisites)
+    tag_policy = tagging_rules()
+    if tag_policy:
+        cleaned["tag_policy"] = ",".join(
+            f"{key}:{'1' if value else '0'}"
+            for key, value in sorted(tag_policy.items())
+        )[:180]
     for key in ("category", "content", "submolt", "targetAgentId", "targetHandle", "agentId", "handle", "reason"):
         if effect.get(key):
             cleaned[key] = scrub_scalar(effect.get(key), limit=500 if key == "content" else 120)

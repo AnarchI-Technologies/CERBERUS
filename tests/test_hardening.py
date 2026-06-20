@@ -2053,6 +2053,9 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(queue[-1]["trigger"], "postgame")
         self.assertEqual(queue[-1]["submolt"], "submolt/ruins-relics-packs")
+        self.assertEqual(queue[-1]["tone"], "measured_boast")
+        self.assertIn("postgame window", queue[-1]["prerequisites"])
+        self.assertIn("prefer_handle_over_name:1", queue[-1]["tag_policy"])
 
     def test_social_worker_is_disabled_by_default_and_can_run_once(self) -> None:
         old_enabled = os.environ.get("CERBERUS_SOCIAL_WORKER_ENABLED")
@@ -4475,8 +4478,16 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(result["rules"]["layered_memory_hierarchy"])
         self.assertGreaterEqual(result["voice_lab_soundbites"], 1)
         self.assertEqual(result["memory_policy"]["profile_name"], "layered_compact_memory")
+        self.assertIn("dossiers", result["memory_policy"]["tier_order"])
+        self.assertTrue(result["memory_policy"]["lesson_redaction_after_hardening"])
+        self.assertGreater(result["scheduler_policy"]["heartbeat_budget_ms"], 0)
+        self.assertIn("strategy hardening", result["scheduler_policy"]["heartbeat_blocked_work"])
         self.assertTrue(result["scheduler_policy"]["heartbeat_lightweight_only"])
+        self.assertIn("compile_lessons", result["scheduler_policy"]["postgame_order"])
         self.assertEqual(result["social_policy"]["default_triggers"]["match_summary"], "postgame")
+        self.assertEqual(result["sample_social_tones"]["kill_taunt"], "playful_predator")
+        self.assertIn("event trigger present", result["sample_social_prerequisites"]["kill_taunt"])
+        self.assertTrue(result["tagging_rules"]["dedupe_tags_per_post"])
 
     def test_postgame_hardening_turns_social_stack_into_tagged_queue(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
