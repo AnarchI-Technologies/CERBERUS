@@ -112,7 +112,20 @@ def drain_social_queue_once(
     pending = [item for item in queue if str(item.get("status") or "queued") == "queued"][:max(0, max_items)]
     if not pending:
         return {"ok": True, "processed": 0, "results": []}
-    results = process_social_side_effects(pending, client=client)
+    ok = True
+    try:
+        results = process_social_side_effects(pending, client=client)
+    except Exception as exc:
+        ok = False
+        results = [
+            {
+                "ok": False,
+                "skipped": False,
+                "reason": "social_drain_exception",
+                "error": scrub_scalar(exc, limit=220),
+            }
+            for _ in pending
+        ]
     result_by_id = {str(effect.get("id") or ""): result for effect, result in zip(pending, results)}
     for item in queue:
         result = result_by_id.get(str(item.get("id") or ""))
@@ -123,7 +136,7 @@ def drain_social_queue_once(
         item["status"] = "sent" if result.get("ok") else ("skipped" if result.get("skipped") else "failed")
         item["updated_at"] = int(time.time())
     write_json(social_queue_file(), {"queue": queue, "updated_at": int(time.time())})
-    return {"ok": True, "processed": len(pending), "results": results}
+    return {"ok": ok, "processed": len(pending), "results": results}
 
 
 def compact_result(result: dict[str, Any]) -> dict[str, Any]:

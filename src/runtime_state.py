@@ -6,6 +6,7 @@ import json
 import os
 import time
 from contextvars import ContextVar
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +14,31 @@ from memory_system import DEFAULT_MEMORY_DIR, atomic_write_text, scrub_scalar, s
 
 
 _RUNTIME_AGENT_ID: ContextVar[str] = ContextVar("cerberus_runtime_agent_id", default="")
+_MEMORY_DIR_OVERRIDE: ContextVar[str] = ContextVar("cerberus_memory_dir_override", default="")
 
 
 def memory_dir() -> Path:
+    override = _MEMORY_DIR_OVERRIDE.get().strip()
+    if override:
+        return Path(override)
     return Path(os.getenv("CERBERUS_MEMORY_DIR") or DEFAULT_MEMORY_DIR)
+
+
+def set_memory_dir_override(path: str | Path):
+    return _MEMORY_DIR_OVERRIDE.set(str(path))
+
+
+def reset_memory_dir_override(token: Any) -> None:
+    _MEMORY_DIR_OVERRIDE.reset(token)
+
+
+@contextmanager
+def overridden_memory_dir(path: str | Path):
+    token = set_memory_dir_override(path)
+    try:
+        yield Path(path)
+    finally:
+        reset_memory_dir_override(token)
 
 
 def normalize_agent_id(agent_id: str | None = None) -> str:

@@ -187,7 +187,7 @@ def remember_current_game(state: dict[str, Any]) -> None:
 
 
 def active_runtime_game_id(runtime_status: dict[str, Any]) -> str:
-    stored = runtime_stored_game_id()
+    stored = safe_game_id(runtime_stored_game_id())
     if stored:
         return stored
     current = safe_game_id(str(runtime_status.get("current_game_id") or ""))
@@ -508,7 +508,8 @@ def stream_state() -> dict[str, Any]:
 
 def spectate_url(game_id: str) -> str:
     spectate_base_url = os.getenv("CLAW_ROYALE_SPECTATE_BASE_URL", DEFAULT_SPECTATE_BASE_URL).rstrip("/")
-    return f"{spectate_base_url}/{game_id}" if game_id else ""
+    safe_id = safe_game_id(game_id)
+    return f"{spectate_base_url}/{safe_id}" if safe_id else ""
 
 
 def query_game_id(query: str) -> str:
@@ -516,7 +517,7 @@ def query_game_id(query: str) -> str:
     for key in ("gameId", "game_id"):
         values = params.get(key, [])
         if values and values[0]:
-            return values[0]
+            return safe_game_id(values[0])
     return ""
 
 
@@ -1617,7 +1618,8 @@ class CerberusHandler(BaseHTTPRequestHandler):
         settings = admin_settings().get("settings", {})
         if settings.get("trust_private_network_admin") is False:
             return False
-        host = self.client_address[0] if isinstance(self.client_address, tuple) and self.client_address else ""
+        client_address = getattr(self, "client_address", ())
+        host = client_address[0] if isinstance(client_address, tuple) and client_address else ""
         try:
             ip = ipaddress.ip_address(host)
         except ValueError:
