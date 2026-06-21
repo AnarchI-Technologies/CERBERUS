@@ -84,6 +84,13 @@ class HardeningTests(unittest.TestCase):
     def _isolated(self, tmp: str) -> IsolatedCerberusInstance:
         return IsolatedCerberusInstance.create(Path(tmp) / "isolated")
 
+    def _require_eth_account(self):
+        try:
+            from eth_account import Account  # type: ignore
+        except ModuleNotFoundError:
+            self.skipTest("eth_account is not installed in this environment")
+        return Account
+
     def test_repo_root_does_not_shadow_runtime_modules_with_stale_pseudocode(self) -> None:
         for filename in ("decision_engine.py", "turn_state_model.py", "main_loop,py"):
             self.assertFalse((ROOT / filename).exists(), filename)
@@ -1804,6 +1811,33 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(queue[0]["attempts"], 1)
         self.assertEqual(queue[0]["last_result"]["reason"], "moltybook post failed")
 
+    def test_social_runtime_marks_pending_items_failed_when_drain_raises(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                social_runtime.enqueue_social_effects(
+                    [
+                        {"type": "moltybook_draft", "category": "test", "content": "first queued post"},
+                        {"type": "moltybook_follow", "targetHandle": "@rival", "reason": "follow after duel"},
+                    ]
+                )
+                with mock.patch("social_runtime.process_social_side_effects", side_effect=RuntimeError("queue exploded")):
+                    result = social_runtime.drain_social_queue_once(max_items=2)
+                queue = social_runtime.social_queue()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["processed"], 2)
+        self.assertTrue(all(item.get("reason") == "social_drain_exception" for item in result["results"]))
+        self.assertTrue(all(item.get("status") == "failed" for item in queue[-2:]))
+        self.assertTrue(all(int(item.get("attempts") or 0) == 1 for item in queue[-2:]))
+        self.assertTrue(all(item.get("last_result", {}).get("reason") == "social_drain_exception" for item in queue[-2:]))
+
     def test_forced_voice_recovered_post_queues_once_from_dossiers(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         try:
@@ -1886,6 +1920,20 @@ class HardeningTests(unittest.TestCase):
                 self.assertTrue(handler._pin_authorized("2468"))
         finally:
             os.environ.pop("CERBERUS_PIN", None)
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+    def test_render_handler_missing_client_address_is_not_trusted(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.update_admin_settings(trust_private_network_admin=True)
+                handler = render_app.CerberusHandler.__new__(render_app.CerberusHandler)
+                self.assertFalse(handler._request_is_local_trusted())
+        finally:
             if old_memory_dir is None:
                 os.environ.pop("CERBERUS_MEMORY_DIR", None)
             else:
@@ -2659,20 +2707,24 @@ class HardeningTests(unittest.TestCase):
                 live_social = Path(live_tmp) / "social_runtime_queue.json"
                 isolated_owner = isolated.root / "owner_messages.json"
                 isolated_social = isolated.root / "social_runtime_queue.json"
+                owner_payload = runtime_state.read_json(isolated_owner)
+                social_payload = runtime_state.read_json(isolated_social)
+                live_owner_exists = live_owner.exists()
+                live_social_exists = live_social.exists()
+                isolated_owner_exists = isolated_owner.exists()
+                isolated_social_exists = isolated_social.exists()
         finally:
             if old_memory_dir is None:
                 os.environ.pop("CERBERUS_MEMORY_DIR", None)
             else:
                 os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
 
-        self.assertFalse(live_owner.exists())
-        self.assertFalse(live_social.exists())
-        self.assertTrue(isolated_owner.exists())
-        self.assertTrue(isolated_social.exists())
-        self.assertEqual(runtime_state.read_json(isolated_owner)["messages"][-1]["command_id"], "cmd-1")
-        self.assertTrue(
-            any(item.get("type") == "moltybook_draft" for item in runtime_state.read_json(isolated_social)["queue"])
-        )
+        self.assertFalse(live_owner_exists)
+        self.assertFalse(live_social_exists)
+        self.assertTrue(isolated_owner_exists)
+        self.assertTrue(isolated_social_exists)
+        self.assertEqual(owner_payload["messages"][-1]["command_id"], "cmd-1")
+        self.assertTrue(any(item.get("type") == "moltybook_draft" for item in social_payload["queue"]))
 
     def test_isolated_instance_survives_encrypted_reload_strain(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")
@@ -4823,6 +4875,25 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(payload["spectate_url"].endswith("/game-live-7"))
         self.assertIn("Hellion", payload["public_thought"])
 
+    def test_render_game_id_helpers_sanitize_untrusted_values(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.remember_game_id('game-live-7" onload="alert(1)')
+                active = render_app.active_runtime_game_id({})
+                query = render_app.query_game_id("gameId=game-live-8%22%20onload%3D%22alert(1)")
+                spectate = render_app.spectate_url('game-live-9" onload="alert(1)')
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(active, "game-live-7onloadalert1")
+        self.assertEqual(query, "game-live-8onloadalert1")
+        self.assertTrue(spectate.endswith("/game-live-9onloadalert1"))
+
     def test_render_root_serves_dashboard_and_healthz_stays_json(self) -> None:
         sent = []
 
@@ -5052,8 +5123,7 @@ class HardeningTests(unittest.TestCase):
         self.assertGreaterEqual(len(result["attempts"]), 3)
 
     def test_claw_paid_join_typed_data_signer_returns_signature(self) -> None:
-        from eth_account import Account  # type: ignore
-
+        Account = self._require_eth_account()
         account = Account.create()
         payload = {
             "type": "sign_required",
@@ -5087,8 +5157,7 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(str(signed["signature"]).startswith("0x"))
 
     def test_claw_paid_join_signer_preserves_join_intent_id(self) -> None:
-        from eth_account import Account  # type: ignore
-
+        Account = self._require_eth_account()
         account = Account.create()
         payload = {
             "type": "sign_required",
@@ -5111,8 +5180,7 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(signed["joinIntentId"], "join-1")
 
     def test_claw_paid_join_signer_accepts_plain_message_frame(self) -> None:
-        from eth_account import Account  # type: ignore
-
+        Account = self._require_eth_account()
         account = Account.create()
         payload = {
             "type": "sign_required",
@@ -5133,8 +5201,7 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(str(signed["signature"]).startswith("0x"))
 
     def test_claw_paid_join_signer_parses_json_typed_data_message(self) -> None:
-        from eth_account import Account  # type: ignore
-
+        Account = self._require_eth_account()
         account = Account.create()
         typed_data = {
             "types": {
@@ -5158,8 +5225,7 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(str(signed["signature"]).startswith("0x"))
 
     def test_claw_paid_join_signer_infers_crossmainnet_typed_data(self) -> None:
-        from eth_account import Account  # type: ignore
-
+        Account = self._require_eth_account()
         account = Account.create()
         message = {
             "domain": {
@@ -5186,8 +5252,7 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(str(signed["signature"]).startswith("0x"))
 
     def test_claw_paid_join_signer_infers_nested_message_object(self) -> None:
-        from eth_account import Account  # type: ignore
-
+        Account = self._require_eth_account()
         account = Account.create()
         payload = {
             "type": "sign_required",
