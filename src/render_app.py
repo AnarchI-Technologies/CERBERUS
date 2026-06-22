@@ -40,6 +40,7 @@ from owner_command_cortex import acknowledge_owner_command, command_categories, 
 from profit_simulator import simulate as profit_simulate  # noqa: E402
 from secret_env_admin import resolve_secret_value, update_secret_targets  # noqa: E402
 from social_runtime import drain_social_queue_once, social_queue  # noqa: E402
+from moltstation_runtime import run_forever as run_moltstation_runtime  # noqa: E402
 from runtime_state import (
     append_hellion_owner_response,
     append_owner_message,
@@ -70,6 +71,11 @@ DEFAULT_SPECTATE_BASE_URL = "https://www.clawroyale.ai/games/spect"
 def claw_runtime_enabled() -> bool:
     raw = os.getenv("CLAW_ROYALE_RUNTIME_ENABLED", "").strip().lower()
     return raw not in {"0", "false", "no", "off"}
+
+
+def moltstation_runtime_enabled() -> bool:
+    raw = os.getenv("MOLTSTATION_RUNTIME_ENABLED", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def readiness() -> dict[str, Any]:
@@ -263,6 +269,7 @@ def stats() -> dict[str, Any]:
             "render_api_key_present": bool(os.getenv("RENDER_API_KEY")),
             "render_service_id_present": bool(os.getenv("RENDER_SERVICE_ID") or os.getenv("CERBERUS_RENDER_SERVICE_ID")),
         },
+        "moltstation_runtime": read_json((Path(os.getenv("CERBERUS_MEMORY_DIR") or DEFAULT_MEMORY_DIR) / "moltstation_runtime_status.json")),
     }
 
 
@@ -551,6 +558,7 @@ def dashboard_html(query: str = "") -> bytes:
     main {{ height: calc(100vh - 52px); overflow: hidden; display: grid; grid-template-rows: 44px 1fr 42px; }}
     .top-actions {{ display: flex; gap: 8px; align-items: center; }}
     .button, button {{ background: linear-gradient(180deg, #f6fcff, #d8f4ff); color: #07121a; border: 1px solid rgba(255,255,255,.25); border-radius: 999px; padding: 8px 12px; text-decoration: none; cursor: pointer; font-size: 13px; font-weight: 700; box-shadow: 0 8px 24px rgba(11,170,226,.18); }}
+    .button.is-ghost, button.is-ghost {{ background: rgba(16,25,36,.88); color: #e7f2ff; border-color: rgba(145,208,255,.16); box-shadow: none; }}
     .banner {{ display: flex; gap: 14px; align-items: center; padding: 8px 14px; border-bottom: 1px solid rgba(145,208,255,.12); background: rgba(9,16,25,.84); backdrop-filter: blur(12px); overflow: hidden; white-space: nowrap; }}
     .bottom-banner {{ border-top: 1px solid #273041; border-bottom: 0; }}
     .pill {{ border: 1px solid rgba(145,208,255,.18); border-radius: 999px; padding: 5px 9px; background: rgba(20,30,42,.86); font-size: 12px; }}
@@ -570,6 +578,14 @@ def dashboard_html(query: str = "") -> bytes:
     .label {{ color: #98a2b3; font-size: 12px; }}
     .value {{ font-size: 14px; overflow-wrap: anywhere; margin-top: 4px; }}
     .wide {{ margin-bottom: 8px; }}
+    .tabs {{ display: flex; gap: 8px; margin: 0 0 12px; padding: 6px; border: 1px solid rgba(145,208,255,.12); border-radius: 16px; background: rgba(8,13,20,.72); }}
+    .tab {{ flex: 1; border-radius: 12px; border: 1px solid transparent; background: transparent; color: #97a7bb; box-shadow: none; padding: 10px 12px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }}
+    .tab.active {{ background: linear-gradient(180deg, rgba(46,230,184,.16), rgba(11,19,28,.95)); color: #effff8; border-color: rgba(98,240,199,.34); }}
+    .tab-panel {{ display: none; }}
+    .tab-panel.active {{ display: block; }}
+    .observation-stack {{ display: grid; gap: 8px; }}
+    .observation-note {{ border: 1px solid rgba(145,208,255,.12); border-radius: 12px; padding: 10px 11px; background: rgba(14,21,31,.92); font-size: 13px; line-height: 1.4; }}
+    .observation-note strong {{ display: block; margin-bottom: 4px; color: #dff9ff; }}
     .owner-form {{ display: grid; gap: 8px; margin: 10px 0; }}
     textarea, input {{ width: 100%; border: 1px solid rgba(145,208,255,.14); border-radius: 10px; background: rgba(7,12,18,.94); color: #f4f7fb; padding: 9px; font: inherit; }}
     textarea {{ resize: vertical; min-height: 76px; max-height: 180px; }}
@@ -606,79 +622,99 @@ def dashboard_html(query: str = "") -> bytes:
       </div>
       <aside class="map-side">
         <div class="panel-body">
-        <div class="grid">
-          <div class="metric"><div class="label">Service</div><div id="service" class="value">loading</div></div>
-          <div class="metric"><div class="label">Current Game</div><div id="game" class="value">unknown</div></div>
-          <div class="metric"><div class="label">Runtime</div><div id="runtime-state" class="value">loading</div></div>
-          <div class="metric"><div class="label">Mode</div><div id="mode" class="value">loading</div></div>
-          <div class="metric"><div class="label">HP / EP</div><div id="vitals" class="value">loading</div></div>
-          <div class="metric"><div class="label">Region</div><div id="region" class="value">loading</div></div>
-          <div class="metric"><div class="label">Visible</div><div id="visible" class="value">loading</div></div>
-          <div class="metric"><div class="label">Inventory</div><div id="inventory" class="value">loading</div></div>
+          <div class="tabs" role="tablist" aria-label="Dashboard sections">
+            <button id="tab-overview" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="panel-overview" onclick="setDashboardTab('overview')">Overview</button>
+            <button id="tab-observation" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-observation" onclick="setDashboardTab('observation')">Moltstation Observation</button>
+          </div>
+          <section id="panel-overview" class="tab-panel active" role="tabpanel" aria-labelledby="tab-overview">
+            <div class="grid">
+              <div class="metric"><div class="label">Service</div><div id="service" class="value">loading</div></div>
+              <div class="metric"><div class="label">Current Game</div><div id="game" class="value">unknown</div></div>
+              <div class="metric"><div class="label">Runtime</div><div id="runtime-state" class="value">loading</div></div>
+              <div class="metric"><div class="label">Mode</div><div id="mode" class="value">loading</div></div>
+              <div class="metric"><div class="label">HP / EP</div><div id="vitals" class="value">loading</div></div>
+              <div class="metric"><div class="label">Region</div><div id="region" class="value">loading</div></div>
+              <div class="metric"><div class="label">Visible</div><div id="visible" class="value">loading</div></div>
+              <div class="metric"><div class="label">Inventory</div><div id="inventory" class="value">loading</div></div>
+            </div>
+            <form id="owner-form" class="owner-form">
+              <div class="label">Message / Command To Hellion</div>
+              <textarea id="owner-message" maxlength="1000" placeholder="Say it plainly. Example: prioritize free games until balance reaches 500."></textarea>
+              <div class="form-row">
+                <input id="owner-pin" type="password" placeholder="CERBERUS_PIN">
+                <button type="submit">Send</button>
+              </div>
+              <div id="owner-status" class="hint">Private owner channel. Stored on the Render disk.</div>
+            </form>
+            <form id="moltybook-secret-form" class="owner-form">
+              <div class="label">MoltBook Secret / Admin Trust</div>
+              <input id="moltybook-api-key" type="password" placeholder="Leave blank to keep current MoltBook key">
+              <div class="form-row">
+                <label class="hint"><input id="moltybook-enabled" type="checkbox" checked> MoltBook enabled</label>
+                <label class="hint"><input id="render-sync-enabled" type="checkbox"> Push env updates to Render too</label>
+              </div>
+              <div class="form-row">
+                <label class="hint"><input id="trust-private-admin" type="checkbox" checked> Trust local/private network for admin</label>
+                <button type="submit">Apply Secret Settings</button>
+              </div>
+              <div id="moltybook-secret-status" class="hint">Reuse current env-backed secrets by default. External access still requires PIN.</div>
+            </form>
+            <div class="metric wide"><div class="label">Recent Owner Messages</div><div id="owner-log" class="owner-log">loading</div></div>
+            <div class="metric wide"><div class="label">Route / Loot Hints</div><div id="route-hints" class="owner-log">loading</div></div>
+            <div class="metric wide"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
+            <div class="metric wide"><div class="label">Stuck Doctor</div><div id="stuck-doctor" class="owner-log">loading</div></div>
+            <div class="metric wide"><div class="label">Stale Paid Rooms</div><div id="stale-paid-rooms" class="owner-log">loading</div></div>
+            <div class="metric wide">
+              <div class="label">Social Queue</div>
+              <div class="form-row" style="margin:6px 0 8px">
+                <div id="social-queue-count" class="hint">loading</div>
+                <button type="button" class="is-ghost" onclick="drainSocialQueue()">Drain Queue</button>
+              </div>
+              <div id="social-queue" class="owner-log">loading</div>
+            </div>
+            <div class="metric wide">
+              <div class="label">Launch Report</div>
+              <div class="form-row" style="margin:6px 0 8px">
+                <div id="launch-status" class="hint">locked</div>
+                <button type="button" class="is-ghost" onclick="loadLaunchReport()">Run Report</button>
+              </div>
+              <div id="launch-report" class="owner-log">Enter owner PIN, then run.</div>
+            </div>
+            <div class="metric wide"><div class="label">Public Thought</div><div id="public-thought" class="value">loading</div></div>
+            <div class="metric wide"><div class="label">Current Intent</div><div id="current-intent" class="value">loading</div></div>
+            <div class="metric wide"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
+            <div class="metric wide"><div class="label">Action Audit</div><div id="action-audit" class="owner-log">loading</div></div>
+            <div class="metric wide"><div class="label">Yield</div><div id="yield" class="value">loading</div></div>
+            <div class="metric wide">
+              <div class="label">Hellion Suggested Edits</div>
+              <div class="form-row" style="margin:6px 0 8px">
+                <div id="autonomy-counts" class="hint">locked</div>
+                <button type="button" class="is-ghost" onclick="loadSuggestedEdits()">Load Bin</button>
+              </div>
+              <div id="suggested-edits" class="owner-log">Enter owner PIN, then load.</div>
+            </div>
+            <div class="metric wide"><div class="label">Readiness</div><div id="readiness" class="value">loading</div></div>
+            <div class="metric wide"><div class="label">Wallets</div><div id="wallets" class="value">loading</div></div>
+            <div class="metric wide"><div class="label">Deployment / Disk</div><div id="deployment" class="value">loading</div></div>
+            <div class="metric wide"><div class="label">Memory DB</div><div id="memory" class="value">loading</div></div>
+            <div class="metric wide"><div class="label">Writable</div><div id="writable" class="value">loading</div></div>
+            <div class="metric wide"><div class="label">Configured Env</div><div id="env" class="value">loading</div></div>
+          </section>
+          <section id="panel-observation" class="tab-panel" role="tabpanel" aria-labelledby="tab-observation">
+            <div class="metric wide">
+              <div class="label">Moltstation Read</div>
+              <div id="moltstation-observation-summary" class="value">loading</div>
+            </div>
+            <div class="observation-stack">
+              <div class="observation-note"><strong>What this tab is for</strong><div>This is the quick read on what the live dashboard is telling us right now, with the noise stripped away.</div></div>
+              <div class="observation-note"><strong>Runtime posture</strong><div id="moltstation-runtime-posture">loading</div></div>
+              <div class="observation-note"><strong>Threat / opportunity</strong><div id="moltstation-threat-note">loading</div></div>
+              <div class="observation-note"><strong>Suggested next move</strong><div id="moltstation-next-move">loading</div></div>
+              <div class="observation-note"><strong>Observed blockers</strong><div id="moltstation-blockers">loading</div></div>
+              <div class="observation-note"><strong>Visible signals</strong><div id="moltstation-signals">loading</div></div>
+            </div>
+          </section>
         </div>
-        <form id="owner-form" class="owner-form">
-          <div class="label">Message / Command To Hellion</div>
-          <textarea id="owner-message" maxlength="1000" placeholder="Say it plainly. Example: prioritize free games until balance reaches 500."></textarea>
-          <div class="form-row">
-            <input id="owner-pin" type="password" placeholder="CERBERUS_PIN">
-            <button type="submit">Send</button>
-          </div>
-          <div id="owner-status" class="hint">Private owner channel. Stored on the Render disk.</div>
-        </form>
-        <form id="moltybook-secret-form" class="owner-form">
-          <div class="label">MoltBook Secret / Admin Trust</div>
-          <input id="moltybook-api-key" type="password" placeholder="Leave blank to keep current MoltBook key">
-          <div class="form-row">
-            <label class="hint"><input id="moltybook-enabled" type="checkbox" checked> MoltBook enabled</label>
-            <label class="hint"><input id="render-sync-enabled" type="checkbox"> Push env updates to Render too</label>
-          </div>
-          <div class="form-row">
-            <label class="hint"><input id="trust-private-admin" type="checkbox" checked> Trust local/private network for admin</label>
-            <button type="submit">Apply Secret Settings</button>
-          </div>
-          <div id="moltybook-secret-status" class="hint">Reuse current env-backed secrets by default. External access still requires PIN.</div>
-        </form>
-        <div class="metric wide"><div class="label">Recent Owner Messages</div><div id="owner-log" class="owner-log">loading</div></div>
-        <div class="metric wide"><div class="label">Route / Loot Hints</div><div id="route-hints" class="owner-log">loading</div></div>
-        <div class="metric wide"><div class="label">Runtime Blockers</div><div id="blockers" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Stuck Doctor</div><div id="stuck-doctor" class="owner-log">loading</div></div>
-        <div class="metric wide"><div class="label">Stale Paid Rooms</div><div id="stale-paid-rooms" class="owner-log">loading</div></div>
-        <div class="metric wide">
-          <div class="label">Social Queue</div>
-          <div class="form-row" style="margin:6px 0 8px">
-            <div id="social-queue-count" class="hint">loading</div>
-            <button type="button" onclick="drainSocialQueue()">Drain Queue</button>
-          </div>
-          <div id="social-queue" class="owner-log">loading</div>
-        </div>
-        <div class="metric wide">
-          <div class="label">Launch Report</div>
-          <div class="form-row" style="margin:6px 0 8px">
-            <div id="launch-status" class="hint">locked</div>
-            <button type="button" onclick="loadLaunchReport()">Run Report</button>
-          </div>
-          <div id="launch-report" class="owner-log">Enter owner PIN, then run.</div>
-        </div>
-        <div class="metric wide"><div class="label">Public Thought</div><div id="public-thought" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Current Intent</div><div id="current-intent" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Action Audit</div><div id="action-audit" class="owner-log">loading</div></div>
-        <div class="metric wide"><div class="label">Yield</div><div id="yield" class="value">loading</div></div>
-        <div class="metric wide">
-          <div class="label">Hellion Suggested Edits</div>
-          <div class="form-row" style="margin:6px 0 8px">
-            <div id="autonomy-counts" class="hint">locked</div>
-            <button type="button" onclick="loadSuggestedEdits()">Load Bin</button>
-          </div>
-          <div id="suggested-edits" class="owner-log">Enter owner PIN, then load.</div>
-        </div>
-        <div class="metric wide"><div class="label">Readiness</div><div id="readiness" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Wallets</div><div id="wallets" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Deployment / Disk</div><div id="deployment" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Memory DB</div><div id="memory" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Writable</div><div id="writable" class="value">loading</div></div>
-        <div class="metric wide"><div class="label">Configured Env</div><div id="env" class="value">loading</div></div>
-      </div>
       </aside>
     </section>
     <section class="banner bottom-banner">
@@ -696,8 +732,18 @@ def dashboard_html(query: str = "") -> bytes:
     let suggestedEditsLoaded = false;
     let suggestedEditsRefreshInFlight = false;
     let adminSettings = {{}};
+    let activeTab = "overview";
     function hasOwnerPin() {{
       return !!document.getElementById("owner-pin").value.trim();
+    }}
+    function setDashboardTab(tab) {{
+      activeTab = tab;
+      [["overview", "tab-overview", "panel-overview"], ["observation", "tab-observation", "panel-observation"]].forEach(([name, tabId, panelId]) => {{
+        const isActive = name === tab;
+        document.getElementById(tabId).classList.toggle("active", isActive);
+        document.getElementById(tabId).setAttribute("aria-selected", String(isActive));
+        document.getElementById(panelId).classList.toggle("active", isActive);
+      }});
     }}
     async function fetchJson(url, options) {{
       const opts = options ? {{...options}} : {{}};
@@ -857,6 +903,35 @@ def dashboard_html(query: str = "") -> bytes:
       }}
       box.innerHTML = hints.map((hint) => "<div class='owner-msg'><strong>" + esc(hint.type || "hint") + "</strong> " + esc(hint.label || hint.item_id || hint.region_id || "") + "<div class='hint'>score " + esc(hint.score || 0) + "</div></div>").join("");
     }}
+    function renderMoltstationObservation(data) {{
+      const runtime = data.moltstation_runtime || {{}};
+      const claw = data.claw_runtime || {{}};
+      const snap = runtime.last_snapshot || {{}};
+      const account = runtime.account || claw.account || {{}};
+      const blockers = runtimeBlockers(data);
+      const liveMap = runtime.live_map || claw.live_map || {{}};
+      const signals = [
+        "game " + (data.current_game_id || runtime.session_id || "none"),
+        "state " + (runtime.state || claw.state || "unknown"),
+        "mode " + (runtime.mode || claw.mode || "unknown"),
+        "balance " + (account.balance ?? "?"),
+        "HP " + (snap.hp ?? "?") + "/" + (snap.max_hp ?? "?"),
+        "EP " + (snap.ep ?? "?") + "/" + (snap.max_ep ?? "?"),
+        "inventory " + (snap.inventory_count ?? 0),
+        "visible " + ((snap.visible_agents ?? 0) + " agents / " + (snap.visible_monsters ?? 0) + " monsters / " + (snap.visible_items ?? 0) + " items"),
+        "heartbeat " + (liveMap.heartbeat || runtime.updated_at || "waiting"),
+      ];
+      document.getElementById("moltstation-observation-summary").textContent =
+        (runtime.state === "cycle_complete" ? "Cycle complete" : (runtime.state || "Waiting")) + " | " + (data.current_game_id || runtime.session_id || "no game");
+      document.getElementById("moltstation-runtime-posture").textContent =
+        "The runtime is " + (runtime.state || "unknown") + " with phase " + (runtime.phase || "unknown") + " and score " + (runtime.score && runtime.score.current !== undefined ? runtime.score.current : "0") + ".";
+      document.getElementById("moltstation-threat-note").textContent =
+        blockers.length ? "Main risk right now: " + blockers[0] + "." : "No hard blocker is visible from the live dashboard.";
+      document.getElementById("moltstation-next-move").textContent =
+        blockers.length ? "Clear the first blocker, then re-check the live map and launch posture." : "Keep the runtime live and let it accumulate ended sessions for rewards.";
+      document.getElementById("moltstation-blockers").textContent = blockers.length ? blockers.join(" | ") : "none";
+      document.getElementById("moltstation-signals").textContent = signals.join(" | ");
+    }}
     function renderLegend(legend) {{
       const box = document.getElementById("map-legend");
       const entries = Object.entries(legend || {{}});
@@ -1012,6 +1087,7 @@ def dashboard_html(query: str = "") -> bytes:
       renderMap(liveMap, blockers);
       const autonomy = data.autonomy || {{}};
       adminSettings = data.admin_settings || {{}};
+      renderMoltstationObservation(data);
       const envState = data.env_state || {{}};
       document.getElementById("render-sync-enabled").checked = !!adminSettings.render_env_permissions;
       document.getElementById("trust-private-admin").checked = adminSettings.trust_private_network_admin !== false;
@@ -1199,6 +1275,7 @@ def dashboard_html(query: str = "") -> bytes:
       }}
     }}
     loadStats();
+    setDashboardTab("overview");
     setInterval(loadStats, 4000);
   </script>
 </body>
@@ -1672,6 +1749,10 @@ def main() -> int:
         thread = threading.Thread(target=lambda: asyncio.run(run_claw_runtime()), daemon=True)
         thread.start()
         print("Claw Royale runtime worker started", flush=True)
+    if moltstation_runtime_enabled():
+        thread = threading.Thread(target=lambda: asyncio.run(run_moltstation_runtime()), daemon=True)
+        thread.start()
+        print("MoltStation runtime worker started", flush=True)
     server = ThreadingHTTPServer(("0.0.0.0", port), CerberusHandler)
     print(f"Cerberus Render service listening on 0.0.0.0:{port}", flush=True)
     server.serve_forever()
