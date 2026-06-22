@@ -1,6 +1,12 @@
-.env
-.env.*
+# Env files and any future env-like variants stay local only.
+/.env
+/.env.*
+/.env*
+**/.env
+**/.env.*
+**/.env*
 !.env.example
+!**/.env.example
 
 .venv/
 .venv312/
