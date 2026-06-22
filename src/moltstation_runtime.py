@@ -113,6 +113,14 @@ class MoltstationClient:
         self.refresh_token = str(verify.get("refreshToken") or "")
         return verify
 
+    def rewards_start_session(self) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/api/rewards/start-session",
+            auth=True,
+            json={"gameSlug": self.game_slug, "walletAddress": self.cfg.wallet_address},
+        )
+
     def session_start(self) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -213,6 +221,7 @@ async def run_forever() -> None:
     while True:
         try:
             auth = client.auth()
+            rewards_session = client.rewards_start_session()
             start = client.session_start()
             session_id = str(start.get("sessionId") or start.get("session_id") or "")
             if not session_id:
@@ -237,6 +246,7 @@ async def run_forever() -> None:
                     "game_slug": client.game_slug,
                     "shellrunner_contract": client.shellrunner_contract,
                     "session_id": session_id,
+                    "rewards_session": rewards_session,
                     "auth_ok": bool(auth.get("accessToken")),
                     "readiness": ready,
                     "payout_history": history,
