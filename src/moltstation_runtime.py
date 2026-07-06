@@ -151,6 +151,14 @@ def load_config() -> MoltstationConfig:
         api_key=os.getenv("MOLTSTATION_API_KEY", "").strip(),
         private_key=os.getenv("MOLTSTATION_AGENT_PRIVATE_KEY", os.getenv("CERBERUS_AGENT_EOA_PRIVATE_KEY", "")).strip(),
         wallet_address=os.getenv("MOLTSTATION_AGENT_WALLET", os.getenv("CERBERUS_AGENT_EOA_ADDRESS", "")).strip(),
+        private_key=os.getenv(
+            "MOLTSTATION_AGENT_PRIVATE_KEY",
+            os.getenv("AGENT_PRIVATE_KEY", os.getenv("CERBERUS_AGENT_EOA_PRIVATE_KEY", "")),
+        ).strip(),
+        wallet_address=os.getenv(
+            "MOLTSTATION_AGENT_WALLET",
+            os.getenv("AGENT_WALLET_ADDRESS", os.getenv("CERBERUS_AGENT_EOA_ADDRESS", "")),
+        ).strip(),
         shellrunner_contract=os.getenv("MOLTSTATION_SHELLRUNNERS_CONTRACT", "").strip(),
     )
 

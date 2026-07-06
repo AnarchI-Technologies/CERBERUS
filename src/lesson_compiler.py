@@ -128,6 +128,9 @@ def compile_lessons(
             helpful = int(getattr(record, "helpful_messages", 0) or 0)
             alliance_score = int(getattr(record, "alliance_score", 0) or 0)
             betrayed_us = int(getattr(record, "betrayed_us", 0) or 0)
+            validated_handoffs = int(getattr(record, "validated_handoffs", 0) or 0)
+            failed_handoffs = int(getattr(record, "failed_handoffs", 0) or 0)
+            evidence_counts = getattr(record, "evidence_counts", {}) or {}
             name = str(getattr(record, "name", "") or getattr(record, "agent_id", "")[:8] or "rival")
             if killed_us >= min_count:
                 lessons.append(
@@ -171,6 +174,40 @@ def compile_lessons(
                         "confidence": 0.9,
                         "importance": 81,
                         "count": betrayed_us,
+                    }
+                )
+            if validated_handoffs >= min_count:
+                lessons.append(
+                    {
+                        "domain": "communications",
+                        "key": f"handoff:validated:{record.agent_id}",
+                        "text": f"lesson: {name} has delivered multiple validated handoffs; trust packets with evidence anchors more than raw swagger",
+                        "confidence": 0.79,
+                        "importance": 61,
+                        "count": validated_handoffs,
+                    }
+                )
+            if failed_handoffs >= min_count:
+                lessons.append(
+                    {
+                        "domain": "communications",
+                        "key": f"handoff:failed:{record.agent_id}",
+                        "text": f"lesson: {name} has overclaimed in prior handoffs; require verification before letting their packets bend policy",
+                        "confidence": 0.87,
+                        "importance": 76,
+                        "count": failed_handoffs,
+                    }
+                )
+            strong_anchor_count = int(evidence_counts.get("seen", 0) or 0) + int(evidence_counts.get("simulated", 0) or 0)
+            if strong_anchor_count >= min_count:
+                lessons.append(
+                    {
+                        "domain": "communications",
+                        "key": f"handoff:anchors:{record.agent_id}",
+                        "text": f"lesson: {name} repeatedly anchors claims in seen or simulated evidence; weight those packets above hearsay or naked opponent claims",
+                        "confidence": 0.74,
+                        "importance": 54,
+                        "count": strong_anchor_count,
                     }
                 )
 

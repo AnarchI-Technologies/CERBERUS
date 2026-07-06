@@ -590,6 +590,119 @@
           "url": "https://www.moltbook.com/post/58e8ea09-bcb2-41c7-8400-3669695c8030"
         }
       ]
+    },
+    {
+      "key": "structured_handoff_packets",
+      "domains": ["social", "runtime", "memory", "owner_command"],
+      "rendered_lesson": "Agent-to-agent messages should harden into typed handoff packets before they influence trust or action. Freeform charm is not a contract.",
+      "strategy_claim": "Treat truce offers, warnings, and strategy tips as typed packets with intent, claim, evidence, uncertainty, expiry, and requested action before they influence alliance or tactical policy.",
+      "handoff_packet_policy": {
+        "required_packet_fields": ["intent", "claim", "evidence", "uncertainty", "expiry", "requested_action"],
+        "supported_intents": ["alliance_offer", "warning", "strategy_tip", "betrayal_risk", "comment"],
+        "default_expiry": "end_of_match",
+        "reward_validated_packets": true,
+        "penalize_failed_claims": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook formal plumbing discussion",
+          "url": "https://www.moltbook.com/post/7658aadb-3445-4572-a56d-17fd87ec054d"
+        }
+      ]
+    },
+    {
+      "key": "evidential_anchor_stack",
+      "domains": ["social", "runtime", "memory", "decision"],
+      "rendered_lesson": "Beliefs should keep their source class attached. Seen, simulated, inferred, hearsay, and opponent claim do not deserve the same trust weight.",
+      "strategy_claim": "Track evidence anchors on cross-agent communication so alliance math and social trust favor seen or simulated overlap over persuasive wording alone.",
+      "evidential_policy": {
+        "anchor_classes": ["seen", "simulated", "inferred", "hearsay", "opponent_claim"],
+        "trusted_anchors": ["seen", "simulated"],
+        "soft_anchors": ["inferred"],
+        "risky_anchors": ["hearsay", "opponent_claim"],
+        "attach_anchor_to_claims": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook cognitive stability discussion",
+          "url": "https://www.moltbook.com/post/8d63f5d3-ac79-4a44-905f-ff88575fe4a1"
+        }
+      ]
+    },
+    {
+      "key": "confidence_accuracy_divergence_fuse",
+      "domains": ["hardening", "runtime", "social", "owner_command"],
+      "rendered_lesson": "When confidence consistently outruns outcome quality, stop hardening and posting until the system pays its epistemic debt.",
+      "strategy_claim": "Track divergence between asserted certainty and verified outcomes, and require an epistemic reset before strategy hardening, social posting, or approval promotion when the gap stays too wide.",
+      "divergence_policy": {
+        "threshold": 0.28,
+        "min_samples": 4,
+        "epistemic_reset_required_on_trip": true,
+        "block_actions": ["strategy_hardening", "social_autodrain", "approval_promotion", "self_write"],
+        "fail_closed_actions": ["strategy_hardening", "social_autodrain"]
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook confidence drift discussion",
+          "url": "https://www.moltbook.com/post/06eabf24-1721-448e-9a57-0c4525c5637a"
+        }
+      ]
+    },
+    {
+      "key": "helpfulness_contraction_counterweight",
+      "domains": ["social", "owner_command", "runtime", "voice"],
+      "rendered_lesson": "A reliable agent needs a contraction metric, not just an expansion metric. Correctly stopping is part of correctness.",
+      "strategy_claim": "Prefer bounded replies and deliberate stopping behavior in public strategy, owner diagnostics, and social taunts so helpfulness does not expand into leakage or noise.",
+      "contraction_policy": {
+        "reward_correct_stop": true,
+        "max_public_sentences": 2,
+        "max_owner_status_sentences": 2,
+        "max_public_chars": 220,
+        "max_owner_chars": 220,
+        "block_strategy_leak_expansion": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook helpfulness asymmetry discussion",
+          "url": "https://www.moltbook.com/post/47a73486-81ad-4121-9778-8b3765770a56"
+        }
+      ]
+    },
+    {
+      "key": "repo_invariant_guard",
+      "domains": ["hardening", "runtime", "owner_command"],
+      "rendered_lesson": "Before self-writing strategy, verify the repository invariants that keep the runtime alive. Passing one local sanity check is not a structural map.",
+      "strategy_claim": "Run a repository invariant guard over required files, dashboard routes, websocket hooks, and social side-effect paths before hardened strategy changes are accepted.",
+      "invariant_guard_policy": {
+        "required_files": ["src/claw_runtime.py", "src/postgame_hardening.py", "src/social_runtime.py", "src/render_app.py", "src/game_map.py"],
+        "required_routes": ["/dashboard", "/healthz", "/stats", "/admin/suggested-edit-status"],
+        "required_side_effects": ["moltybook_draft", "moltybook_follow", "game_free_action"],
+        "require_probe_reload": true,
+        "require_topology_verifier": true
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook technical debt discussion",
+          "url": "https://www.moltbook.com/post/c7a818d7-5310-4b51-84c0-73f91b1ec829"
+        }
+      ]
+    },
+    {
+      "key": "map_topology_verifier_separate_from_policy",
+      "domains": ["runtime", "decision", "hardening", "social"],
+      "rendered_lesson": "The route planner should not certify its own map assumptions. A separate topology verifier should ground the route against raw region facts.",
+      "strategy_claim": "Verify current region, connected regions, pending deathzones, and route targets against raw snapshot topology so map guidance does not self-certify its own blind spots.",
+      "topology_policy": {
+        "separate_verifier_required": true,
+        "checks": ["current_region_present", "connected_regions_covered", "pending_deathzones_marked", "route_targets_grounded"],
+        "verifier_source": "raw_snapshot"
+      },
+      "source_notes": [
+        {
+          "label": "MoltBook inference-time topology discussion",
+          "url": "https://www.moltbook.com/post/6d9b4f08-515a-479c-ac1b-3d41b844ad2f"
+        }
+      ]
     }
   ]
 }

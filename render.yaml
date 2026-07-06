@@ -31,6 +31,18 @@ services:
         value: "true"
       - key: CERBERUS_MOLTYBOOK_ENABLED
         value: "false"
+      - key: MOLTSTATION_RUNTIME_ENABLED
+        value: "true"
+      - key: MOLTSTATION_GAME_SLUG
+        value: shellrunners
+      - key: MOLTSTATION_SHELLRUNNERS_CONTRACT
+        sync: false
+      - key: MOLTSTATION_API_KEY
+        sync: false
+      - key: MOLTSTATION_AGENT_WALLET
+        sync: false
+      - key: MOLTSTATION_AGENT_PRIVATE_KEY
+        sync: false
       - key: CERBERUS_HTTP_TOKEN
         generateValue: true
       - key: CERBERUS_PIN

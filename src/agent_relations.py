@@ -12,12 +12,32 @@ def alliance_value(record: Any) -> int:
     truthful = int(getattr(record, "truthful_messages", 0) or 0)
     offers = int(getattr(record, "alliance_offers", 0) or 0)
     validated = len(getattr(record, "validated_strats", []) or [])
+    validated_handoffs = int(getattr(record, "validated_handoffs", 0) or 0)
+    failed_handoffs = int(getattr(record, "failed_handoffs", 0) or 0)
+    evidence_counts = getattr(record, "evidence_counts", {}) or {}
     score = int(getattr(record, "alliance_score", 0) or 0)
     betrayed_us = int(getattr(record, "betrayed_us", 0) or 0)
     killed_us = int(getattr(record, "killed_us", 0) or 0)
+    seen = int(evidence_counts.get("seen", 0) or 0)
+    simulated = int(evidence_counts.get("simulated", 0) or 0)
+    inferred = int(evidence_counts.get("inferred", 0) or 0)
+    hearsay = int(evidence_counts.get("hearsay", 0) or 0)
+    opponent_claim = int(evidence_counts.get("opponent_claim", 0) or 0)
     return max(
         0,
-        score + (helpful * 2) + truthful + offers + min(validated, 3) - (betrayed_us * 8) - (killed_us * 4),
+        score
+        + (helpful * 2)
+        + truthful
+        + offers
+        + min(validated, 3)
+        + min(validated_handoffs * 2, 6)
+        + min(seen + simulated, 4)
+        + min(inferred, 2)
+        - failed_handoffs
+        - hearsay
+        - (opponent_claim // 2)
+        - (betrayed_us * 8)
+        - (killed_us * 4),
     )
 
 
