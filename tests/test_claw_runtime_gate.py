@@ -64,6 +64,62 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
 
         self.assertFalse(claw_runtime.wants_action(payload, claw_runtime.unwrap_snapshot(payload), gameplay_ready=True))
 
+    def test_cooldown_remaining_blocks_even_when_can_act_is_true(self) -> None:
+        payload = {
+            "type": "agent_view",
+            "gameId": "game-1",
+            "status": "running",
+            "canAct": True,
+            "cooldownRemainingMs": 15000,
+            "view": {"canAct": True, "self": {"id": "me", "hp": 100, "ep": 10}},
+        }
+
+        self.assertFalse(claw_runtime.wants_action(payload, claw_runtime.unwrap_snapshot(payload), gameplay_ready=True))
+
+    def test_free_action_window_detects_weapon_upgrade_during_cooldown(self) -> None:
+        snapshot = {
+            "gameId": "game-1",
+            "status": "running",
+            "canAct": False,
+            "cooldownRemainingMs": 15000,
+            "view": {
+                "self": {
+                    "id": "me",
+                    "hp": 100,
+                    "ep": 10,
+                    "equippedWeapon": {"typeId": "dagger"},
+                    "inventory": [{"id": "blade-1", "typeId": "sword"}],
+                },
+                "currentRegion": {"id": "r1"},
+            },
+        }
+
+        self.assertTrue(claw_runtime.has_free_action_window(claw_runtime.TurnState.from_snapshot(snapshot)))
+
+    def test_action_signature_is_turn_bound_and_reason_insensitive(self) -> None:
+        first = claw_runtime.action_signature({"type": "move", "regionId": "r2", "reason": "one"}, turn=7)
+        second = claw_runtime.action_signature({"type": "move", "regionId": "r2", "reason": "two"}, turn=7)
+        third = claw_runtime.action_signature({"type": "move", "regionId": "r2", "reason": "two"}, turn=8)
+
+        self.assertEqual(first, second)
+        self.assertNotEqual(second, third)
+        self.assertTrue(claw_runtime.duplicate_action_sent({"last_action_turn": 7, "last_action_signature": first}, {"type": "move", "regionId": "r2"}, turn=7))
+        self.assertFalse(claw_runtime.duplicate_action_sent({"last_action_turn": 7, "last_action_signature": first}, {"type": "move", "regionId": "r2"}, turn=8))
+
+    def test_snapshot_signature_is_stable_for_identical_payloads(self) -> None:
+        snapshot = {
+            "turn": 9,
+            "canAct": True,
+            "view": {"self": {"id": "me", "hp": 100, "ep": 10}, "currentRegion": {"id": "r1"}},
+        }
+        copied = {
+            "view": {"currentRegion": {"id": "r1"}, "self": {"ep": 10, "hp": 100, "id": "me"}},
+            "canAct": True,
+            "turn": 9,
+        }
+
+        self.assertEqual(claw_runtime.snapshot_signature(snapshot), claw_runtime.snapshot_signature(copied))
+
     def test_hollow_agent_view_does_not_trigger_action(self) -> None:
         payload = {
             "type": "agent_view",

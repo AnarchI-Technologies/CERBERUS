@@ -26,6 +26,8 @@ class ProgressionCortex:
             and not state.alert_active
             and not state.visible_agents
             and not state.is_low_hp
+            and not state.is_in_death_zone
+            and not state.is_pending_death_zone
         ):
             future_alert = state.alert_gauge + 2
             risk = (10 if future_alert < 10 else 45) + progression_value_at_risk(state)
@@ -73,9 +75,12 @@ class ProgressionCortex:
                         action=action("use_item", itemId=heal.get("id")),
                         reason=f"carrying relic/pack cargo under risk {cargo_risk}; heal before greed",
                         source_facts=["F|progression.inventory", "F|items.recovery", "F|safety.survival"],
-                    )
                 )
-            if (state.is_in_death_zone or state.alert_active or cargo_risk >= 55 or state.self.hp <= 45) and state.can_take_main_action:
+            )
+            if (
+                (state.is_in_death_zone or state.is_pending_death_zone or state.alert_active or cargo_risk >= 55 or state.self.hp <= 45)
+                and state.can_take_main_action
+            ):
                 safe_regions = state.connected_safe_regions()
                 if safe_regions and state.self.ep > 0:
                     target = _best_cargo_escape_region(safe_regions)
@@ -93,7 +98,7 @@ class ProgressionCortex:
                                 source_facts=["F|progression.settlement", "F|safety.movement", "F|progression.inventory"],
                             )
                         )
-                elif state.self.ep <= 1:
+                elif state.self.ep <= 1 and not state.is_in_death_zone and not state.is_pending_death_zone:
                     results.append(
                         CortexResult(
                             cortex=self.name,

@@ -90,12 +90,10 @@ def active_fallback_action(state: TurnState) -> dict[str, Any]:
         return action("move", regionId=best_region, reason="scout fallback; move to best scored safe region")
     if state.current_region.terrain.lower() == "ruin" or "ruin" in state.current_region.name.lower():
         return action("explore", reason="scout fallback; ruin present and no higher-priority action")
-    if state.visible_regions:
-        current_id = state.current_region.id
-        for region in state.visible_regions:
-            region_id = str(region.get("id") or region.get("regionId") or "")
-            if region_id and region_id != current_id and not region.get("isDeathZone"):
-                return action("move", regionId=region_id, reason="scout fallback; move to visible region")
+    for region in state.connected_safe_regions():
+        region_id = str(region.get("id") or region.get("regionId") or "")
+        if region_id and region_id != state.current_region.id:
+            return action("move", regionId=region_id, reason="scout fallback; move to visible region")
     return action("explore", reason="scout fallback; reveal map options")
 
 

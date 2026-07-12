@@ -63,7 +63,6 @@ from isolated_runtime import IsolatedCerberusInstance
 from identity_vault import DEFAULT_PUBLIC_NAME, DEFAULT_V2_PUBLIC_NAME, empty_identity
 from knowledge_base import KnowledgeBase
 from ep_economy_engine import EconomyCortex
-from decision_engine import make_plan
 from longterm_memory import LongTermMemoryStore
 from learned_policy_cortex import LearnedPolicyCortex
 from memory_system import CompactMemoryStore
@@ -71,10 +70,13 @@ from moltbook_claim_assistant import extract_moltbook_claims, stored_claim, veri
 from moltybook_client import MoltyBookClient, process_social_side_effects
 from onboarding_clients import ClawRoyaleClient, build_claw_siwe_message
 from onboarding_clients import OnboardingAPIError, _unwrap
+from decision_engine import active_fallback_action, make_plan
 from progression_cortex import ProgressionCortex
 from risk_engine import progression_value_at_risk
 from settlement_memory import settlement_lessons
 from social_cortex import SocialCortex
+from threat_engine import escape_action
+from utility_cortex import UtilityCortex
 from turn_state_model import TurnState
 from wallet_identity import wallet_for_purpose
 from x_oauth import authorization_url, parse_callback_url, pkce_pair
@@ -824,6 +826,43 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(action["type"], "explore")
 
+    def test_active_fallback_action_skips_pending_death_zone_region(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 80, "ep": 2},
+                    "currentRegion": {"id": "r1", "name": "Field", "terrain": "Plain"},
+                    "connectedRegions": [{"id": "r2", "name": "Marked", "terrain": "Plain"}],
+                    "visibleRegions": [{"id": "r2", "name": "Marked", "terrain": "Plain"}],
+                    "pendingDeathzones": [{"id": "r2"}],
+                },
+            }
+        )
+
+        action = active_fallback_action(state)
+
+        self.assertEqual(action["type"], "explore")
+        self.assertNotEqual(action.get("regionId"), "r2")
+
+    def test_escape_action_skips_pending_death_zone_region(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 80, "ep": 2},
+                    "currentRegion": {"id": "r1", "name": "Field", "terrain": "Plain", "isDeathZone": True},
+                    "connectedRegions": [{"id": "r2", "name": "Marked", "terrain": "Plain"}],
+                    "pendingDeathzones": [{"id": "r2"}],
+                },
+            }
+        )
+
+        action = escape_action(state)
+
+        self.assertNotEqual(action.get("type"), "move")
+        self.assertNotEqual(action.get("regionId"), "r2")
+
     def test_turn_state_parses_alternate_connection_fields(self) -> None:
         state = TurnState.from_snapshot(
             {
@@ -1441,6 +1480,39 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["targetId"], "guardian-1")
         self.assertIn("owner directive", action["reason"])
 
+    def test_owner_command_does_not_force_attack_while_alert_active(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = CompactMemoryStore(
+                path=Path(tmp) / "memory.json",
+                encrypted_path=Path(tmp) / "memory.vault.json",
+            ).load()
+            dossiers = AgentDossierStore(
+                path=Path(tmp) / "dossiers.json",
+                encrypted_path=Path(tmp) / "dossiers.vault.json",
+            ).load()
+            action = cerberus_tick(
+                {
+                    "canAct": True,
+                    "view": {
+                        "self": {
+                            "id": "me",
+                            "hp": 100,
+                            "ep": 4,
+                            "atk": 20,
+                            "equippedWeapon": {"typeId": "katana"},
+                        },
+                        "alertGauge": 12,
+                        "currentRegion": {"id": "r1"},
+                        "visibleMonsters": [{"id": "guardian-1", "name": "Guardian", "hp": 22, "atk": 8, "def": 4}],
+                    },
+                },
+                memory_store=memory,
+                dossier_store=dossiers,
+                owner_command_messages=[{"kind": "owner_command", "text": "hunt the guardian"}],
+            )
+
+        self.assertNotEqual(action["type"], "attack")
+
     def test_owner_command_can_request_public_taunt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             memory = CompactMemoryStore(
@@ -1645,6 +1717,68 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(move.veto)
         self.assertEqual(move.action["type"], "move")
         self.assertEqual(move.action["regionId"], "safe-1")
+
+    def test_progression_cargo_protection_repositions_out_of_pending_deathzone(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {
+                        "id": "me",
+                        "hp": 70,
+                        "ep": 3,
+                        "inventory": [{"id": "pack-1", "typeId": "scout_pack"}],
+                    },
+                    "currentRegion": {"id": "r1", "terrain": "Plain", "isDeathZone": False},
+                    "pendingDeathzones": [{"id": "r1"}],
+                    "connectedRegions": [
+                        {"id": "safe-1", "name": "Medical Annex", "terrain": "Plain"},
+                        {"id": "ruin-1", "name": "Old Ruin", "terrain": "Ruin"},
+                    ],
+                },
+            }
+        )
+        results = ProgressionCortex().evaluate(state, {})
+        move = next(result for result in results if result.intent == "preserve_cargo_reposition")
+
+        self.assertTrue(move.veto)
+        self.assertEqual(move.action["type"], "move")
+        self.assertEqual(move.action["regionId"], "safe-1")
+
+    def test_progression_action_escapes_pending_deathzone_before_exploring_ruins(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 84, "ep": 3},
+                    "currentRegion": {"id": "r1", "terrain": "Ruin", "isDeathZone": False},
+                    "pendingDeathzones": [{"id": "r1"}],
+                    "connectedRegions": [{"id": "safe-1", "name": "Medical Annex", "terrain": "Plain"}],
+                },
+            }
+        )
+
+        self.assertEqual(
+            owner_command_cortex.progression_action(state),
+            {"type": "move", "regionId": "safe-1", "reason": "owner directive: escape pending death zone before progression"},
+        )
+
+    def test_utility_map_use_is_blocked_in_pending_deathzone(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 84, "ep": 3, "inventory": [{"id": "map-1", "typeId": "map"}]},
+                    "currentRegion": {"id": "r1", "terrain": "Plain", "isDeathZone": False},
+                    "pendingDeathzones": [{"id": "r1"}],
+                    "visibleRegions": [{"id": "r2", "name": "Far Field", "terrain": "Plain"}],
+                    "connectedRegions": [{"id": "r2", "name": "Far Field", "terrain": "Plain"}],
+                },
+            }
+        )
+        results = UtilityCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.intent == "use_map_for_navigation" for result in results))
 
     def test_settlement_memory_extracts_compact_lessons(self) -> None:
         lessons = settlement_lessons(
@@ -2185,13 +2319,17 @@ class HardeningTests(unittest.TestCase):
             )
             preserve = LearnedPolicyCortex().evaluate(preserve_state, {"dossier_store": dossiers, "memory_store": memory})
             dossiers.observe_agent("ally-1", name="Ally", tendency="collects_high_value_loot")
-            dossiers.records["ally-1"].killed_by_us = 1
+            record = dossiers.records["ally-1"]
+            record.alliance_score = 6
+            record.helpful_messages = 0
+            record.truthful_messages = 0
+            record.alliance_offers = 0
+            record.killed_by_us = 1
             betray_state = TurnState.from_snapshot(
                 {
                     "canAct": True,
                     "view": {
                         "self": {"id": "me", "hp": 92, "maxHp": 100, "ep": 4},
-                        "alertGauge": 12,
                         "currentRegion": {"id": "r2", "name": "Ruin Ring", "terrain": "Ruin", "connections": [{"id": "safe-2"}]},
                         "visibleAgents": [{"id": "ally-1", "name": "Ally", "hp": 24, "atk": 8, "regionId": "r2"}],
                     },
@@ -2202,6 +2340,25 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(any(result.intent == "preserve_provisional_alliance" for result in preserve))
         betrayal = next(result for result in betray if result.intent == "betray_when_reward_outweighs_alliance")
         self.assertEqual(betrayal.action["type"], "attack")
+
+    def test_learned_policy_does_not_press_attack_while_alert_active(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 92, "maxHp": 100, "ep": 4, "atk": 26},
+                    "alertGauge": 12,
+                    "currentRegion": {"id": "r2", "name": "Ruin Ring", "terrain": "Ruin"},
+                    "visibleAgents": [{"id": "enemy-1", "name": "Rival", "hp": 24, "atk": 8, "def": 2, "regionId": "r2"}],
+                },
+            }
+        )
+        results = LearnedPolicyCortex().evaluate(
+            state,
+            {"dossier_store": AgentDossierStore(), "memory_store": CompactMemoryStore()},
+        )
+
+        self.assertFalse(any(result.action and result.action.get("type") == "attack" for result in results))
 
     def test_claw_runtime_extracts_game_free_actions_from_side_effects(self) -> None:
         actions = claw_runtime.free_actions_from_side_effects(

@@ -118,11 +118,13 @@ def scan(perception) -> list[CortexResult]:
 
 
 def escape_action(state: TurnState, region: dict | None = None) -> dict:
-    if region and region.get("id"):
-        return action("move", regionId=region.get("id"))
-
     pending = state.pending_deathzone_ids
     current = state.current_region.id
+    if region and region.get("id"):
+        region_id = str(region.get("id") or "")
+        if region_id and region_id != current and region_id not in pending and not region.get("isDeathZone"):
+            return action("move", regionId=region_id)
+
     for candidate in state.visible_regions:
         region_id = str(candidate.get("id") or candidate.get("regionId") or "")
         if not region_id or region_id == current or region_id in pending:
@@ -131,8 +133,8 @@ def escape_action(state: TurnState, region: dict | None = None) -> dict:
             continue
         return action("move", regionId=region_id, reason="death-zone pressure; probe visible non-death-zone region")
 
-    for candidate in state.connected_regions:
-        region_id = str(candidate.get("id") or candidate.get("regionId") or candidate) if isinstance(candidate, dict) else str(candidate)
+    for candidate in state.connected_safe_regions():
+        region_id = str(candidate.get("id") or candidate.get("regionId") or "") if isinstance(candidate, dict) else str(candidate)
         if region_id and region_id != current:
             return action("move", regionId=region_id, reason="death-zone pressure; emergency move via raw connection id")
 

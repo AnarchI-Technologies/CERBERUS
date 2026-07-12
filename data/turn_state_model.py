@@ -232,6 +232,10 @@ class TurnState:
         return self.current_region.is_death_zone
 
     @property
+    def is_pending_death_zone(self) -> bool:
+        return self.current_region.id in self.pending_deathzone_ids
+
+    @property
     def is_low_hp(self) -> bool:
         if self.self.hp <= 0:
             return False

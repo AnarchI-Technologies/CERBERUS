@@ -18,12 +18,13 @@ from urllib.parse import urlparse
 import websockets
 
 from autonomy_suggestions import record_autonomy_observation
-from claw_contract import JOIN_DECISIONS, THOUGHT_MAX_CHARS
+from claw_contract import FREE_ACTIONS, JOIN_DECISIONS, THOUGHT_MAX_CHARS
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
 from env_loader import hydrate_env
 from external_wisdom import shared_public_line
+from free_action_abuse import FreeActionCortex
 from game_map import build_live_map
 from lesson_compiler import compile_lessons
 from loadout_shop_reforge import (
@@ -47,8 +48,6 @@ from runtime_state import (
     update_claw_runtime_status,
     write_json,
 )
-
-
 DEFAULT_MIN_RECONNECT_SECONDS = 5
 DEFAULT_MAX_RECONNECT_SECONDS = 90
 DEFAULT_ROUTE_PROBE_SECONDS = 15
@@ -253,6 +252,33 @@ def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
     thought = public_action_thought(action)
     data = {key: value for key, value in action.items() if not key.startswith("_")}
     return {"type": "action", "data": data, "thought": thought}
+
+
+def action_signature(action: dict[str, Any], *, turn: int = 0) -> str:
+    data = {
+        key: value
+        for key, value in action.items()
+        if not key.startswith("_") and key not in {"reason", "thought"}
+    }
+    return f"{int(turn)}:{json.dumps(data, sort_keys=True, separators=(',', ':'))}"
+
+
+def duplicate_action_sent(status: dict[str, Any], action: dict[str, Any], *, turn: int) -> bool:
+    if not isinstance(status, dict):
+        return False
+    return (
+        int(status.get("last_action_turn") or -1) == int(turn)
+        and str(status.get("last_action_signature") or "") == action_signature(action, turn=turn)
+    )
+
+
+def snapshot_signature(snapshot: dict[str, Any] | None) -> str:
+    if not isinstance(snapshot, dict):
+        return ""
+    try:
+        return json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except Exception:
+        return ""
 
 
 def free_actions_from_side_effects(action: dict[str, Any], *, limit: int = 2) -> list[dict[str, Any]]:
@@ -675,10 +701,7 @@ def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None, *, ga
         state = TurnState.from_snapshot(snapshot)
         if not has_usable_turn_facts(state):
             return False
-        view = snapshot.get("view", {}) if isinstance(snapshot.get("view"), dict) else {}
-        if snapshot.get("canAct") is False:
-            return False
-        if view.get("canAct") is False:
+        if not state.can_take_main_action:
             return False
     if frame_type in {"agent_view", "turn_advanced"}:
         return True
@@ -686,6 +709,17 @@ def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None, *, ga
         return True
     view = snapshot.get("view", {}) if isinstance(snapshot, dict) else {}
     return isinstance(view, dict) and view.get("canAct") is True
+
+
+def has_free_action_window(state: TurnState | None) -> bool:
+    if not isinstance(state, TurnState):
+        return False
+    try:
+        if not state.has_broadcast_channel and not state.visible_items and not state.current_region.items and not state.inventory:
+            return False
+        return bool(FreeActionCortex().evaluate(state, {}))
+    except Exception:
+        return False
 
 
 def has_usable_turn_facts(state: TurnState) -> bool:
@@ -1179,9 +1213,40 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 last_snapshot=snapshot_summary(snapshot),
                 live_map=build_live_map(snapshot),
             )
-            if snapshot and wants_action(payload, snapshot, gameplay_ready=gameplay_ready):
+            state = TurnState.from_snapshot(snapshot) if snapshot else None
+            snapshot_sig = snapshot_signature(snapshot)
+            runtime_status = read_json(claw_runtime_status_file())
+            if state and int(runtime_status.get("last_snapshot_turn") or -1) == int(state.turn) and str(runtime_status.get("last_snapshot_signature") or "") == snapshot_sig:
+                append_action_audit(
+                    {
+                        "kind": "snapshot_duplicate_suppressed",
+                        "reason": "same turn and same snapshot already processed",
+                        "state": "playing",
+                    }
+                )
+                continue
+            free_action_window = bool(state and not state.can_take_main_action and has_free_action_window(state))
+            if snapshot and (wants_action(payload, snapshot, gameplay_ready=gameplay_ready) or free_action_window):
                 action = cerberus_tick(snapshot)
+                turn = int(state.turn if state else 0)
+                if duplicate_action_sent(runtime_status, action, turn=turn):
+                    append_action_audit(
+                        {
+                            "kind": "action_duplicate_suppressed",
+                            "action": action,
+                            "reason": "same turn and same action signature already sent",
+                            "state": "playing",
+                        }
+                    )
+                    continue
                 envelope = action_envelope(action)
+                if state and not state.can_take_main_action and str(action.get("type") or "") not in FREE_ACTIONS:
+                    update_status(
+                        state="cooldown_waiting",
+                        last_error="cooldown active without a free-action opportunity",
+                        last_action_candidate=action,
+                    )
+                    continue
                 await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
                 append_action_audit({"kind": "action_sent", "action": action, "reason": str(action.get("reason") or ""), "state": "playing"})
                 free_actions = free_actions_from_side_effects(action)
@@ -1199,6 +1264,10 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 update_status(
                     last_action=action,
                     last_action_at=int(time.time()),
+                    last_action_turn=turn,
+                    last_action_signature=action_signature(action, turn=turn),
+                    last_snapshot_turn=turn,
+                    last_snapshot_signature=snapshot_sig,
                     current_intent=runtime_intent(action),
                     last_public_thought=envelope.get("thought", ""),
                     last_free_actions=free_actions,

@@ -56,7 +56,7 @@ class UtilityCortex:
             )
 
         map_item = _find_item(state, MAP_TERMS)
-        if map_item and map_knowledge_sparse(state) and not state.is_in_death_zone:
+        if map_item and map_knowledge_sparse(state) and not state.is_in_death_zone and not state.is_pending_death_zone:
             results.append(
                 CortexResult(
                     cortex=self.name,

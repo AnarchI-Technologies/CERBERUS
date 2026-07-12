@@ -234,8 +234,15 @@ class OwnerCommandCortex:
                 )
 
         if any(term in text for term in ATTACK_TERMS):
+            attack_ready = (
+                state.can_take_main_action
+                and not state.alert_active
+                and not state.is_low_hp
+                and not state.is_in_death_zone
+                and not state.is_pending_death_zone
+            )
             target = best_attack_target(state, guardian_only=any(term in text for term in GUARDIAN_TERMS))
-            if target:
+            if target and attack_ready:
                 target_type = "monster" if target.kind == "monster" else "agent"
                 results.append(
                     CortexResult(
@@ -496,6 +503,12 @@ def defensive_action(state: TurnState) -> dict[str, Any] | None:
 
 
 def progression_action(state: TurnState) -> dict[str, Any] | None:
+    if state.is_in_death_zone or state.is_pending_death_zone:
+        for region in state.connected_safe_regions():
+            region_id = region.get("id") if isinstance(region, dict) else ""
+            if region_id:
+                return action("move", regionId=region_id, reason="owner directive: escape pending death zone before progression")
+        return None
     terrain = state.current_region.terrain.lower()
     name = state.current_region.name.lower()
     if state.can_take_main_action and state.self.ep > 0 and ("ruin" in terrain or "ruin" in name or state.ruins):

@@ -105,6 +105,13 @@ class LearnedPolicyCortex:
 
         heal_item = state.best_heal_item()
         hp_ratio = state.self.hp / max(1, state.self.max_hp)
+        can_press_attack = (
+            state.can_take_main_action
+            and not state.alert_active
+            and not state.is_low_hp
+            and not state.is_in_death_zone
+            and not state.is_pending_death_zone
+        )
         if state.can_take_main_action and heal_item and deaths and hp_ratio <= heal_floor:
             applied.append("earlier_heal_after_death_lessons")
             results.append(
@@ -154,7 +161,7 @@ class LearnedPolicyCortex:
                     )
                     continue
 
-                if allied and in_range and should_betray(record, state, agent) and is_worth_attacking(state, agent):
+                if allied and in_range and should_betray(record, state, agent) and can_press_attack and is_worth_attacking(state, agent):
                     applied.append("silent_betrayal_more_profitable")
                     results.append(
                         CortexResult(
@@ -239,7 +246,7 @@ class LearnedPolicyCortex:
                     killed_by_us >= repeat_prey_min_kills
                     and killed_us == 0
                     and in_range
-                    and not state.is_low_hp
+                    and can_press_attack
                     and is_worth_attacking(state, agent)
                 ):
                     applied.append("press_repeat_prey")
@@ -259,7 +266,7 @@ class LearnedPolicyCortex:
                 if (
                     "dies_under_pressure" in tendencies
                     and in_range
-                    and not state.is_low_hp
+                    and can_press_attack
                     and is_worth_attacking(state, agent)
                 ):
                     applied.append("press_observed_fragile_target")
@@ -278,7 +285,7 @@ class LearnedPolicyCortex:
 
                 if (
                     in_range
-                    and not state.is_low_hp
+                    and can_press_attack
                     and is_worth_attacking(state, agent)
                     and _has_tendency(tendencies, "collects_smoltz", "collects_high_value_loot", "collects_loadout")
                 ):
