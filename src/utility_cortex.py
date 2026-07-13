@@ -1,9 +1,4 @@
-"""Utility item cortex.
-
-Carries forward the useful, deterministic parts of the old parts-bin brain:
-use map-style information items when the map is still sparse, and use energy
-items when EP is the bottleneck. This avoids importing the old monolithic bot.
-"""
+"""Utility item cortex aligned to the live v1.13 inventory fields."""
 
 from __future__ import annotations
 
@@ -11,8 +6,7 @@ from cortex_types import CortexResult, action
 from turn_state_model import TurnState
 
 
-MAP_TERMS = ("map",)
-VISION_TERMS = ("binocular", "scanner", "scope")
+VISION_TERMS = ("binocular",)
 ENERGY_TERMS = ("energy_drink", "energy drink", "battery", "stimulant")
 
 
@@ -40,7 +34,7 @@ class UtilityCortex:
             return []
 
         results: list[CortexResult] = []
-        energy = _find_item(state, ENERGY_TERMS)
+        energy = state.best_energy_item() or _find_item(state, ENERGY_TERMS)
         if energy and state.self.ep <= 1:
             results.append(
                 CortexResult(
@@ -52,21 +46,6 @@ class UtilityCortex:
                     action=action("use_item", itemId=energy.get("id")),
                     reason="utility: EP bottleneck; use energy item before resting",
                     source_facts=["F|items.recovery", "F|action.cost"],
-                )
-            )
-
-        map_item = _find_item(state, MAP_TERMS)
-        if map_item and map_knowledge_sparse(state) and not state.is_in_death_zone and not state.is_pending_death_zone:
-            results.append(
-                CortexResult(
-                    cortex=self.name,
-                    intent="use_map_for_navigation",
-                    score=72,
-                    risk=1,
-                    priority=66,
-                    action=action("use_item", itemId=map_item.get("id")),
-                    reason="utility: sparse map knowledge; reveal navigation options",
-                    source_facts=["F|action.cost", "F|safety.deathzone"],
                 )
             )
 

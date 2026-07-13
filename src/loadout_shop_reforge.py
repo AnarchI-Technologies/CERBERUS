@@ -154,9 +154,24 @@ def pack_score(item: dict[str, Any]) -> float:
     return round(score or 50.0, 3)
 
 
-def _active_pack_id(loadout: dict[str, Any]) -> str:
-    pack = loadout.get("activePack") or loadout.get("pack") or loadout.get("equippedPack") or {}
-    return instance_id(pack) if isinstance(pack, dict) else str(pack or "")
+def _loadout_pack_id(loadout: dict[str, Any], slot: str) -> str:
+    if slot == "main":
+        keys = ("mainPack", "activeMainPack", "activePack", "pack", "equippedPack")
+        nested_keys = ("main", "primary")
+    else:
+        keys = ("subPack", "activeSubPack", "secondaryPack", "equippedSubPack")
+        nested_keys = ("sub", "secondary")
+    for key in keys:
+        pack = loadout.get(key)
+        if pack:
+            return instance_id(pack) if isinstance(pack, dict) else str(pack)
+    packs = loadout.get("packs") or loadout.get("activePacks") or loadout.get("equippedPacks")
+    if isinstance(packs, dict):
+        for key in nested_keys:
+            pack = packs.get(key)
+            if pack:
+                return instance_id(pack) if isinstance(pack, dict) else str(pack)
+    return ""
 
 
 def _slot_id(loadout: dict[str, Any], slot: int) -> str:
@@ -174,15 +189,20 @@ def _slot_id(loadout: dict[str, Any], slot: int) -> str:
 def choose_best_loadout(loadout: dict[str, Any], relics_payload: Any, packs_payload: Any) -> dict[str, Any]:
     relics = _items(relics_payload, "relics")
     packs = _items(packs_payload, "packs")
-    chosen_pack = max(packs, key=pack_score, default={})
+    sub_pack_id = _loadout_pack_id(loadout, "sub")
+    chosen_pack = max((pack for pack in packs if instance_id(pack) != sub_pack_id), key=pack_score, default={})
+    current_main_pack_id = _loadout_pack_id(loadout, "main")
     chosen_relics: dict[int, dict[str, Any]] = {}
     for slot in SLOT_NAMES:
         candidates = [item for item in relics if relic_slot(item) == slot]
         chosen_relics[slot] = max(candidates, key=relic_score, default={})
     operations: list[dict[str, Any]] = []
-    pack_id = instance_id(chosen_pack)
-    if pack_id and pack_id != _active_pack_id(loadout):
-        operations.append({"type": "set_active_pack", "packInstanceId": pack_id, "score": pack_score(chosen_pack)})
+    selected_pack_id = instance_id(chosen_pack)
+    pack_id = selected_pack_id or current_main_pack_id
+    if selected_pack_id and selected_pack_id != current_main_pack_id:
+        operations.append(
+            {"type": "set_active_pack", "packInstanceId": selected_pack_id, "score": pack_score(chosen_pack)}
+        )
     for slot, relic in chosen_relics.items():
         relic_id = instance_id(relic)
         if relic_id and relic_id != _slot_id(loadout, slot):
@@ -199,14 +219,47 @@ def choose_best_loadout(loadout: dict[str, Any], relics_payload: Any, packs_payl
         "ok": True,
         "operations": operations,
         "chosen": {
-            "pack": {"id": pack_id, "score": pack_score(chosen_pack)} if pack_id else {},
+            "pack": {
+                "id": pack_id,
+                "score": pack_score(chosen_pack) if selected_pack_id else None,
+                "source": "inventory_selection" if selected_pack_id else "currently_equipped",
+            } if pack_id else {},
+            "main_pack": {
+                "id": pack_id,
+                "score": pack_score(chosen_pack) if selected_pack_id else None,
+                "source": "inventory_selection" if selected_pack_id else "currently_equipped",
+            } if pack_id else {},
+            "sub_pack": {"id": sub_pack_id, "source": "currently_equipped"} if sub_pack_id else {},
             "relics": {
-                SLOT_NAMES[slot]: {"id": instance_id(relic), "score": relic_score(relic)}
+                SLOT_NAMES[slot]: {
+                    "id": instance_id(relic) or _slot_id(loadout, slot),
+                    "score": relic_score(relic) if instance_id(relic) else None,
+                    "source": "inventory_selection" if instance_id(relic) else "currently_equipped",
+                }
                 for slot, relic in chosen_relics.items()
-                if instance_id(relic)
+                if instance_id(relic) or _slot_id(loadout, slot)
             },
         },
-        "complete_full_set": bool(pack_id and all(instance_id(chosen_relics[slot]) for slot in SLOT_NAMES)),
+        "complete_full_set": bool(
+            pack_id
+            and sub_pack_id
+            and all(instance_id(chosen_relics[slot]) or _slot_id(loadout, slot) for slot in SLOT_NAMES)
+        ),
+        "missing_components": [
+            component
+            for component, ready in (
+                ("main_pack", bool(pack_id)),
+                ("sub_pack", bool(sub_pack_id)),
+                *(
+                    (
+                        f"{SLOT_NAMES[slot]}_relic",
+                        bool(instance_id(chosen_relics[slot]) or _slot_id(loadout, slot)),
+                    )
+                    for slot in SLOT_NAMES
+                ),
+            )
+            if not ready
+        ],
     }
 
 

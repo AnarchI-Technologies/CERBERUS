@@ -1,7 +1,7 @@
-"""Deterministic Claw Royale v1.9 gameplay contract.
+"""Deterministic Claw Royale gameplay contract aligned through v1.13.0.
 
-Keep volatile API versioning in ``claw_config``. This module is the static rules
-surface Hellion can safely reason over after the June 10, 2026 v1.9.0 update.
+Keep volatile API versioning in ``claw_config``. Live OpenAPI and per-snapshot
+fields win; static values here are compatibility fallbacks and stable rules.
 """
 
 from __future__ import annotations
@@ -30,6 +30,11 @@ REST_ENDPOINTS = {
     "identity_delete": "DELETE /identity",
     "join_status": "GET /join/status",
     "waiting_games": "GET /games?status=waiting",
+    "preseason1_quests": "GET /preseason1/quests",
+    "preseason1_daily_quests": "GET /preseason1/daily-quests",
+    "preseason1_summary": "GET /preseason1/me/summary",
+    "preseason1_quest_claim": "POST /preseason1/quests/:key/claim/:tier",
+    "preseason1_daily_claim": "POST /preseason1/daily-quests/:key/claim",
     "loadout": "GET /loadout",
     "loadout_pack": "PUT /loadout/pack",
     "loadout_pack_delete": "DELETE /loadout/pack",
@@ -112,7 +117,7 @@ ACTION_COSTS = {
     "equip": {"default_ep": 0, "cooldown": False, "requires_inventory_weapon": True},
     "talk": {"default_ep": 0, "cooldown": False, "max_chars": CHAT_MAX_CHARS, "scope": "same_region"},
     "whisper": {"default_ep": 0, "cooldown": False, "max_chars": CHAT_MAX_CHARS, "scope": "same_region_private"},
-    "broadcast": {"default_ep": 0, "cooldown": False, "requires": "megaphone_or_broadcast_station"},
+    "broadcast": {"default_ep": 0, "cooldown": False, "requires": "broadcast_station"},
 }
 
 REQUIRED_ACTION_FIELDS = {
@@ -135,7 +140,7 @@ ACCOUNT_FIELDS = {
 }
 
 READINESS_GATES = {
-    "free": ("api_key", "erc8004_identity"),
+    "free": ("api_key",),
     "paid_offchain": ("api_key", "walletAddress", "scWallet", "whitelistApproved", "balance_smoltz>=500"),
     "paid_onchain": ("api_key", "walletAddress", "scWallet", "whitelistApproved", "claw_wallet_moltz>=500"),
     "optional_donations": ("agentToken",),
@@ -151,6 +156,8 @@ WALLET_RULES = {
 }
 
 IDENTITY_RULES = {
+    "required_for_free": False,
+    "optional_since": "1.11.2",
     "agentId_means_erc8004_token_id": True,
     "agentId_is_not_game_agent_uuid": True,
     "server_checks_ownerOf_matches_owner_eoa": True,
@@ -212,7 +219,11 @@ AFFIX_POOL = {
 }
 
 LOADOUT = {
-    "slots": ("pack", "red", "green", "blue"),
+    "slots": ("main_pack", "sub_pack", "red", "green", "blue"),
+    "full_set_components": ("main_pack", "sub_pack", "red", "green", "blue"),
+    "sub_pack_required": True,
+    "sub_pack_effect_multiplier": 0.5,
+    "main_only_sub_pack_categories": ("scout", "assassin"),
     "type_index": {0: "red", 1: "green", 2: "blue"},
     "full_set_required": True,
     "mid_game_mutation_allowed": False,
@@ -242,7 +253,7 @@ ERROR_CODES = {
     "ONE_AGENT_PER_API_KEY": "This API key already has an agent in this game.",
     "TOO_MANY_AGENTS_PER_IP": "Maximum agents per IP per game exceeded.",
     "GEO_RESTRICTED": "Request blocked due to geographic restriction.",
-    "NO_IDENTITY": "Register ERC-8004 identity before free play.",
+    "NO_IDENTITY": "Legacy identity signal; ERC-8004 is optional and must not block free play.",
     "OWNERSHIP_LOST": "NFT ownership changed; re-register with the currently owned NFT.",
     "INVALID_WALLET_ADDRESS": "Wallet address format is invalid.",
     "WALLET_ALREADY_EXISTS": "SC wallet already exists for owner; recover and continue.",

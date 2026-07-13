@@ -25,9 +25,27 @@ WEAPON_BONUS = {
 def equipped_weapon(state: TurnState) -> tuple[str, int, int]:
     raw = state.self.raw.get("equippedWeapon") or {}
     name = str(raw.get("typeId") or raw.get("type") or raw.get("name") or "fist").lower()
-    for key, (bonus, weapon_range) in WEAPON_BONUS.items():
+    matched_name = ""
+    fallback_bonus = 0
+    fallback_range = 0
+    for key, (known_bonus, known_range) in WEAPON_BONUS.items():
         if key in name:
-            return key, bonus, weapon_range
+            matched_name, fallback_bonus, fallback_range = key, known_bonus, known_range
+            break
+    explicit_bonus = raw.get("atkBonus")
+    explicit_range = raw.get("range") if raw.get("range") is not None else raw.get("attackRange")
+    try:
+        bonus = int(explicit_bonus)
+    except (TypeError, ValueError):
+        bonus = None
+    try:
+        weapon_range = int(explicit_range)
+    except (TypeError, ValueError):
+        weapon_range = None
+    if bonus is not None:
+        return matched_name or name or "equipped", bonus, max(0, weapon_range if weapon_range is not None else fallback_range)
+    if matched_name:
+        return matched_name, fallback_bonus, fallback_range
     return "fist", 0, 0
 
 
@@ -45,14 +63,16 @@ def _target_distance(target: AgentState) -> int | None:
 
 
 def target_in_attack_range(state: TurnState, target: AgentState) -> bool:
+    if target.raw.get("inRange") is True or target.raw.get("attackable") is True:
+        return True
+    if target.raw.get("inRange") is False or target.raw.get("attackable") is False:
+        return False
     _weapon, _bonus, weapon_range = equipped_weapon(state)
     distance = _target_distance(target)
     if distance is not None:
         return distance <= weapon_range
     if target.region_id and state.current_region.id and target.region_id != state.current_region.id:
         return weapon_range > 0
-    if target.raw.get("inRange") is False or target.raw.get("attackable") is False:
-        return False
     return True
 
 
@@ -96,7 +116,8 @@ class CombatCortex:
 
     def evaluate(self, state: TurnState, context: dict[str, Any]) -> list[CortexResult]:
         results: list[CortexResult] = []
-        if not state.can_take_main_action or state.self.ep < 1 or state.alert_active or state.is_low_hp:
+        attack_cost = state.action_ep_cost("attack", 1)
+        if not state.can_take_main_action or state.self.ep < attack_cost or state.alert_active or state.is_low_hp:
             return results
 
         # Load dossiers from context or disk to apply Prime Directive multipliers

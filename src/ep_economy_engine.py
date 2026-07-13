@@ -69,7 +69,8 @@ class EconomyCortex:
                 return results
 
         # 2. Hunt wounded agents carrying sMoltz (based on dossiers).
-        if state.can_take_main_action and state.self.ep >= 1 and not state.alert_active and not state.is_low_hp:
+        attack_cost = state.action_ep_cost("attack", 1)
+        if state.can_take_main_action and state.self.ep >= attack_cost and not state.alert_active and not state.is_low_hp:
             dossiers = context.get("dossiers") or context.get("dossier_store")
             if not dossiers:
                 try:

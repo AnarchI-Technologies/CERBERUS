@@ -183,10 +183,11 @@ def sync_identity_status(*, vault: IdentityVault | None = None) -> dict[str, Any
         store.event("Synced Claw Royale ERC-8004 identity token", erc8004_id=token_id)
     else:
         claw["identity_ready"] = False
-        store.blocker("Claw Royale ERC-8004 identity token is missing")
+        store.event("Claw Royale optional ERC-8004 identity token is not attached")
     store.save()
     return {
         "identity_ready": bool(token_id),
+        "identity_optional": True,
         "erc8004_id": token_id,
         "status": payload,
     }

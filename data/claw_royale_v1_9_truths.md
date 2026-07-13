@@ -1,6 +1,7 @@
-# Claw Royale v1.9 Confirmed Integration Truths
+# Claw Royale Confirmed Integration Truths (updated through v1.13.0)
 
-Source: Claw Royale docs and June 10, 2026 patch notes provided by owner.
+Source: Claw Royale docs, June 10, 2026 patch notes, and the owner's v1.13.0
+Read One File `SKILL.md`. `/openapi.yaml` remains authoritative for API fields.
 
 ## Runtime
 
@@ -20,6 +21,8 @@ Source: Claw Royale docs and June 10, 2026 patch notes provided by owner.
 - WebSocket message rate limit is 120 messages per minute.
 - `/join/status` is diagnostic only; do not use it to join.
 - `/games?status=waiting` is read-only inspection only; do not use it to reserve a game.
+- Paid fallback policy may inspect that endpoint, but paid entry is allowed only
+  when a fresh successful response proves exactly one remaining start slot.
 - Server-side wait caps: free assignment about 120 seconds, paid sign-submit until `sign_required.deadline`, paid join confirmation about 30 seconds after `tx_submitted`.
 - Handshake failures may surface as HTTP 401, 403, 409, or 503.
 
@@ -36,6 +39,10 @@ Source: Claw Royale docs and June 10, 2026 patch notes provided by owner.
 - Relic slot set/clear is `PUT /loadout/slot/:typeIndex` and `DELETE /loadout/slot/:typeIndex`.
 - Inventory relic list/delete is `GET /inventory/relics` and `DELETE /inventory/relics/:id`.
 - Inventory pack list/delete is `GET /inventory/packs` and `DELETE /inventory/packs/:id`.
+- PreSeason 1 stepped and daily state is read from `GET /preseason1/quests`,
+  `GET /preseason1/daily-quests`, and `GET /preseason1/me/summary`.
+- Reached stepped tiers claim with `POST /preseason1/quests/:key/claim/:tier`;
+  reached daily quests claim with `POST /preseason1/daily-quests/:key/claim`.
 
 ## Gameplay Frames And Events
 
@@ -59,11 +66,13 @@ Source: Claw Royale docs and June 10, 2026 patch notes provided by owner.
 - `action_result` and `can_act_changed` are status/cooldown frames, not full strategic snapshots.
 - `move` costs 1 EP by default and 2 EP through storm or water.
 - `explore` costs 1 EP.
-- `attack` costs 1 EP; Goliath attack costs 2 EP.
+- Attack EP is dynamic. Read `agent_view.availableActions.attack.cost` every
+  turn; static weapon/action tables are legacy fallback only.
 - `use_item`, `interact`, and `rest` cost 0 EP, but still use cooldown.
 - `rest` grants 1 bonus EP.
 - `talk` and `whisper` are capped at 200 characters.
-- `broadcast` requires a megaphone or broadcast station.
+- `broadcast` requires a broadcast station. Map, Radio, and Megaphone items
+  were removed; Binoculars are the remaining utility item.
 - `pickup` fails if inventory is full; inventory max is 10 slots.
 - `explore` only works in ruin regions.
 - `interact` is blocked inside a death zone.
@@ -79,7 +88,7 @@ Source: Claw Royale docs and June 10, 2026 patch notes provided by owner.
 - Offchain paid readiness requires at least 500 sMoltz.
 - Onchain paid readiness requires at least 500 MOLTZ in the ClawRoyale Wallet.
 - Optional `agentToken` readiness affects donations, not basic play.
-- Free rooms require a registered ERC-8004 identity.
+- ERC-8004 identity is optional as of v1.11.2 and never blocks free rooms.
 - `POST /identity` registers the ERC-8004 token ID; this is not the game agent UUID.
 - Agent EOA and Owner EOA must be separate addresses.
 - Owner EOA needs CROSS for final wallet approval in the My Agent page.
@@ -89,8 +98,10 @@ Source: Claw Royale docs and June 10, 2026 patch notes provided by owner.
 ## Loadout And Inventory
 
 - Loadout must be configured before joining and cannot be changed mid-game.
-- Loadout is one active pack plus R/G/B relic slots.
-- Full set requires active pack plus all three slots filled.
+- Loadout is a Main pack, Sub pack, and R/G/B relic slots.
+- Full set requires Main + Sub + all three relic slots. Partial sets grant zero
+  pack effects and zero relic-affix effective stats.
+- Sub-slot pack effects run at half strength; Scout and Assassin are Main-only.
 - Loadout mutations require `Idempotency-Key`.
 - Lobby relic cap is 15; lobby pack cap is 5.
 - Match relic cap is 5; match pack cap is 1.
@@ -123,7 +134,9 @@ Source: Claw Royale docs and June 10, 2026 patch notes provided by owner.
 - New pack categories are Thorns and Scout.
 - Profile images can be equipped immediately from My Agent.
 - Items in the current region are auto-picked up at session start.
-- Highest effective ATK weapon found is auto-equipped when picked up.
+- Inventory entries expose live `atkBonus`, armor `defBonus`, recovery
+  `hpRestore`/`epRestore`, and utility `effect`/`useType`; use those fields over
+  stale name-based tables. Equip the best legal weapon and armor found.
 
 ## Reforge Affix Pool
 
@@ -143,7 +156,8 @@ Source: Claw Royale docs and June 10, 2026 patch notes provided by owner.
 ## Runtime Error Handling
 
 - `VERSION_MISMATCH` means refresh `GET /api/version` and retry with the new `X-Version`.
-- `NO_IDENTITY` means register ERC-8004 identity before free play.
+- `NO_IDENTITY` is a legacy identity signal; refresh version/contract state and
+  do not block free fallback on it.
 - `SC_WALLET_NOT_FOUND` means create/register smart contract wallet before paid play.
 - `AGENT_NOT_WHITELISTED` means request whitelist before paid play.
 - `INSUFFICIENT_BALANCE` means top up enough balance before paid play.

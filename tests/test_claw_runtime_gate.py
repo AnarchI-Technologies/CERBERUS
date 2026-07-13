@@ -173,6 +173,25 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
 
         self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
 
+    def test_paid_only_decision_never_gets_rewritten_as_free(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        welcome = {
+            "type": "welcome",
+            "decision": "PAID_ONLY",
+            "readiness": {"paidRoom": {"ok": True, "mode": {"offchain": True}}},
+            "availableGames": [
+                {
+                    "entryType": "paid",
+                    "gameId": "paid-not-ready",
+                    "playerCount": 3,
+                    "requiredPlayers": 10,
+                }
+            ],
+        }
+
+        self.assertIsNone(claw_runtime.hello_frame(config, welcome))
+        self.assertIsNone(claw_runtime.hello_frame(config, welcome, paid_account_ready=False))
+
     def test_recent_paid_join_failure_keeps_free_mode_temporarily(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
         welcome = {

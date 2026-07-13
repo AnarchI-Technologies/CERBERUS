@@ -36,6 +36,7 @@ from loadout_shop_reforge import (
 from memory_system import CompactMemoryStore
 from onboarding_clients import ClawRoyaleClient
 from postgame_hardening import run_postgame_hardening_pass
+from preseason1_claims import claim_reached_preseason1_points
 from runtime_state import (
     append_social_event,
     claw_runtime_status_file,
@@ -52,6 +53,8 @@ DEFAULT_MIN_RECONNECT_SECONDS = 5
 DEFAULT_MAX_RECONNECT_SECONDS = 90
 DEFAULT_ROUTE_PROBE_SECONDS = 15
 DEFAULT_PAID_RETRY_COOLDOWN_SECONDS = 600
+DEFAULT_PRESEASON1_CLAIM_INTERVAL_SECONDS = 60
+BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 JOIN_PATH = "/ws/join"
 AGENT_PATH = "/ws/agent"
 NO_HELLO_DECISIONS = {
@@ -604,20 +607,27 @@ def readiness_blocks_free(welcome: dict[str, Any] | None) -> bool:
     readiness = (welcome or {}).get("readiness", {})
     if not isinstance(readiness, dict):
         return False
-    for key in ("free", "freeReady", "free_ready", "erc8004_identity", "erc8004Identity", "identityReady"):
-        if readiness.get(key) is False:
-            return True
     free_room = readiness.get("freeRoom") or readiness.get("free_room")
+    identity_only_failure = False
     if isinstance(free_room, dict):
-        if free_room.get("ok") is False:
-            return True
         missing = free_room.get("missing") or free_room.get("blockers") or free_room.get("errors")
-        if isinstance(missing, list):
-            return any("identity" in str(item).lower() or "no_identity" in str(item).lower() for item in missing)
+        blockers = missing if isinstance(missing, list) else []
+        non_identity = [item for item in blockers if not _identity_only_blocker(item)]
+        identity_only_failure = bool(blockers) and not non_identity
+        if free_room.get("ok") is False and (not blockers or non_identity):
+            return True
+    for key in ("free", "freeReady", "free_ready"):
+        if readiness.get(key) is False and not identity_only_failure:
+            return True
     errors = readiness.get("errors") or readiness.get("blockers") or readiness.get("missing")
     if isinstance(errors, list):
-        return any("identity" in str(item).lower() or "no_identity" in str(item).lower() for item in errors)
+        return any(not _identity_only_blocker(item) for item in errors)
     return False
+
+
+def _identity_only_blocker(value: Any) -> bool:
+    label = str(value).strip().lower().replace("-", "_")
+    return "identity" in label or "erc8004" in label or "no_identity" in label
 
 
 def free_fallback_enabled() -> bool:
@@ -775,19 +785,35 @@ def account_identity_ready(account: dict[str, Any]) -> bool:
     return bool(readiness.get("identity") or readiness.get("erc8004_identity") or readiness.get("identityReady"))
 
 
+def account_free_ready(account: dict[str, Any]) -> bool:
+    """Identity is optional; only explicit non-identity free blockers stop play."""
+    readiness = account.get("readiness") if isinstance(account.get("readiness"), dict) else {}
+    free_room = readiness.get("freeRoom") or readiness.get("free_room")
+    identity_only_failure = False
+    if isinstance(free_room, dict) and free_room.get("ok") is False:
+        blockers = free_room.get("missing") or free_room.get("blockers") or free_room.get("errors")
+        if not isinstance(blockers, list) or not blockers:
+            return False
+        identity_only_failure = all(_identity_only_blocker(item) for item in blockers)
+        if not identity_only_failure:
+            return False
+    for key in ("free", "freeReady", "free_ready"):
+        if readiness.get(key) is False and not identity_only_failure:
+            return False
+    return True
+
+
 def join_blocker_for_account(config: ClawRuntimeConfig, account: dict[str, Any]) -> str:
     if not account.get("ok"):
         return str(account.get("error") or "account status unavailable")
     paid_ready = account_paid_ready(account)
-    identity_ready = account_identity_ready(account)
-    if config.mode != "free" and not paid_ready and not identity_ready:
-        return "paused before join: v2 needs ERC-8004 identity or at least 500 sMoltz paid balance"
-    if config.mode == "free" and not identity_ready:
-        return "paused before free join: v2 needs ERC-8004 identity"
-    if config.mode != "free" and not paid_ready and free_fallback_enabled() and identity_ready:
+    free_ready = account_free_ready(account)
+    if config.mode == "free" and not free_ready:
+        return "free join blocked by account readiness"
+    if config.mode != "free" and not paid_ready and free_fallback_enabled() and free_ready:
         return ""
     if config.mode != "free" and not paid_ready:
-        return "paid join blocked: v2 needs at least 500 sMoltz balance or on-chain paid readiness"
+        return "paid join blocked: needs at least 500 sMoltz balance or on-chain paid readiness"
     return ""
 
 
@@ -800,27 +826,31 @@ def hello_frame(
     decision = str((welcome or {}).get("decision") or "").upper()
     if decision in NO_HELLO_DECISIONS:
         return None
+    free_ready = not readiness_blocks_free(welcome)
+    if decision == "FREE_ONLY":
+        return {"type": "hello", "entryType": "free"}
+    if decision == "PAID_ONLY":
+        if paid_account_ready is False or should_avoid_paid_room(config, welcome):
+            return None
+        paid_mode = config.mode if config.mode != "free" else _readiness_paid_mode(welcome)
+        return {"type": "hello", "entryType": "paid", "mode": paid_mode} if paid_mode else None
     if paid_account_ready is False and config.mode != "free":
-        return None if readiness_blocks_free(welcome) else {"type": "hello", "entryType": "free"}
+        if free_fallback_enabled() and free_ready:
+            return {"type": "hello", "entryType": "free"}
+        return None
     paid_mode = should_auto_upgrade_to_paid(config, welcome)
     if paid_mode:
         return {"type": "hello", "entryType": "paid", "mode": paid_mode}
-    if decision == "FREE_ONLY":
-        return {"type": "hello", "entryType": "free"}
     if decision in {"", "ASK_ENTRY_TYPE"} and should_prefer_free_room(config, welcome):
         return {"type": "hello", "entryType": "free"}
     if decision in {"", "ASK_ENTRY_TYPE"} and should_avoid_paid_room(config, welcome):
-        if not readiness_blocks_free(welcome):
+        if free_ready:
             return {"type": "hello", "entryType": "free"}
         return None
-    if decision == "PAID_ONLY":
-        if should_avoid_paid_room(config, welcome):
-            return None if readiness_blocks_free(welcome) else {"type": "hello", "entryType": "free"}
-        return {"type": "hello", "entryType": "paid", "mode": config.mode}
     if config.mode == "free":
-        return {"type": "hello", "entryType": "free"}
+        return {"type": "hello", "entryType": "free"} if free_ready else None
     if should_avoid_paid_room(config, welcome):
-        return None if readiness_blocks_free(welcome) else {"type": "hello", "entryType": "free"}
+        return None if not free_ready else {"type": "hello", "entryType": "free"}
     return {"type": "hello", "entryType": "paid", "mode": config.mode}
 
 
@@ -983,15 +1013,21 @@ def join_selection_context(
     welcome: dict[str, Any],
     waiting_games: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Combine welcome gates with the freshest available read-only room evidence."""
-    probed_rooms = room_entries(waiting_games)
-    rooms = probed_rooms if probed_rooms else room_entries(welcome)
+    """Combine welcome gates with a successful, fresh read-only room probe.
+
+    Production paid joins must never fall back to possibly stale room metadata
+    embedded in ``welcome``.  If the inspection request fails or has no rooms,
+    the paid last-slot gate receives no evidence and therefore fails closed.
+    """
+    probe_ok = isinstance(waiting_games, dict) and waiting_games.get("ok") is True
+    rooms = room_entries(waiting_games) if probe_ok else []
     return {
         "type": welcome.get("type"),
         "decision": welcome.get("decision"),
         "readiness": welcome.get("readiness"),
         "instruction": welcome.get("instruction"),
         "helloDeadlineSec": welcome.get("helloDeadlineSec"),
+        "paidRoomProbeVerified": probe_ok,
         "waitingGames": rooms,
     }
 
@@ -1110,6 +1146,75 @@ def _balance_float(value: Any) -> float:
         return 0.0
 
 
+def preseason1_auto_claim_enabled() -> bool:
+    return os.getenv("CERBERUS_PRESEASON1_AUTO_CLAIM_ENABLED", "true").strip().lower() not in {
+        "0", "false", "no", "off"
+    }
+
+
+def preseason1_claim_interval_seconds() -> int:
+    try:
+        return max(
+            0,
+            int(
+                os.getenv(
+                    "CERBERUS_PRESEASON1_CLAIM_INTERVAL_SECONDS",
+                    str(DEFAULT_PRESEASON1_CLAIM_INTERVAL_SECONDS),
+                )
+            ),
+        )
+    except ValueError:
+        return DEFAULT_PRESEASON1_CLAIM_INTERVAL_SECONDS
+
+
+def run_preseason1_claim_sweep(config: ClawRuntimeConfig, *, force: bool = False) -> dict[str, Any]:
+    """Claim reached season tiers without ever blocking matchmaking."""
+    if not preseason1_auto_claim_enabled():
+        return {"ok": True, "enabled": False, "reason": "CERBERUS_PRESEASON1_AUTO_CLAIM_ENABLED is false"}
+
+    now = int(time.time())
+    status = read_json(claw_runtime_status_file())
+    last_checked = int(status.get("preseason1_claim_checked_at") or 0)
+    interval = preseason1_claim_interval_seconds()
+    if not force and last_checked and now - last_checked < interval:
+        return {
+            "ok": True,
+            "enabled": True,
+            "skipped": "cooldown",
+            "retry_after_seconds": max(0, interval - (now - last_checked)),
+        }
+
+    try:
+        client = ClawRoyaleClient(api_key=config.api_key, base_url=config.base_url)
+        stepped = client.preseason1_quests()
+        daily = client.preseason1_daily_quests()
+        report = claim_reached_preseason1_points(
+            client,
+            stepped_payload=stepped,
+            daily_payload=daily,
+        )
+        report.update({"enabled": True, "checked_at": now})
+        try:
+            report["summary"] = client.preseason1_summary()
+        except Exception as exc:
+            report["summary_error"] = str(exc)[:240]
+    except Exception as exc:
+        report = {"ok": False, "enabled": True, "checked_at": now, "error": str(exc)[:500]}
+    update_status(preseason1_claim_checked_at=now, preseason1_claims=report)
+    return report
+
+
+def schedule_preseason1_claim_sweep(config: ClawRuntimeConfig, *, force: bool = False) -> bool:
+    """Run quest REST work off the matchmaking path and retain the task."""
+    try:
+        task = asyncio.create_task(asyncio.to_thread(run_preseason1_claim_sweep, config, force=force))
+    except RuntimeError:
+        return False
+    BACKGROUND_TASKS.add(task)
+    task.add_done_callback(BACKGROUND_TASKS.discard)
+    return True
+
+
 def record_account_balance(config: ClawRuntimeConfig, *, stage: str) -> dict[str, Any]:
     status = read_json(claw_runtime_status_file())
     account = account_status_summary(config)
@@ -1147,8 +1252,14 @@ def record_account_balance(config: ClawRuntimeConfig, *, stage: str) -> dict[str
                 "detail": f"game ended with balance delta {round(delta, 6)} and total delta {round(total_delta, 6)}",
             }
         )
-        maintenance = run_postgame_hardening_pass()
-        update_status(postgame_maintenance=maintenance, postgame_maintenance_pending=False)
+        try:
+            maintenance = run_postgame_hardening_pass()
+        except Exception as exc:
+            maintenance = {"ok": False, "error": str(exc)[:500]}
+        update_status(
+            postgame_maintenance=maintenance,
+            postgame_maintenance_pending=False,
+        )
     return account
 
 
@@ -1233,7 +1344,10 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     account_status = record_account_balance(config, stage="connect")
     status = read_json(claw_runtime_status_file())
     if status.get("postgame_maintenance_pending"):
-        maintenance = run_postgame_hardening_pass()
+        try:
+            maintenance = run_postgame_hardening_pass()
+        except Exception as exc:
+            maintenance = {"ok": False, "error": str(exc)[:500]}
         update_status(postgame_maintenance=maintenance, postgame_maintenance_pending=False)
     stale_paid = record_stale_paid_waiting_games(account_status)
     join_blocker = join_blocker_for_account(config, account_status)
@@ -1244,12 +1358,14 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
         version=config.version,
         mode=config.mode,
         account=account_status,
+        preseason1_claims=status.get("preseason1_claims", {}),
         stale_paid_rooms=stale_paid,
         loadout_optimizer=loadout_report,
         last_error="" if loadout_report.get("ok", True) else f"loadout optimizer: {loadout_report.get('error', '')}",
     )
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
         gameplay_ready = False
+        schedule_preseason1_claim_sweep(config)
         update_status(state="connected", endpoint=url, connected_at=int(time.time()), reconnects=read_json(claw_runtime_status_file()).get("reconnects", 0))
         async for raw in ws:
             try:
@@ -1324,6 +1440,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                     clear_game_id()
                     update_status(postgame_maintenance_pending=True)
                     record_account_balance(config, stage="game_ended")
+                    schedule_preseason1_claim_sweep(config, force=True)
                     update_status(
                         state="game_ended",
                         last_frame_type=frame_type,
@@ -1382,6 +1499,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 clear_game_id()
                 update_status(postgame_maintenance_pending=True)
                 record_account_balance(config, stage="game_ended")
+                schedule_preseason1_claim_sweep(config, force=True)
                 update_status(
                     state="game_ended",
                     last_frame_type=frame_type,

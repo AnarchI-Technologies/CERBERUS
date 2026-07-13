@@ -155,12 +155,12 @@ CERBERUS_MEMORY_DIR=/var/data/.cerberus
 CLAW_ROYALE_LIVE_FEED_URL=https://www.clawroyale.ai/games
 CLAW_ROYALE_SPECTATE_BASE_URL=https://www.clawroyale.ai/games/spect
 CLAW_ROYALE_API_KEY
-CLAW_ROYALE_ERC8004_ID
-CLAW_ROYALE_VERSION=1.9.0
 CLAW_ROYALE_RUNTIME_ENABLED=true
 CLAW_ROYALE_GAME_MODE=offchain
 CLAW_ROYALE_FREE_FALLBACK_ENABLED=true
 CLAW_ROYALE_PAID_LAST_SLOT_ONLY=true
+CERBERUS_PRESEASON1_AUTO_CLAIM_ENABLED=true
+CERBERUS_PRESEASON1_CLAIM_INTERVAL_SECONDS=60
 CLAW_ROYALE_WS_PATHS=/ws/agent,/ws/join
 AGENTMAIL_API_KEY
 AGENTMAIL_INBOX_ID
@@ -228,7 +228,10 @@ Pre-join loadout optimizer defaults:
 - `CLAW_ROYALE_LOADOUT_OPTIMIZER_ENABLED=true` polls loadout, relic inventory,
   and pack inventory before joining.
 - `CLAW_ROYALE_LOADOUT_AUTO_APPLY=true` applies only safe loadout swaps: active
-  pack and R/G/B relic slots.
+  Main pack and R/G/B relic slots. A loadout is reported as a full set only
+  when a Sub pack is also equipped; Main + Sub + all three relics are required
+  for any pack or relic effect. CERBERUS does not guess a Sub-pack mutation
+  endpoint when the live contract does not expose it.
 - `CERBERUS_LOADOUT_SMOLTZ_RESERVE=1000` keeps a minimum sMoltz reserve when
   generating shop recommendations.
 - shop purchases and reforge candidates are reported first as recommendations;
@@ -245,11 +248,18 @@ Paid-room safety defaults:
   rooms unless explicitly disabled.
 - `CLAW_ROYALE_PAID_LAST_SLOT_ONLY=true` requires exactly one non-stale,
   addressable paid room with at least one real competitor and explicit server
-  metadata showing exactly one player still needed to start. Missing metadata
-  or multiple paid rooms fail closed to free because the hello frame cannot
-  target a specific paid room.
+  metadata from a successful fresh `GET /games?status=waiting` inspection
+  showing exactly one player still needed to start. A failed probe, missing
+  metadata, or multiple paid rooms fails closed to free because the hello frame
+  cannot target a specific paid room.
 - paid waiting games from account status are remembered as stale room IDs and
   shown on the dashboard so Hellion does not keep rejoining the same trap.
+
+PreSeason 1 quest claims default to on. `CERBERUS_PRESEASON1_AUTO_CLAIM_ENABLED`
+claims only explicitly reached stepped tiers and completed daily quests after a
+match finalizes, then checks again on reconnect. The sweep is idempotent,
+rate-limited by `CERBERUS_PRESEASON1_CLAIM_INTERVAL_SECONDS`, and never blocks
+matchmaking when the quest API is unavailable.
 
 If Claw publishes a new WebSocket URL, set `CLAW_ROYALE_WS_PATHS` to a
 comma-separated list of paths or full `wss://` URLs. The runtime rotates through
@@ -273,7 +283,9 @@ Generated wallet secrets and service credentials should live in the encrypted va
 
 ## Claw ERC-8004 Identity Token
 
-Claw Royale requires an ERC-8004 identity token for free games and reward identity.
+ERC-8004 identity is optional as of Claw Royale v1.11.2. A missing token does
+not block free rooms. The helper remains available if you want an identity NFT,
+but Hellion's free fallback never waits for one.
 
 Check whether Hellion has one attached:
 

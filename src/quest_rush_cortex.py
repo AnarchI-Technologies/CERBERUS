@@ -31,7 +31,9 @@ def _guardian_engagement_is_safe(state: TurnState, target: AgentState) -> bool:
     damage = max(1.0, expected_damage(state, target))
     turns_to_kill = max(1, math.ceil(max(1, target.hp) / damage))
     spendable_ep = max(0, state.self.ep - GUARDIAN_EXIT_EP_RESERVE)
-    if turns_to_kill > MAX_GUARDIAN_TURNS_TO_KILL or turns_to_kill > spendable_ep:
+    attack_cost = max(1, state.action_ep_cost("attack", 1))
+    affordable_attacks = spendable_ep // attack_cost
+    if turns_to_kill > MAX_GUARDIAN_TURNS_TO_KILL or turns_to_kill > affordable_attacks:
         return False
     incoming = max(1.0, target.atk - state.self.defense * 0.5)
     projected_hp = state.self.hp - incoming * turns_to_kill
@@ -96,7 +98,8 @@ class QuestRushCortex:
 
         region_label = f"{state.current_region.name} {state.current_region.terrain}".lower()
         ruin_available = ("ruin" in region_label or bool(state.ruins)) and _ruin_progressable(state)
-        if ruin_available and state.self.ep >= 1 and not state.visible_agents:
+        explore_cost = state.action_ep_cost("explore", 1)
+        if ruin_available and state.self.ep >= explore_cost and not state.visible_agents:
             results.append(
                 CortexResult(
                     cortex=self.name,
@@ -117,7 +120,8 @@ class QuestRushCortex:
             and is_worth_attacking(state, target)
             and _guardian_engagement_is_safe(state, target)
         ]
-        if guardians and state.self.ep >= 1:
+        attack_cost = state.action_ep_cost("attack", 1)
+        if guardians and state.self.ep >= attack_cost:
             target = sorted(guardians, key=lambda item: (item.hp, item.atk, item.id))[0]
             results.append(
                 CortexResult(

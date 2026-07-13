@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
@@ -150,6 +151,23 @@ class ClawRoyaleClient:
 
     def waiting_games(self, *, timeout: float = 5.0) -> dict[str, Any]:
         return self._request("GET", "/games", params={"status": "waiting"}, timeout=timeout)
+
+    def preseason1_quests(self) -> dict[str, Any]:
+        return self._request("GET", "/preseason1/quests", timeout=10)
+
+    def preseason1_daily_quests(self) -> dict[str, Any]:
+        return self._request("GET", "/preseason1/daily-quests", timeout=10)
+
+    def preseason1_summary(self) -> dict[str, Any]:
+        return self._request("GET", "/preseason1/me/summary", timeout=10)
+
+    def claim_preseason1_quest(self, key: str, tier: int) -> dict[str, Any]:
+        safe_key = quote(str(key).strip(), safe="")
+        return self._request("POST", f"/preseason1/quests/{safe_key}/claim/{max(1, int(tier))}", timeout=10)
+
+    def claim_preseason1_daily_quest(self, key: str) -> dict[str, Any]:
+        safe_key = quote(str(key).strip(), safe="")
+        return self._request("POST", f"/preseason1/daily-quests/{safe_key}/claim", timeout=10)
 
     def loadout(self) -> dict[str, Any]:
         return self._request("GET", "/loadout")

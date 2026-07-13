@@ -144,6 +144,7 @@ class TurnState:
     can_act: bool = True
     cooldown_remaining_ms: int = 0
     alive_count: int = 0
+    available_actions: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_snapshot(cls, snapshot: dict[str, Any]) -> "TurnState":
@@ -212,6 +213,11 @@ class TurnState:
             can_act=_as_bool(snapshot.get("canAct", view.get("canAct", True)), True),
             cooldown_remaining_ms=_as_int(snapshot.get("cooldownRemainingMs") or view.get("cooldownRemainingMs")),
             alive_count=_as_int(view.get("aliveCount") or snapshot.get("aliveCount")),
+            available_actions=_first_dict(
+                view.get("availableActions"),
+                snapshot.get("availableActions"),
+                self_raw.get("availableActions"),
+            ),
         )
         state.alert_gauge = _as_int(
             view.get("alertGauge")
@@ -263,12 +269,20 @@ class TurnState:
 
     @property
     def has_broadcast_channel(self) -> bool:
-        if any(str(item.get("typeId") or item.get("type") or "").lower() == "megaphone" for item in self.inventory):
-            return True
         return any(
-            "broadcast" in str(item.get("type") or item.get("name") or "").lower()
+            any(
+                marker in str(item.get("type") or item.get("typeId") or item.get("name") or "").lower()
+                for marker in ("broadcast station", "broadcast_station")
+            )
             for item in self.current_region.interactables
         )
+
+    def action_ep_cost(self, action_type: str, fallback: int = 0) -> int:
+        """Prefer the server-rendered per-turn action cost over static tables."""
+        action = self.available_actions.get(action_type)
+        if isinstance(action, dict) and action.get("cost") not in (None, ""):
+            return max(0, _as_int(action.get("cost"), fallback))
+        return max(0, fallback)
 
     @property
     def can_take_main_action(self) -> bool:
@@ -293,12 +307,20 @@ class TurnState:
         best = None
         best_score = 0
         for item in self.inventory:
+            explicit_restore = _as_int(item.get("hpRestore"))
             item_type = str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
-            score = max((value for key, value in priority.items() if key in item_type), default=0)
+            score = explicit_restore * 10 + max(
+                (value for key, value in priority.items() if key in item_type),
+                default=0,
+            )
             if score > best_score:
                 best = item
                 best_score = score
         return best
+
+    def best_energy_item(self) -> dict[str, Any] | None:
+        candidates = [item for item in self.inventory if _as_int(item.get("epRestore")) > 0]
+        return max(candidates, key=lambda item: _as_int(item.get("epRestore")), default=None)
 
     def _ingest_events(self) -> None:
         for event in self.events:

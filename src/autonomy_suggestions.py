@@ -176,7 +176,7 @@ def suggested_edits_from_observation(
                 "title": "Improve paid-game readiness fallback",
                 "file": "src/claw_runtime.py",
                 "symptom": "Paid join failed before gameplay started.",
-                "suggested_change": "Recheck account balance, identity, and game mode before retry; fall back to free rooms when paid readiness is false.",
+                "suggested_change": "Recheck account balance and game mode before retry; fall back to free rooms when paid readiness is false.",
                 "priority": "critical",
                 "evidence": evidence,
             }
@@ -201,10 +201,10 @@ def suggested_edits_from_observation(
         suggestions.append(
             {
                 "detector": "contract.no_identity",
-                "title": "Automated ERC-8004 identity attachment",
-                "file": "src/claw_identity_token.py",
+                "title": "Refresh stale Claw identity gating",
+                "file": "src/claw_runtime.py",
                 "symptom": f"Server rejected join: {ERROR_CODES.get('NO_IDENTITY')}",
-                "suggested_change": "Trigger sync_identity_status() during preflight if identity_ready is false in the vault.",
+                "suggested_change": "Refresh the live Claw version and contract; ERC-8004 is optional and must not block free fallback.",
                 "priority": "critical",
                 "evidence": evidence,
             }

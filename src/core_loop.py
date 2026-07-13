@@ -132,7 +132,7 @@ def _validate_use_item(action: dict[str, Any], state: TurnState) -> dict[str, An
         item = next((i for i in state.inventory if i.get("id") == item_id), None)
         if item:
             label = str(item.get("typeId") or item.get("name") or "").lower()
-            if any(term in label for term in ("medkit", "bandage")):
+            if item.get("hpRestore") or any(term in label for term in ("medkit", "bandage")):
                 return _block(state, action, "wasteful healing at full hp")
     return None
 
@@ -141,7 +141,8 @@ def _validate_ep_cost(action: dict[str, Any], state: TurnState) -> dict[str, Any
     action_type = str(action.get("type") or "")
     if not is_cooldown_action(action_type):
         return None
-    cost = action_cost(action_type, terrain=state.current_region.terrain)
+    static_fallback = action_cost(action_type, terrain=state.current_region.terrain)
+    cost = state.action_ep_cost(action_type, static_fallback)
     if cost <= state.self.ep:
         return None
     fallback = rest_action("recover EP after contract cost preflight")

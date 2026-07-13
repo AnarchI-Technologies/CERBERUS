@@ -128,7 +128,7 @@ class LearnedPolicyCortex:
                 )
                     )
 
-        if state.can_take_main_action and state.self.ep >= 1:
+        if state.can_take_main_action and state.self.ep >= state.action_ep_cost("attack", 1):
             for agent in state.visible_agents:
                 if not agent.is_alive or agent.id == state.self.id:
                     continue

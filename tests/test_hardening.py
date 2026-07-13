@@ -63,6 +63,7 @@ from isolated_runtime import IsolatedCerberusInstance
 from identity_vault import DEFAULT_PUBLIC_NAME, DEFAULT_V2_PUBLIC_NAME, empty_identity
 from knowledge_base import KnowledgeBase
 from ep_economy_engine import EconomyCortex
+from free_action_abuse import FreeActionCortex
 from longterm_memory import LongTermMemoryStore
 from learned_policy_cortex import LearnedPolicyCortex
 from memory_system import CompactMemoryStore
@@ -470,6 +471,24 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["_contract_cost"]["cost"], 2)
         self.assertEqual(action["_contract_cost"]["available_ep"], 1)
 
+    def test_legalizer_prefers_live_available_action_cost(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {
+                    "self": {"id": "me", "hp": 90, "ep": 2},
+                    "currentRegion": {"id": "r1", "terrain": "Plain"},
+                    "availableActions": {"attack": {"cost": 3}},
+                    "visibleAgents": [{"id": "enemy-1", "hp": 20, "isAlive": True}],
+                },
+            }
+        )
+
+        blocked = legalize_action({"type": "attack", "targetId": "enemy-1"}, state)
+
+        self.assertNotEqual(blocked["type"], "attack")
+        self.assertEqual(blocked["_contract_cost"]["cost"], 3)
+
     def test_autonomy_insufficient_ep_suggestion_includes_contract_cost(self) -> None:
         suggestions = autonomy_suggestions.suggested_edits_from_observation(
             {
@@ -510,6 +529,8 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(claw_contract.ACTIVE_GAME_LIMITS, {"free": 1, "paid": 1})
         self.assertIn("balance_smoltz>=500", claw_contract.READINESS_GATES["paid_offchain"])
         self.assertIn("claw_wallet_moltz>=500", claw_contract.READINESS_GATES["paid_onchain"])
+        self.assertEqual(claw_contract.READINESS_GATES["free"], ("api_key",))
+        self.assertFalse(claw_contract.IDENTITY_RULES["required_for_free"])
         self.assertTrue(claw_contract.WALLET_RULES["agent_eoa_must_differ_from_owner_eoa"])
         self.assertTrue(claw_contract.IDENTITY_RULES["agentId_is_not_game_agent_uuid"])
         self.assertEqual(claw_contract.JOIN_WAIT_CAPS["free_assigned_seconds"], 120)
@@ -520,6 +541,8 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("ruin_state_changed", claw_contract.EVENT_FRAMES)
         self.assertEqual(claw_contract.LOADOUT["type_index"], {0: "red", 1: "green", 2: "blue"})
         self.assertEqual(claw_contract.LOADOUT["effective_stats_without_full_set"], 0)
+        self.assertTrue(claw_contract.LOADOUT["sub_pack_required"])
+        self.assertIn("sub_pack", claw_contract.LOADOUT["full_set_components"])
         self.assertEqual(claw_contract.LOADOUT["discard_equipped_relic"], "fails_409_until_unequipped")
         self.assertIn("RATE_LIMITED", claw_contract.ERROR_CODES)
         self.assertIn("ACCOUNT_ALREADY_IN_GAME", claw_contract.ERROR_CODES)
@@ -1238,7 +1261,7 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(action["type"], "use_item")
         self.assertEqual(action["itemId"], "energy-1")
 
-    def test_map_is_used_when_navigation_knowledge_is_sparse(self) -> None:
+    def test_removed_map_item_is_not_used_when_navigation_is_sparse(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             isolated = self._isolated(tmp)
             action = isolated.tick(
@@ -1256,8 +1279,7 @@ class HardeningTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(action["type"], "use_item")
-        self.assertEqual(action["itemId"], "map-1")
+        self.assertFalse(action.get("type") == "use_item" and action.get("itemId") == "map-1")
 
     def test_inventory_weapon_equips_before_attacking(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1976,6 +1998,58 @@ class HardeningTests(unittest.TestCase):
 
         self.assertFalse(any(result.intent == "use_map_for_navigation" for result in results))
 
+    def test_free_action_equips_live_armor_upgrade(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {
+                        "id": "me",
+                        "hp": 80,
+                        "ep": 4,
+                        "equippedArmor": {"id": "cloth", "defBonus": 2},
+                        "inventory": [{"id": "plate", "name": "Plate", "defBonus": 8}],
+                    },
+                    "currentRegion": {"id": "r1"},
+                }
+            }
+        )
+
+        armor = next(result for result in FreeActionCortex().evaluate(state, {}) if result.intent == "equip_best_armor")
+
+        self.assertEqual(armor.action, {"type": "equip", "itemId": "plate"})
+
+    def test_explicit_recovery_fields_drive_item_choice(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {
+                        "id": "me",
+                        "hp": 40,
+                        "ep": 0,
+                        "inventory": [
+                            {"id": "unknown-heal", "hpRestore": 35},
+                            {"id": "unknown-energy", "epRestore": 6},
+                        ],
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(state.best_heal_item()["id"], "unknown-heal")
+        self.assertEqual(state.best_energy_item()["id"], "unknown-energy")
+
+    def test_megaphone_no_longer_unlocks_broadcast_without_station(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "inventory": [{"id": "meg", "typeId": "megaphone"}]},
+                    "currentRegion": {"id": "r1", "interactables": []},
+                }
+            }
+        )
+
+        self.assertFalse(state.has_broadcast_channel)
+
     def test_settlement_memory_extracts_compact_lessons(self) -> None:
         lessons = settlement_lessons(
             {
@@ -2004,7 +2078,7 @@ class HardeningTests(unittest.TestCase):
                 {
                     "view": {
                         "self": {"id": "me", "hp": 80, "ep": 4, "inventory": [{"id": "meg", "typeId": "megaphone"}]},
-                        "currentRegion": {"id": "r1"},
+                        "currentRegion": {"id": "r1", "interactables": [{"type": "broadcast_station"}]},
                         "visibleAgents": [{"id": "enemy-1", "name": "Rival", "moltybookHandle": "@rival"}],
                     },
                     "events": [{"type": "agent_kill", "data": {"killerId": "me", "victimId": "enemy-1", "victimName": "Rival"}}],
@@ -3866,6 +3940,11 @@ class HardeningTests(unittest.TestCase):
         client.me()
         client.join_status()
         client.waiting_games()
+        client.preseason1_quests()
+        client.preseason1_daily_quests()
+        client.preseason1_summary()
+        client.claim_preseason1_quest("attendance", 1)
+        client.claim_preseason1_daily_quest("daily-kills")
         client.request_whitelist("0x" + "1" * 40)
         client.delete_identity()
         client.loadout()
@@ -3885,6 +3964,11 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("https://cdn.clawroyale.ai/api/accounts/me", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/join/status", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/games", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/preseason1/quests", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/preseason1/daily-quests", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/preseason1/me/summary", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/preseason1/quests/attendance/claim/1", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/preseason1/daily-quests/daily-kills/claim", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/whitelist/request", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/identity", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/loadout", urls)
@@ -3901,7 +3985,11 @@ class HardeningTests(unittest.TestCase):
 
     def test_loadout_shop_reforge_planner_prepares_paid_game_setup(self) -> None:
         plan = loadout_shop_reforge.build_prejoin_plan(
-            loadout={"activePack": {"instanceId": "old-pack"}, "slots": {}},
+            loadout={
+                "activePack": {"instanceId": "old-pack"},
+                "subPack": {"instanceId": "sub-pack-1"},
+                "slots": {},
+            },
             packs={
                 "packs": [
                     {"instanceId": "pack-g", "category": "goliath", "tier": "T3"},
@@ -3922,11 +4010,33 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(any(op.get("type") == "set_active_pack" and op.get("packInstanceId") == "pack-m" for op in ops))
         self.assertTrue(any(op.get("type") == "set_relic_slot" and op.get("slot") == "red" for op in ops))
         self.assertTrue(plan["loadout"]["complete_full_set"])
+        self.assertEqual(plan["loadout"]["chosen"]["sub_pack"]["id"], "sub-pack-1")
         self.assertEqual(plan["reforge"][0]["relicInstanceId"], "blue-1")
         self.assertTrue(any(item["item"] == "reforge_stone_bundle" for item in plan["shop"]))
         self.assertEqual(plan["execution_order"], ["shop", "reforge", "loadout"])
         self.assertTrue(plan["ready_for_paid"])
         self.assertTrue(plan["needs_inventory_refresh"])
+
+    def test_loadout_full_set_counts_already_equipped_components(self) -> None:
+        plan = loadout_shop_reforge.build_prejoin_plan(
+            loadout={
+                "mainPack": {"instanceId": "main-equipped"},
+                "subPack": {"instanceId": "sub-equipped"},
+                "slots": {
+                    "red": {"instanceId": "red-equipped"},
+                    "green": {"instanceId": "green-equipped"},
+                    "blue": {"instanceId": "blue-equipped"},
+                },
+            },
+            packs={"packs": []},
+            relics={"relics": []},
+            balance_smoltz=500,
+        )
+
+        self.assertTrue(plan["loadout"]["complete_full_set"])
+        self.assertEqual(plan["loadout"]["operations"], [])
+        self.assertEqual(plan["loadout"]["chosen"]["main_pack"]["source"], "currently_equipped")
+        self.assertEqual(plan["loadout"]["chosen"]["relics"]["red"]["id"], "red-equipped")
 
     def test_loadout_executor_is_dry_run_by_default(self) -> None:
         calls = []
@@ -4739,6 +4849,26 @@ class HardeningTests(unittest.TestCase):
         )
         self.assertFalse(claw_runtime.paid_room_is_last_slot_ready(context))
 
+    def test_claw_runtime_probe_failure_never_reuses_welcome_paid_room(self) -> None:
+        welcome = {
+            "type": "welcome",
+            "decision": "ASK_ENTRY_TYPE",
+            "availableGames": [
+                {
+                    "entryType": "paid",
+                    "gameId": "possibly-stale-welcome-room",
+                    "playerCount": 9,
+                    "requiredPlayers": 10,
+                }
+            ],
+        }
+
+        context = claw_runtime.join_selection_context(welcome, {"ok": False, "error": "timeout"})
+
+        self.assertFalse(context["paidRoomProbeVerified"])
+        self.assertEqual(claw_runtime.room_entries(context), [])
+        self.assertFalse(claw_runtime.paid_room_is_last_slot_ready(context))
+
     def test_claw_runtime_falls_back_when_paid_room_metadata_is_absent(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         welcome = {
@@ -4923,11 +5053,15 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "paid", "mode": "offchain"})
 
-    def test_claw_runtime_does_not_choose_free_when_identity_is_blocked(self) -> None:
+    def test_claw_runtime_ignores_legacy_identity_only_free_blocker(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         welcome = {
             "decision": "ASK_ENTRY_TYPE",
-            "readiness": {"erc8004_identity": False, "freeRoom": {"ok": False, "missing": ["erc8004_identity"]}},
+            "readiness": {
+                "freeReady": False,
+                "erc8004_identity": False,
+                "freeRoom": {"ok": False, "missing": ["erc8004_identity"]},
+            },
             "rooms": [
                 {"entryType": "paid", "playerCount": 0},
                 {"entryType": "free", "playerCount": 4},
@@ -4937,14 +5071,15 @@ class HardeningTests(unittest.TestCase):
         old_fallback = os.environ.get("CLAW_ROYALE_FREE_FALLBACK_ENABLED")
         try:
             os.environ["CLAW_ROYALE_FREE_FALLBACK_ENABLED"] = "true"
-            self.assertIsNone(claw_runtime.hello_frame(config, welcome))
+            self.assertFalse(claw_runtime.readiness_blocks_free(welcome))
+            self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
         finally:
             if old_fallback is None:
                 os.environ.pop("CLAW_ROYALE_FREE_FALLBACK_ENABLED", None)
             else:
                 os.environ["CLAW_ROYALE_FREE_FALLBACK_ENABLED"] = old_fallback
 
-    def test_claw_runtime_blocks_paid_join_when_v2_has_no_balance_or_identity(self) -> None:
+    def test_claw_runtime_allows_free_fallback_without_balance_or_identity(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         account = {
             "ok": True,
@@ -4954,13 +5089,29 @@ class HardeningTests(unittest.TestCase):
                 "scWallet": True,
                 "whitelistApproved": True,
                 "identity": False,
+                "freeReady": False,
+                "freeRoom": {"ok": False, "missing": ["NO_IDENTITY"]},
                 "paidReady": False,
             },
         }
 
         self.assertFalse(claw_runtime.account_paid_ready(account))
         self.assertFalse(claw_runtime.account_identity_ready(account))
-        self.assertIn("paused before join", claw_runtime.join_blocker_for_account(config, account))
+        self.assertTrue(claw_runtime.account_free_ready(account))
+        self.assertEqual(claw_runtime.join_blocker_for_account(config, account), "")
+
+    def test_claw_runtime_blocks_explicit_non_identity_free_readiness_failure(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
+        account = {
+            "ok": True,
+            "readiness": {
+                "identity": False,
+                "freeRoom": {"ok": False, "missing": ["NOT_PRIMARY_AGENT"]},
+            },
+        }
+
+        self.assertFalse(claw_runtime.account_free_ready(account))
+        self.assertIn("free join blocked", claw_runtime.join_blocker_for_account(config, account))
 
     def test_claw_runtime_allows_paid_join_when_paid_ready(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
