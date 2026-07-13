@@ -70,6 +70,7 @@ ROOM_LIST_KEYS = (
     "waitingGames",
     "lobbies",
     "matches",
+    "value",
 )
 from turn_state_model import TurnState
 ROOM_COUNT_KEYS = (
@@ -87,6 +88,45 @@ ROOM_COUNT_KEYS = (
 ROOM_LIST_COUNT_KEYS = ("agents", "players", "participants", "joinedAgents", "activeAgents")
 GUARDIAN_MARKERS = ("guardian", "monster", "npc", "system")
 ROOM_ID_KEYS = ("gameId", "game_id", "roomId", "room_id", "id", "joinIntentId")
+ROOM_START_REMAINING_KEYS = (
+    "playersNeededToStart",
+    "players_needed_to_start",
+    "neededToStart",
+    "needed_to_start",
+    "playersUntilStart",
+    "players_until_start",
+    "remainingPlayersToStart",
+    "remaining_players_to_start",
+    "agentsNeededToStart",
+    "agents_needed_to_start",
+    "agentsUntilStart",
+    "agents_until_start",
+    "slotsUntilStart",
+    "slots_until_start",
+)
+ROOM_START_THRESHOLD_KEYS = (
+    "requiredPlayers",
+    "required_players",
+    "requiredAgents",
+    "required_agents",
+    "minPlayers",
+    "min_players",
+    "minAgents",
+    "min_agents",
+    "minimumPlayers",
+    "minimum_players",
+    "minimumAgents",
+    "minimum_agents",
+    "startPlayerCount",
+    "start_player_count",
+    "startAgentCount",
+    "start_agent_count",
+    "startThreshold",
+    "start_threshold",
+)
+ROOM_METADATA_KEYS = (
+    "lobby", "config", "settings", "requirements", "match", "start", "metadata", "queue"
+)
 
 
 @dataclass(frozen=True)
@@ -94,7 +134,7 @@ class ClawRuntimeConfig:
     api_key: str
     api_base: str = CLAW_API_BASE
     version: str = ""
-    mode: str = "paid"
+    mode: str = "offchain"
     enabled: bool = False
     min_reconnect_seconds: int = DEFAULT_MIN_RECONNECT_SECONDS
     max_reconnect_seconds: int = DEFAULT_MAX_RECONNECT_SECONDS
@@ -460,6 +500,69 @@ def room_population(room: dict[str, Any]) -> int | None:
     return None
 
 
+def _room_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float):
+        return max(0, int(value))
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def room_metadata_mappings(room: dict[str, Any]) -> list[dict[str, Any]]:
+    mappings = [room]
+    mappings.extend(room[key] for key in ROOM_METADATA_KEYS if isinstance(room.get(key), dict))
+    return mappings
+
+
+def room_slots_until_start(room: dict[str, Any]) -> int | None:
+    """Return a server-proven start distance; never infer it from room capacity."""
+    mappings = room_metadata_mappings(room)
+    for mapping in mappings:
+        for key in ROOM_START_REMAINING_KEYS:
+            remaining = _room_nonnegative_int(mapping.get(key))
+            if remaining is not None:
+                return remaining
+
+    threshold = next(
+        (
+            value
+            for mapping in mappings
+            for key in ROOM_START_THRESHOLD_KEYS
+            if (value := _room_nonnegative_int(mapping.get(key))) is not None
+        ),
+        None,
+    )
+    competitors = next(
+        (
+            value
+            for mapping in mappings
+            if (value := room_competitor_population(mapping)) is not None
+        ),
+        None,
+    )
+    if threshold is None or competitors is None:
+        return None
+    return max(0, threshold - competitors)
+
+
+def selectable_paid_rooms(welcome: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Return unique, addressable paid rooms not already remembered as stale."""
+    stale_ids = stale_paid_room_ids()
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for room in room_entries(welcome):
+        candidate_id = room_id(room)
+        if room_entry_type(room) != "paid" or not candidate_id or candidate_id in stale_ids or candidate_id in seen:
+            continue
+        seen.add(candidate_id)
+        selected.append(room)
+    return selected
+
+
 def room_choice_summary(welcome: dict[str, Any] | None) -> dict[str, Any]:
     paid_populations: list[int] = []
     free_populations: list[int] = []
@@ -529,6 +632,12 @@ def require_competitive_paid_room_enabled() -> bool:
     return os.getenv("CLAW_ROYALE_REQUIRE_COMPETITIVE_PAID_ROOM", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def paid_last_slot_only_enabled() -> bool:
+    return os.getenv("CLAW_ROYALE_PAID_LAST_SLOT_ONLY", "true").strip().lower() not in {
+        "0", "false", "no", "off"
+    }
+
+
 def minimum_paid_competitors() -> int:
     try:
         return max(1, int(os.getenv("CLAW_ROYALE_MIN_PAID_COMPETITORS", "1")))
@@ -541,6 +650,26 @@ def paid_room_is_competitive(welcome: dict[str, Any] | None) -> bool:
         return True
     summary = room_choice_summary(welcome)
     return summary["paid_rooms"] > 0 and summary["paid_competitors"] >= minimum_paid_competitors()
+
+
+def paid_room_is_last_slot_ready(welcome: dict[str, Any] | None) -> bool:
+    """Only approve an unambiguous paid selection that is one player from start."""
+    rooms = selectable_paid_rooms(welcome)
+    if len(rooms) != 1:
+        return False
+    room = rooms[0]
+    competitors = room_competitor_population(room)
+    return (
+        competitors is not None
+        and competitors >= minimum_paid_competitors()
+        and room_slots_until_start(room) == 1
+    )
+
+
+def paid_room_is_joinable(welcome: dict[str, Any] | None) -> bool:
+    if not paid_room_is_competitive(welcome):
+        return False
+    return not paid_last_slot_only_enabled() or paid_room_is_last_slot_ready(welcome)
 
 
 def should_prefer_free_room(config: ClawRuntimeConfig, welcome: dict[str, Any] | None) -> bool:
@@ -557,7 +686,11 @@ def should_prefer_free_room(config: ClawRuntimeConfig, welcome: dict[str, Any] |
 
 
 def should_avoid_paid_room(config: ClawRuntimeConfig, welcome: dict[str, Any] | None) -> bool:
-    if not avoid_empty_paid_rooms_enabled() or config.mode == "free":
+    if config.mode == "free":
+        return False
+    if paid_last_slot_only_enabled() and not paid_room_is_last_slot_ready(welcome):
+        return True
+    if not avoid_empty_paid_rooms_enabled():
         return False
     summary = room_choice_summary(welcome)
     if summary["paid_rooms"] == 0:
@@ -596,7 +729,7 @@ def should_auto_upgrade_to_paid(config: ClawRuntimeConfig, welcome: dict[str, An
         return ""
     if recent_paid_join_failure_active():
         return ""
-    if not paid_room_is_competitive(welcome):
+    if not paid_room_is_joinable(welcome):
         return ""
     return _readiness_paid_mode(welcome)
 
@@ -651,15 +784,24 @@ def join_blocker_for_account(config: ClawRuntimeConfig, account: dict[str, Any])
         return "paused before join: v2 needs ERC-8004 identity or at least 500 sMoltz paid balance"
     if config.mode == "free" and not identity_ready:
         return "paused before free join: v2 needs ERC-8004 identity"
+    if config.mode != "free" and not paid_ready and free_fallback_enabled() and identity_ready:
+        return ""
     if config.mode != "free" and not paid_ready:
         return "paid join blocked: v2 needs at least 500 sMoltz balance or on-chain paid readiness"
     return ""
 
 
-def hello_frame(config: ClawRuntimeConfig, welcome: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def hello_frame(
+    config: ClawRuntimeConfig,
+    welcome: dict[str, Any] | None = None,
+    *,
+    paid_account_ready: bool | None = None,
+) -> dict[str, Any] | None:
     decision = str((welcome or {}).get("decision") or "").upper()
     if decision in NO_HELLO_DECISIONS:
         return None
+    if paid_account_ready is False and config.mode != "free":
+        return None if readiness_blocks_free(welcome) else {"type": "hello", "entryType": "free"}
     paid_mode = should_auto_upgrade_to_paid(config, welcome)
     if paid_mode:
         return {"type": "hello", "entryType": "paid", "mode": paid_mode}
@@ -823,6 +965,34 @@ def account_status_summary(config: ClawRuntimeConfig) -> dict[str, Any]:
             for game in games
             if isinstance(game, dict)
         ],
+    }
+
+
+def waiting_games_status(config: ClawRuntimeConfig) -> dict[str, Any]:
+    """Read the current waiting-room list without attempting to reserve a game."""
+    try:
+        payload = ClawRoyaleClient(api_key=config.api_key, base_url=config.base_url).waiting_games(timeout=5.0)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:240]}
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "waiting-games response was not an object"}
+    return {**payload, "ok": payload.get("ok", True)}
+
+
+def join_selection_context(
+    welcome: dict[str, Any],
+    waiting_games: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Combine welcome gates with the freshest available read-only room evidence."""
+    probed_rooms = room_entries(waiting_games)
+    rooms = probed_rooms if probed_rooms else room_entries(welcome)
+    return {
+        "type": welcome.get("type"),
+        "decision": welcome.get("decision"),
+        "readiness": welcome.get("readiness"),
+        "instruction": welcome.get("instruction"),
+        "helloDeadlineSec": welcome.get("helloDeadlineSec"),
+        "waitingGames": rooms,
     }
 
 
@@ -1094,20 +1264,37 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 await ws.send(json.dumps({"type": "pong"}))
                 continue
             if frame_type == "welcome":
-                frame = None if join_blocker else hello_frame(config, payload)
-                room_summary = room_choice_summary(payload)
+                waiting_games = await asyncio.to_thread(waiting_games_status, config)
+                selection_context = join_selection_context(payload, waiting_games)
+                frame = None if join_blocker else hello_frame(
+                    config,
+                    selection_context,
+                    paid_account_ready=account_paid_ready(account_status),
+                )
+                room_summary = room_choice_summary(selection_context)
+                paid_last_slot_ready = paid_room_is_last_slot_ready(selection_context)
+                if frame and frame.get("entryType") == "paid":
+                    room_choice_reason = "paid_last_start_slot_ready"
+                elif frame and frame.get("entryType") == "free" and config.mode != "free" and not paid_last_slot_ready:
+                    room_choice_reason = "free_fallback_paid_last_slot_unproven"
+                elif frame and frame.get("entryType") == "free" and should_prefer_free_room(config, selection_context):
+                    room_choice_reason = "occupied_free_room_over_empty_paid_rooms"
+                else:
+                    room_choice_reason = "server_or_config_default"
                 update_status(
                     state="welcomed",
                     last_frame_type=frame_type,
                     join_decision=payload.get("decision", ""),
-                    join_readiness=payload.get("readiness", {}),
+                    join_readiness=selection_context.get("readiness", {}),
                     join_room_choice=frame.get("entryType", "") if frame else "",
-                    join_room_choice_reason=(
-                        "occupied_free_room_over_empty_paid_rooms"
-                        if frame and frame.get("entryType") == "free" and should_prefer_free_room(config, payload)
-                        else "server_or_config_default"
-                    ),
+                    join_room_choice_reason=room_choice_reason,
                     join_room_summary=room_summary,
+                    join_room_probe={
+                        "ok": bool(waiting_games.get("ok")),
+                        "room_count": len(room_entries(waiting_games)),
+                        "error": str(waiting_games.get("error") or "")[:160],
+                    },
+                    paid_last_slot_ready=paid_last_slot_ready,
                     last_error=join_blocker or ("" if frame else str(payload.get("instruction") or "")),
                 )
                 if frame:

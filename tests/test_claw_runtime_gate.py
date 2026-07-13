@@ -148,7 +148,14 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
             "type": "welcome",
             "decision": "ASK_ENTRY_TYPE",
             "readiness": {"paidRoom": {"ok": True, "mode": {"offchain": False, "onchain": True}}},
-            "availableGames": [{"entryType": "paid", "playerCount": 2}],
+            "availableGames": [
+                {
+                    "entryType": "paid",
+                    "gameId": "paid-ready-1",
+                    "playerCount": 29,
+                    "requiredPlayers": 30,
+                }
+            ],
         }
 
         self.assertEqual(

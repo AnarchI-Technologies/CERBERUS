@@ -159,6 +159,8 @@ CLAW_ROYALE_ERC8004_ID
 CLAW_ROYALE_VERSION=1.9.0
 CLAW_ROYALE_RUNTIME_ENABLED=true
 CLAW_ROYALE_GAME_MODE=offchain
+CLAW_ROYALE_FREE_FALLBACK_ENABLED=true
+CLAW_ROYALE_PAID_LAST_SLOT_ONLY=true
 CLAW_ROYALE_WS_PATHS=/ws/agent,/ws/join
 AGENTMAIL_API_KEY
 AGENTMAIL_INBOX_ID
@@ -235,10 +237,17 @@ Pre-join loadout optimizer defaults:
 
 Paid-room safety defaults:
 
+- `CLAW_ROYALE_GAME_MODE=offchain` makes ready paid games the preferred entry
+  type while preserving the guarded free fallback below.
 - `CLAW_ROYALE_FREE_FALLBACK_ENABLED=true` lets Hellion choose a viable free
-  room when paid rooms are empty or unsafe.
+  room when paid readiness or room proof is insufficient.
 - `CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS=true` prevents paying into empty paid
   rooms unless explicitly disabled.
+- `CLAW_ROYALE_PAID_LAST_SLOT_ONLY=true` requires exactly one non-stale,
+  addressable paid room with at least one real competitor and explicit server
+  metadata showing exactly one player still needed to start. Missing metadata
+  or multiple paid rooms fail closed to free because the hello frame cannot
+  target a specific paid room.
 - paid waiting games from account status are remembered as stale room IDs and
   shown on the dashboard so Hellion does not keep rejoining the same trap.
 

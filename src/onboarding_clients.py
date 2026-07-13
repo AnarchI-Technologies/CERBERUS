@@ -148,8 +148,8 @@ class ClawRoyaleClient:
     def join_status(self) -> dict[str, Any]:
         return self._request("GET", "/join/status")
 
-    def waiting_games(self) -> dict[str, Any]:
-        return self._request("GET", "/games", params={"status": "waiting"})
+    def waiting_games(self, *, timeout: float = 5.0) -> dict[str, Any]:
+        return self._request("GET", "/games", params={"status": "waiting"}, timeout=timeout)
 
     def loadout(self) -> dict[str, Any]:
         return self._request("GET", "/loadout")

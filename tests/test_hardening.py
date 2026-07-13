@@ -3417,6 +3417,8 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("TWITCH_ACCOUNT_CREATED", env_doctor.LAUNCH_VARS)
         self.assertIn("CLAW_ROYALE_FREE_FALLBACK_ENABLED", env_doctor.LAUNCH_VARS)
         self.assertIn("CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS", env_doctor.LAUNCH_VARS)
+        self.assertIn("CLAW_ROYALE_GAME_MODE", env_doctor.LAUNCH_VARS)
+        self.assertIn("CLAW_ROYALE_PAID_LAST_SLOT_ONLY", env_doctor.LAUNCH_VARS)
         self.assertIn("CERBERUS_MOLTYBOOK_ENABLED", env_doctor.LAUNCH_VARS)
 
     def test_env_loader_reports_malformed_dotenv_lines(self) -> None:
@@ -3432,6 +3434,8 @@ class HardeningTests(unittest.TestCase):
 
         self.assertIn("CLAW_ROYALE_FREE_FALLBACK_ENABLED=true", text)
         self.assertIn("CLAW_ROYALE_AVOID_EMPTY_PAID_ROOMS=true", text)
+        self.assertIn("CLAW_ROYALE_GAME_MODE=offchain", text)
+        self.assertIn("CLAW_ROYALE_PAID_LAST_SLOT_ONLY=true", text)
         self.assertIn("CERBERUS_MOLTYBOOK_ENABLED=false", text)
 
     def test_existing_agentmail_inbox_imports_without_network(self) -> None:
@@ -3861,6 +3865,7 @@ class HardeningTests(unittest.TestCase):
 
         client.me()
         client.join_status()
+        client.waiting_games()
         client.request_whitelist("0x" + "1" * 40)
         client.delete_identity()
         client.loadout()
@@ -3879,6 +3884,7 @@ class HardeningTests(unittest.TestCase):
         urls = [call[1] for call in fake.calls]
         self.assertIn("https://cdn.clawroyale.ai/api/accounts/me", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/join/status", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/games", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/whitelist/request", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/identity", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/loadout", urls)
@@ -4567,7 +4573,20 @@ class HardeningTests(unittest.TestCase):
         free = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
 
         self.assertEqual(
-            claw_runtime.hello_frame(paid, {"decision": "ASK_ENTRY_TYPE", "availableGames": [{"entryType": "paid", "playerCount": 1}]}),
+            claw_runtime.hello_frame(
+                paid,
+                {
+                    "decision": "ASK_ENTRY_TYPE",
+                    "availableGames": [
+                        {
+                            "entryType": "paid",
+                            "gameId": "paid-ready-1",
+                            "playerCount": 1,
+                            "playersNeededToStart": 1,
+                        }
+                    ],
+                },
+            ),
             {"type": "hello", "entryType": "paid", "mode": "offchain"},
         )
         self.assertEqual(claw_runtime.hello_frame(free, {"decision": "FREE_ONLY"}), {"type": "hello", "entryType": "free"})
@@ -4629,20 +4648,96 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(summary["paid_competitors"], 0)
         self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
 
-    def test_claw_runtime_joins_paid_when_real_competitors_are_present(self) -> None:
+    def test_claw_runtime_joins_paid_only_at_last_start_slot(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         welcome = {
             "decision": "ASK_ENTRY_TYPE",
             "availableGames": [
                 {
                     "entryType": "paid",
+                    "gameId": "paid-ready-1",
                     "players": [{"id": "rival-1", "name": "Big League Rival"}],
+                    "playersNeededToStart": 1,
                 },
             ],
         }
 
         self.assertTrue(claw_runtime.paid_room_is_competitive(welcome))
+        self.assertTrue(claw_runtime.paid_room_is_last_slot_ready(welcome))
         self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "paid", "mode": "offchain"})
+
+    def test_claw_runtime_falls_back_when_paid_start_distance_is_unknown(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        welcome = {
+            "decision": "ASK_ENTRY_TYPE",
+            "availableGames": [
+                {"entryType": "paid", "gameId": "paid-unknown-1", "playerCount": 8, "maxPlayers": 30},
+                {"entryType": "free", "gameId": "free-1", "playerCount": 1},
+            ],
+        }
+
+        self.assertTrue(claw_runtime.paid_room_is_competitive(welcome))
+        self.assertFalse(claw_runtime.paid_room_is_last_slot_ready(welcome))
+        self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
+
+    def test_claw_runtime_falls_back_when_paid_selection_is_ambiguous(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        welcome = {
+            "decision": "ASK_ENTRY_TYPE",
+            "availableGames": [
+                {
+                    "entryType": "paid",
+                    "gameId": "paid-ready-1",
+                    "playerCount": 9,
+                    "requiredPlayers": 10,
+                },
+                {
+                    "entryType": "paid",
+                    "gameId": "paid-other-1",
+                    "playerCount": 2,
+                    "requiredPlayers": 10,
+                },
+                {"entryType": "free", "gameId": "free-1", "playerCount": 1},
+            ],
+        }
+
+        self.assertFalse(claw_runtime.paid_room_is_last_slot_ready(welcome))
+        self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
+
+    def test_claw_runtime_prefers_fresh_waiting_game_probe_for_join_gate(self) -> None:
+        welcome = {
+            "type": "welcome",
+            "decision": "ASK_ENTRY_TYPE",
+            "readiness": {"paidRoom": {"ok": True}},
+            "availableGames": [
+                {
+                    "entryType": "paid",
+                    "gameId": "stale-welcome-room",
+                    "playerCount": 9,
+                    "requiredPlayers": 10,
+                }
+            ],
+        }
+        probe = {
+            "ok": True,
+            "games": [
+                {
+                    "entryType": "paid",
+                    "gameId": "fresh-probe-room",
+                    "playerCount": 3,
+                    "requiredPlayers": 10,
+                },
+                {"entryType": "free", "gameId": "free-1", "playerCount": 1},
+            ],
+        }
+
+        context = claw_runtime.join_selection_context(welcome, probe)
+
+        self.assertEqual(
+            [room.get("gameId") for room in claw_runtime.room_entries(context)],
+            ["fresh-probe-room", "free-1"],
+        )
+        self.assertFalse(claw_runtime.paid_room_is_last_slot_ready(context))
 
     def test_claw_runtime_falls_back_when_paid_room_metadata_is_absent(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
@@ -4665,7 +4760,12 @@ class HardeningTests(unittest.TestCase):
                 welcome = {
                     "decision": "ASK_ENTRY_TYPE",
                     "availableGames": [
-                        {"entryType": "paid", "gameId": "stale-paid-1", "playerCount": 4},
+                        {
+                            "entryType": "paid",
+                            "gameId": "stale-paid-1",
+                            "playerCount": 4,
+                            "playersNeededToStart": 1,
+                        },
                         {"entryType": "free", "gameId": "free-1", "playerCount": 1},
                     ],
                 }
@@ -4811,7 +4911,12 @@ class HardeningTests(unittest.TestCase):
         welcome = {
             "decision": "ASK_ENTRY_TYPE",
             "availableGames": [
-                {"entryType": "paid", "playerCount": 1},
+                {
+                    "entryType": "paid",
+                    "gameId": "paid-ready-1",
+                    "playerCount": 1,
+                    "playersNeededToStart": 1,
+                },
                 {"entryType": "free", "playerCount": 3},
             ],
         }
@@ -4873,6 +4978,44 @@ class HardeningTests(unittest.TestCase):
 
         self.assertTrue(claw_runtime.account_paid_ready(account))
         self.assertEqual(claw_runtime.join_blocker_for_account(config, account), "")
+
+    def test_claw_runtime_allows_free_fallback_when_paid_balance_is_not_ready(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
+        account = {
+            "ok": True,
+            "balance": 0,
+            "readiness": {
+                "walletAddress": True,
+                "scWallet": True,
+                "whitelistApproved": True,
+                "identity": True,
+                "paidReady": False,
+            },
+        }
+
+        with mock.patch.dict(os.environ, {"CLAW_ROYALE_FREE_FALLBACK_ENABLED": "true"}):
+            blocker = claw_runtime.join_blocker_for_account(config, account)
+
+        self.assertEqual(blocker, "")
+        self.assertEqual(
+            claw_runtime.hello_frame(
+                config,
+                {
+                    "decision": "ASK_ENTRY_TYPE",
+                    "availableGames": [
+                        {
+                            "entryType": "paid",
+                            "gameId": "paid-ready-1",
+                            "playerCount": 9,
+                            "requiredPlayers": 10,
+                        },
+                        {"entryType": "free", "gameId": "free-1", "playerCount": 1},
+                    ],
+                },
+                paid_account_ready=False,
+            ),
+            {"type": "hello", "entryType": "free"},
+        )
 
     def test_claw_runtime_does_not_act_when_can_act_false(self) -> None:
         payload = {"type": "agent_view", "data": {"gameId": "g1", "canAct": False, "view": {"canAct": False}}}

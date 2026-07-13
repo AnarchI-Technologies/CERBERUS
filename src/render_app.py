@@ -92,6 +92,7 @@ def readiness() -> dict[str, Any]:
             "CLAW_ROYALE_ERC8004_ID",
             "CLAW_ROYALE_RUNTIME_ENABLED",
             "CLAW_ROYALE_GAME_MODE",
+            "CLAW_ROYALE_PAID_LAST_SLOT_ONLY",
             "CERBERUS_AGENT_EOA_PRIVATE_KEY",
             "CERBERUS_AGENT_EOA_ADDRESS",
             "CERBERUS_OWNER_EOA_ADDRESS",
@@ -116,6 +117,9 @@ def readiness() -> dict[str, Any]:
         "CLAW_ROYALE_ERC8004_ID": bool(os.getenv("CLAW_ROYALE_ERC8004_ID")),
         "CLAW_ROYALE_RUNTIME_ENABLED": claw_runtime_enabled(),
         "CLAW_ROYALE_GAME_MODE": bool(os.getenv("CLAW_ROYALE_GAME_MODE", "paid")),
+        "CLAW_ROYALE_PAID_LAST_SLOT_ONLY": os.getenv(
+            "CLAW_ROYALE_PAID_LAST_SLOT_ONLY", "true"
+        ).strip().lower() not in {"0", "false", "no", "off"},
         "CERBERUS_AGENT_EOA_PRIVATE_KEY": bool(os.getenv("CERBERUS_AGENT_EOA_PRIVATE_KEY")),
         "CERBERUS_AGENT_EOA_ADDRESS": bool(os.getenv("CERBERUS_AGENT_EOA_ADDRESS")),
         "CERBERUS_OWNER_EOA_ADDRESS": bool(os.getenv("CERBERUS_OWNER_EOA_ADDRESS")),
