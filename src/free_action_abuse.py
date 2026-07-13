@@ -65,7 +65,7 @@ def weapon_bonus_for_item(item: dict) -> int:
 
 
 def best_ground_weapon(state: TurnState, current_bonus: int) -> dict | None:
-    candidates = state.visible_items + state.current_region.items
+    candidates = state.local_ground_items()
     best_item = None
     best_bonus = current_bonus
     for item in candidates:

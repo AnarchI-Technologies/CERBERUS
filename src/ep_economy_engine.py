@@ -33,7 +33,7 @@ class EconomyCortex:
 
         # Loadout growth now outranks bankroll growth: relics/packs improve
         # future win rate, while loose sMoltz is only the next premium entry.
-        for item in state.visible_items + state.current_region.items:
+        for item in state.local_ground_items():
             label = str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
             if any(term in label for term in ("relic", "pack")):
                 results.append(
@@ -51,7 +51,7 @@ class EconomyCortex:
                 return results
 
         # 1. Look for sMoltz bundles on the ground.
-        for item in state.visible_items + state.current_region.items:
+        for item in state.local_ground_items():
             label = str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
             if any(term in label for term in ("moltz", "smoltz")):
                 results.append(
@@ -101,7 +101,7 @@ class EconomyCortex:
                         return results
 
         # 3. Collect other valuable items (relics/packs).
-        for item in state.visible_items + state.current_region.items:
+        for item in state.local_ground_items():
             label = str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
             if weapon_bonus_for_item(item) > 0:
                 continue

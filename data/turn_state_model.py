@@ -143,6 +143,7 @@ class TurnState:
     alert_active: bool = False
     can_act: bool = True
     cooldown_remaining_ms: int = 0
+    alive_count: int = 0
 
     @classmethod
     def from_snapshot(cls, snapshot: dict[str, Any]) -> "TurnState":
@@ -210,6 +211,7 @@ class TurnState:
             events=[e for e in _as_list(snapshot.get("events") or view.get("events")) if isinstance(e, dict)],
             can_act=_as_bool(snapshot.get("canAct", view.get("canAct", True)), True),
             cooldown_remaining_ms=_as_int(snapshot.get("cooldownRemainingMs") or view.get("cooldownRemainingMs")),
+            alive_count=_as_int(view.get("aliveCount") or snapshot.get("aliveCount")),
         )
         state.alert_gauge = _as_int(
             view.get("alertGauge")
@@ -222,6 +224,24 @@ class TurnState:
         state._normalize_visible_collections()
         state._ingest_events()
         return state
+
+    def local_ground_items(self) -> list[dict[str, Any]]:
+        """Return only items that can legally be picked up in this region."""
+        combined = [*self.visible_items, *self.current_region.items]
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in combined:
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            region_id = str(item.get("regionId") or item.get("region_id") or "")
+            if region_id and self.current_region.id and region_id != self.current_region.id:
+                continue
+            item_id = str(item.get("id"))
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            out.append(item)
+        return out
 
     @property
     def pending_deathzone_ids(self) -> set[str]:
@@ -300,6 +320,17 @@ class TurnState:
                     self.ruins[ruin.id] = ruin
 
     def _normalize_visible_collections(self) -> None:
+        normalized_items: list[dict[str, Any]] = []
+        for entry in self.visible_items:
+            inner = entry.get("item") if isinstance(entry, dict) else None
+            if isinstance(inner, dict):
+                item = dict(inner)
+                item.setdefault("regionId", entry.get("regionId") or entry.get("region_id") or "")
+                normalized_items.append(item)
+            elif isinstance(entry, dict):
+                normalized_items.append(entry)
+        self.visible_items = normalized_items
+
         agents: list[AgentState] = []
         monsters: list[AgentState] = list(self.visible_monsters)
         monster_ids = {monster.id for monster in monsters if monster.id}

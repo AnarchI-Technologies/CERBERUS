@@ -72,6 +72,7 @@ from onboarding_clients import ClawRoyaleClient, build_claw_siwe_message
 from onboarding_clients import OnboardingAPIError, _unwrap
 from decision_engine import active_fallback_action, make_plan
 from progression_cortex import ProgressionCortex
+from quest_rush_cortex import QuestRushCortex
 from risk_engine import progression_value_at_risk
 from settlement_memory import settlement_lessons
 from social_cortex import SocialCortex
@@ -163,6 +164,75 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(state.current_region.id, "r7")
         self.assertEqual(state.visible_monsters[0].kind, "monster")
         self.assertEqual(state.visible_items[0]["id"], "dagger-1")
+
+    def test_parser_unwraps_visible_items_and_filters_remote_pickups(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "ep": 5},
+                    "currentRegion": {"id": "r1"},
+                    "visibleItems": [
+                        {"regionId": "r1", "item": {"id": "local", "typeId": "katana"}},
+                        {"regionId": "r2", "item": {"id": "remote", "typeId": "sniper"}},
+                    ],
+                }
+            }
+        )
+
+        self.assertEqual([item["id"] for item in state.visible_items], ["local", "remote"])
+        self.assertEqual([item["id"] for item in state.local_ground_items()], ["local"])
+
+    def test_quest_rush_prioritizes_safe_ruin_exploration(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5},
+                    "currentRegion": {"id": "ruin-1", "name": "Old Vault", "terrain": "Ruin"},
+                    "aliveCount": 40,
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertTrue(any(result.intent == "quest_discover_ruin" for result in results))
+        self.assertTrue(any(result.action and result.action["type"] == "explore" for result in results))
+
+    def test_quest_rush_targets_safe_guardian_progress(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5, "atk": 40},
+                    "currentRegion": {"id": "r1"},
+                    "visibleMonsters": [
+                        {"id": "guardian-1", "name": "Guardian", "hp": 25, "atk": 8, "regionId": "r1"}
+                    ],
+                    "aliveCount": 35,
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+        guardian = next(result for result in results if result.intent == "quest_guardian_kill")
+
+        self.assertEqual(guardian.action["type"], "attack")
+        self.assertEqual(guardian.action["targetId"], "guardian-1")
+
+    def test_quest_rush_banks_ep_near_top_ten(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 2},
+                    "currentRegion": {"id": "r1"},
+                    "aliveCount": 10,
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+        reserve = next(result for result in results if result.intent == "quest_top10_reserve")
+
+        self.assertEqual(reserve.action["type"], "rest")
 
     def test_tick_survives_non_dict_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

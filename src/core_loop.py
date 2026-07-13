@@ -36,6 +36,7 @@ from memory_system import CompactMemoryStore
 from memory_cortex import MemoryCortex
 from owner_command_cortex import OwnerCommandCortex, action_response_for_owner_command, latest_directive
 from progression_cortex import ProgressionCortex
+from quest_rush_cortex import QuestRushCortex
 from runtime_state import owner_messages as load_owner_messages
 from runtime_state import append_hellion_owner_response, last_hellion_response_for_command
 from runtime_state import append_social_event
@@ -603,6 +604,7 @@ def cerberus_tick(
             FreeActionCortex(),
             UtilityCortex(),
             ProgressionCortex(),
+            QuestRushCortex(),
             CombatCortex(),
             EconomyCortex(),
             SocialCortex(dossier_store=dossiers),
