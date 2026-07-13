@@ -345,6 +345,7 @@ def snapshot_summary(snapshot: dict[str, Any] | None) -> dict[str, Any]:
         "visible_agents": len(state.visible_agents),
         "visible_monsters": len(state.visible_monsters),
         "visible_items": len(state.visible_items) + len(state.current_region.items),
+        "alive_count": state.alive_count,
         "inventory_count": len(state.inventory),
         "alert_gauge": state.alert_gauge,
         "can_act": state.can_take_main_action,

@@ -218,11 +218,11 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(guardian.action["type"], "attack")
         self.assertEqual(guardian.action["targetId"], "guardian-1")
 
-    def test_quest_rush_banks_ep_near_top_ten(self) -> None:
+    def test_quest_rush_banks_survival_near_top_ten_even_with_full_ep(self) -> None:
         state = TurnState.from_snapshot(
             {
                 "view": {
-                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 2},
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5},
                     "currentRegion": {"id": "r1"},
                     "aliveCount": 10,
                 }
@@ -233,6 +233,132 @@ class HardeningTests(unittest.TestCase):
         reserve = next(result for result in results if result.intent == "quest_top10_reserve")
 
         self.assertEqual(reserve.action["type"], "rest")
+
+    def test_quest_rush_does_not_rest_early_at_alive_twelve(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 2},
+                    "currentRegion": {"id": "r1"},
+                    "aliveCount": 12,
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.intent == "quest_top10_reserve" for result in results))
+
+    def test_quest_rush_stops_completed_or_enemy_occupied_ruin(self) -> None:
+        for ruin_event in (
+            {"ruinId": "ru-1", "gauge": 3, "maxGauge": 3},
+            {"ruinId": "ru-1", "gauge": 1, "maxGauge": 3, "occupiedBy": "enemy"},
+            {"ruinId": "ru-1", "gauge": 0, "maxGauge": 3, "isEmpty": True},
+        ):
+            with self.subTest(ruin_event=ruin_event):
+                state = TurnState.from_snapshot(
+                    {
+                        "view": {
+                            "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5},
+                            "currentRegion": {"id": "r1", "terrain": "Ruin"},
+                        },
+                        "events": [{"type": "ruin_state_changed", "data": ruin_event}],
+                    }
+                )
+
+                results = QuestRushCortex().evaluate(state, {})
+
+                self.assertFalse(any(result.intent == "quest_discover_ruin" for result in results))
+
+    def test_quest_rush_stops_ruin_before_alert_threshold(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5},
+                    "currentRegion": {"id": "r1", "terrain": "Ruin"},
+                    "alertGauge": 7,
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.intent == "quest_discover_ruin" for result in results))
+
+    def test_quest_rush_rejects_long_or_dangerous_guardian_fight(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {
+                        "id": "me", "hp": 80, "maxHp": 100, "ep": 5,
+                        "atk": 10, "def": 5, "equippedWeapon": {"typeId": "fist"},
+                    },
+                    "currentRegion": {"id": "r1"},
+                    "visibleMonsters": [
+                        {"id": "guardian-1", "name": "Guardian", "hp": 100, "atk": 25, "def": 10}
+                    ],
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.intent == "quest_guardian_kill" for result in results))
+
+    def test_quest_rush_keeps_one_ep_after_guardian_engagement(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 1, "atk": 100},
+                    "currentRegion": {"id": "r1"},
+                    "visibleMonsters": [
+                        {"id": "guardian-1", "name": "Guardian", "hp": 10, "atk": 5, "regionId": "r1"}
+                    ],
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.intent == "quest_guardian_kill" for result in results))
+
+    def test_quest_rush_collects_generic_local_item_with_slot_reserve(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "canAct": False,
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5, "inventory": []},
+                    "currentRegion": {"id": "r1"},
+                    "visibleItems": [
+                        {"regionId": "r1", "item": {"id": "map-1", "typeId": "map"}},
+                        {"regionId": "r2", "item": {"id": "food-1", "typeId": "food"}},
+                    ],
+                },
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+        pickup = next(result for result in results if result.intent == "quest_item_pickup")
+
+        self.assertEqual(pickup.action["itemId"], "map-1")
+
+    def test_quest_rush_takes_free_item_before_exploration_rotation(self) -> None:
+        plan = make_plan(
+            state={
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5, "inventory": []},
+                    "currentRegion": {
+                        "id": "r1",
+                        "connections": [{"id": "r2", "terrain": "Plains"}],
+                        "items": [{"id": "map-1", "typeId": "map"}],
+                    },
+                }
+            },
+            cortexes=[QuestRushCortex()],
+        )
+
+        self.assertEqual(plan["action"]["type"], "pickup")
+        self.assertEqual(plan["action"]["itemId"], "map-1")
 
     def test_tick_survives_non_dict_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
