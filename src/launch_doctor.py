@@ -33,18 +33,17 @@ def launch_report() -> dict:
     if dotenv_issues:
         blockers.append(f"malformed .env lines: {', '.join(str(item.get('line')) for item in dotenv_issues[:5])}")
     env = checks.get("env", {})
-    for key in (
-        "CERBERUS_PIN",
-        "CLAW_ROYALE_API_KEY",
-        "CLAW_ROYALE_ERC8004_ID",
-        "CERBERUS_AGENT_EOA_PRIVATE_KEY",
-        "CERBERUS_AGENT_EOA_ADDRESS",
-    ):
+    for key in ("CERBERUS_PIN", "CLAW_ROYALE_API_KEY"):
         if env.get(key) is False:
             blockers.append(f"missing {key}")
+    paid_mode = str(env.get("CLAW_ROYALE_GAME_MODE") or "").lower() in {"paid", "offchain", "onchain"}
+    if paid_mode and env.get("CERBERUS_AGENT_EOA_PRIVATE_KEY") is False:
+        blockers.append("missing CERBERUS_AGENT_EOA_PRIVATE_KEY for paid-game signing")
     if not checks.get("memory_writable"):
         blockers.append(f"memory disk not writable: {checks.get('memory_error', '')}")
-    if not stored_game_id() and not runtime.get("current_game_id"):
+    state = str(runtime.get("state") or "").lower()
+    current_game_id = runtime.get("current_game_id") or stored_game_id()
+    if not current_game_id and state in {"playing", "agent_view", "turn_advanced", "action_result"}:
         blockers.append("no active game id heartbeat")
     if runtime.get("state") in {"blocked", "reconnecting", "stale_game_leave_failed"}:
         blockers.append(f"runtime {runtime.get('state')}: {runtime.get('last_error', '')}")
@@ -65,7 +64,7 @@ def launch_report() -> dict:
         "runtime": {
             "state": runtime.get("state", "unknown"),
             "mode": runtime.get("mode", "unknown"),
-            "current_game_id": runtime.get("current_game_id") or stored_game_id(),
+            "current_game_id": current_game_id,
             "last_error": runtime.get("last_error", ""),
             "paid_ready": paid_ready,
             "balance": account.get("balance", ""),

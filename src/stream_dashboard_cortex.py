@@ -71,7 +71,7 @@ def stream_mood(runtime: dict[str, Any]) -> str:
 
 def stream_status_line(runtime: dict[str, Any], game_id: str) -> str:
     state = str(runtime.get("state") or "idle")
-    if game_id:
+    if game_id and state in {"playing", "agent_view", "turn_advanced", "action_result", "can_act_changed"}:
         return f"Live game {game_id}"
     if state == "blocked":
         return "Launch check blocked"
@@ -144,7 +144,7 @@ class StreamDashboardCortex:
         state = str(runtime.get("state") or "")
         if state == "signed_paid_join":
             alerts.append({"kind": "entry", "text": "Hellion signed the paid-room entry"})
-        if state in {"joined", "playing"}:
+        if state == "playing" or (state in {"agent_view", "turn_advanced"} and runtime.get("current_game_id")):
             alerts.append({"kind": "live", "text": "Hellion is in the arena"})
         if runtime.get("tx_hash"):
             alerts.append({"kind": "chain", "text": "Entry transaction submitted"})

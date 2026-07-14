@@ -41,6 +41,7 @@ import secret_env_admin
 import external_wisdom
 import lesson_compiler
 import memory_system
+import mongo_memory
 import profit_simulator
 import owner_command_cortex
 import social_runtime
@@ -788,11 +789,98 @@ class HardeningTests(unittest.TestCase):
             )
 
             rows = longterm.top(kind="turn", scope="claw_royale", limit=5)
+            self.assertEqual(action["type"], "pickup")
+            self.assertTrue(rows)
+            self.assertEqual(len(rows), 1)
+            self.assertIn("action=pickup", rows[0]["text"])
+            self.assertNotIn("private", rows[0]["text"].lower())
 
-        self.assertEqual(action["type"], "pickup")
-        self.assertEqual(len(rows), 1)
-        self.assertIn("action=pickup", rows[0]["text"])
-        self.assertNotIn("private", rows[0]["text"].lower())
+    def test_mongo_memory_store_writes_compact_items(self) -> None:
+        class FakeCursor(list):
+            def sort(self, _fields):  # type: ignore[no-untyped-def]
+                return self
+
+            def limit(self, count):  # type: ignore[no-untyped-def]
+                return FakeCursor(self[:count])
+
+        class FakeCollection:
+            name = "hellion_memory_items"
+
+            def __init__(self):  # type: ignore[no-untyped-def]
+                self.rows = {}
+                self.indexes = []
+
+            def create_index(self, fields, **kwargs):  # type: ignore[no-untyped-def]
+                self.indexes.append((fields, kwargs))
+
+            def update_one(self, query, update, upsert=False):  # type: ignore[no-untyped-def]
+                row = dict(update["$setOnInsert"])
+                row.update(update["$set"])
+                row["hits"] = update["$inc"]["hits"]
+                self.rows[query["source_hash"]] = row
+
+            def find(self, query):  # type: ignore[no-untyped-def]
+                rows = []
+                for row in self.rows.values():
+                    if all(row.get(key) == value for key, value in query.items()):
+                        rows.append(row)
+                return FakeCursor(rows)
+
+            def count_documents(self, query):  # type: ignore[no-untyped-def]
+                return len(list(self.find(query)))
+
+        class FakeDatabase(dict):
+            def __getitem__(self, name):  # type: ignore[no-untyped-def]
+                if name not in self:
+                    self[name] = FakeCollection()
+                return dict.__getitem__(self, name)
+
+        class FakeClient(dict):
+            def __getitem__(self, name):  # type: ignore[no-untyped-def]
+                if name not in self:
+                    self[name] = FakeDatabase()
+                return dict.__getitem__(self, name)
+
+        store = mongo_memory.MongoLongTermMemoryStore(client=FakeClient(), database="cerberus")
+        item_id = store.remember(
+            kind="turn",
+            scope="claw_royale",
+            key="move:ruin",
+            text="turn action=move; private_key=should be compacted before here",
+            confidence=0.8,
+            importance=55,
+        )
+
+        rows = store.top(kind="turn", scope="claw_royale", limit=1)
+        self.assertEqual(rows[0]["id"], item_id)
+        self.assertEqual(store.stats()["backend"], "mongo")
+
+    def test_stats_does_not_treat_stale_stored_game_id_as_live(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.remember_game_id("stale-game")
+                runtime_state.update_claw_runtime_status(state="connected", current_game_id="", game_status="")
+                payload = render_app.stats()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(payload["current_game_id"], "")
+        self.assertEqual(payload["spectate_url"], "")
+
+    def test_stream_dashboard_does_not_call_joined_without_game_live(self) -> None:
+        cortex = stream_dashboard_cortex.StreamDashboardCortex(
+            spectate_base_url="https://www.clawroyale.ai/games/spect"
+        )
+        state = cortex.public_state(runtime={"state": "joined"}, current_game_id="")
+
+        self.assertFalse(state["ok"])
+        self.assertEqual(state["status"], "Paid-room entry in progress")
+        self.assertFalse(any(alert["kind"] == "live" for alert in state["stream"]["alerts"]))
 
     def test_tick_learns_from_success_failure_and_other_agent_outcomes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5528,7 +5616,8 @@ class HardeningTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 os.environ["CERBERUS_MEMORY_DIR"] = tmp
                 runtime_state.remember_game_id('game-live-7" onload="alert(1)')
-                active = render_app.active_runtime_game_id({})
+                stale_active = render_app.active_runtime_game_id({})
+                live_active = render_app.active_runtime_game_id({"state": "playing"})
                 query = render_app.query_game_id("gameId=game-live-8%22%20onload%3D%22alert(1)")
                 spectate = render_app.spectate_url('game-live-9" onload="alert(1)')
         finally:
@@ -5537,7 +5626,8 @@ class HardeningTests(unittest.TestCase):
             else:
                 os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
 
-        self.assertEqual(active, "game-live-7onloadalert1")
+        self.assertEqual(stale_active, "")
+        self.assertEqual(live_active, "game-live-7onloadalert1")
         self.assertEqual(query, "game-live-8onloadalert1")
         self.assertTrue(spectate.endswith("/game-live-9onloadalert1"))
 
@@ -5969,3 +6059,4 @@ class HardeningTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

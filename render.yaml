@@ -15,6 +15,14 @@ services:
         value: 10000
       - key: CERBERUS_MEMORY_DIR
         value: /var/data/.cerberus
+      - key: CERBERUS_MEMORY_BACKEND
+        value: mongo
+      - key: MONGODB_DATABASE
+        value: cerberus
+      - key: CERBERUS_MONGO_COLLECTION_PREFIX
+        value: hellion
+      - key: MONGODB_URI
+        sync: false
       - key: CLAW_ROYALE_LIVE_FEED_URL
         value: https://www.clawroyale.ai/games
       - key: CLAW_ROYALE_SPECTATE_BASE_URL

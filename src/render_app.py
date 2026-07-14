@@ -35,6 +35,7 @@ from claw_runtime import public_action_thought, run_forever as run_claw_runtime 
 from env_loader import hydrate_env  # noqa: E402
 from game_map import build_live_map  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
+from mongo_memory import configured_longterm_memory_store, mongo_backend_enabled  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now  # noqa: E402
 from owner_command_cortex import acknowledge_owner_command, command_categories, directive_text  # noqa: E402
 from profit_simulator import simulate as profit_simulate  # noqa: E402
@@ -103,6 +104,10 @@ def readiness() -> dict[str, Any]:
             "TWITCH_USERNAME",
             "HELLION_TWITCH_USERNAME",
             "TWITCH_ACCOUNT_CREATED",
+            "CERBERUS_MEMORY_BACKEND",
+            "MONGODB_URI",
+            "MONGODB_DATABASE",
+            "CERBERUS_MONGO_COLLECTION_PREFIX",
         )
     )
     memory_dir = Path(os.getenv("CERBERUS_MEMORY_DIR") or DEFAULT_MEMORY_DIR)
@@ -129,6 +134,10 @@ def readiness() -> dict[str, Any]:
         "X_REDIRECT_URI": bool(os.getenv("X_REDIRECT_URI")),
         "TWITCH_USERNAME": bool(os.getenv("TWITCH_USERNAME") or os.getenv("HELLION_TWITCH_USERNAME")),
         "TWITCH_ACCOUNT_CREATED": os.getenv("TWITCH_ACCOUNT_CREATED", "").strip().lower() in {"1", "true", "yes", "created", "linked"},
+        "CERBERUS_MEMORY_BACKEND": os.getenv("CERBERUS_MEMORY_BACKEND", "sqlite").strip().lower() or "sqlite",
+        "MONGODB_URI": bool(os.getenv("MONGODB_URI") or os.getenv("CERBERUS_MONGODB_URI")),
+        "MONGODB_DATABASE": bool(os.getenv("MONGODB_DATABASE") or os.getenv("CERBERUS_MONGO_DATABASE") or os.getenv("CERBERUS_MONGODB_DATABASE")),
+        "CERBERUS_MONGO_COLLECTION_PREFIX": bool(os.getenv("CERBERUS_MONGO_COLLECTION_PREFIX") or os.getenv("CERBERUS_MONGODB_COLLECTION_PREFIX")),
     }
     checks: dict[str, Any] = {
         "ok": True,
@@ -143,7 +152,11 @@ def readiness() -> dict[str, Any]:
         probe.write_text("ok", encoding="utf-8")
         probe.unlink(missing_ok=True)
         checks["memory_writable"] = True
-        checks["longterm_memory"] = LongTermMemoryStore().stats()
+        store = configured_longterm_memory_store() if mongo_backend_enabled() else LongTermMemoryStore()
+        checks["longterm_memory"] = store.stats()
+        if mongo_backend_enabled() and checks["longterm_memory"].get("fallback_active"):
+            checks["ok"] = False
+            checks["longterm_memory_error"] = checks["longterm_memory"].get("mongo_error", "mongo fallback active")
     except OSError as exc:
         checks["ok"] = False
         checks["memory_writable"] = False
@@ -197,14 +210,23 @@ def remember_current_game(state: dict[str, Any]) -> None:
 
 
 def active_runtime_game_id(runtime_status: dict[str, Any]) -> str:
-    stored = safe_game_id(runtime_stored_game_id())
-    if stored:
-        return stored
+    state = str(runtime_status.get("state") or "").lower()
+    status = str(runtime_status.get("game_status") or "").lower()
+    frame_type = str(runtime_status.get("last_frame_type") or "").lower()
+    trusted_live_state = (
+        state in {"playing", "agent_view", "turn_advanced", "action_result", "can_act_changed"}
+        or status in {"running", "active", "started", "in_progress"}
+        or frame_type in {"agent_view", "turn_advanced"}
+    )
     current = safe_game_id(str(runtime_status.get("current_game_id") or ""))
-    if current:
+    if current and trusted_live_state:
         return current
     snapshot = runtime_status.get("last_snapshot") if isinstance(runtime_status.get("last_snapshot"), dict) else {}
-    return safe_game_id(str(snapshot.get("game_id") or ""))
+    snapshot_id = safe_game_id(str(snapshot.get("game_id") or ""))
+    if snapshot_id and trusted_live_state:
+        return snapshot_id
+    stored = safe_game_id(runtime_stored_game_id())
+    return stored if trusted_live_state else ""
 
 
 def runtime_public_thought(runtime_status: dict[str, Any]) -> str:
@@ -315,10 +337,11 @@ def runtimeBlockers_server(ready: dict[str, Any], runtime: dict[str, Any]) -> li
     if not ready.get("ok", False):
         blockers.append("service readiness failed")
     env = ready.get("env", {}) if isinstance(ready.get("env"), dict) else {}
-    for key in ("CERBERUS_PIN", "CLAW_ROYALE_API_KEY", "CLAW_ROYALE_ERC8004_ID"):
+    for key in ("CERBERUS_PIN", "CLAW_ROYALE_API_KEY"):
         if env.get(key) is False:
             blockers.append(f"missing {key}")
-    if env.get("CERBERUS_AGENT_EOA_PRIVATE_KEY") is False:
+    paid_mode = str(env.get("CLAW_ROYALE_GAME_MODE") or "").lower() in {"paid", "offchain", "onchain"}
+    if paid_mode and env.get("CERBERUS_AGENT_EOA_PRIVATE_KEY") is False:
         blockers.append("missing CERBERUS_AGENT_EOA_PRIVATE_KEY for paid-game signing")
     if env.get("CLAW_ROYALE_RUNTIME_ENABLED") is False:
         blockers.append("missing CLAW_ROYALE_RUNTIME_ENABLED=true")
@@ -765,10 +788,11 @@ def dashboard_html(query: str = "") -> bytes:
       if (data.memory_writable === false) blockers.push("memory directory is not writable: " + (data.memory_error || data.memory_dir || "unknown"));
       if (data.longterm_memory_error) blockers.push("long-term memory error: " + data.longterm_memory_error);
       const env = data.env || {{}};
-      ["CERBERUS_PIN", "CLAW_ROYALE_API_KEY", "CLAW_ROYALE_ERC8004_ID"].forEach((key) => {{
+      ["CERBERUS_PIN", "CLAW_ROYALE_API_KEY"].forEach((key) => {{
         if (env[key] === false) blockers.push("missing " + key);
       }});
-      if (env.CERBERUS_AGENT_EOA_PRIVATE_KEY === false) blockers.push("missing CERBERUS_AGENT_EOA_PRIVATE_KEY for paid-game signing");
+      const paidMode = ["paid", "offchain", "onchain"].includes(String(env.CLAW_ROYALE_GAME_MODE || "").toLowerCase());
+      if (paidMode && env.CERBERUS_AGENT_EOA_PRIVATE_KEY === false) blockers.push("missing CERBERUS_AGENT_EOA_PRIVATE_KEY for paid-game signing");
       const runtime = data.claw_runtime || {{}};
       if (env.CLAW_ROYALE_RUNTIME_ENABLED === false) blockers.push("missing CLAW_ROYALE_RUNTIME_ENABLED=true");
       if (runtime.version_reconciled) blockers.push("claw version updated from " + runtime.configured_version + " to " + runtime.live_version);

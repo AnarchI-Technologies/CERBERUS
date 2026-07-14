@@ -34,6 +34,7 @@ from learned_policy_cortex import LearnedPolicyCortex
 from longterm_memory import LongTermMemoryStore
 from memory_system import CompactMemoryStore
 from memory_cortex import MemoryCortex
+from mongo_memory import configured_longterm_memory_store
 from owner_command_cortex import OwnerCommandCortex, action_response_for_owner_command, latest_directive
 from progression_cortex import ProgressionCortex
 from quest_rush_cortex import QuestRushCortex
@@ -565,7 +566,7 @@ def cerberus_tick(
     dossiers = dossier_store or AgentDossierStore().load()
     longterm = longterm_store
     if longterm is None and memory_store is None and dossier_store is None:
-        longterm = LongTermMemoryStore()
+        longterm = configured_longterm_memory_store()
     owner_directives = owner_command_messages
     if owner_directives is None and memory_store is None and dossier_store is None:
         owner_directives = load_owner_messages()
