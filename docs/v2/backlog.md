@@ -29,6 +29,14 @@
 - [ ] Require semantic evaluation, not merely schema validity, before model
   promotion.
 
+## Phase 2 — memory and retrieval boundary
+
+- [x] Add classified memory admission with provenance, retention, secret, and
+  prompt-injection checks.
+- [ ] Route one existing knowledge write through admission in shadow mode.
+- [ ] Add local embedding retrieval with source IDs and freshness.
+- [ ] Define retention compaction and deletion tests per memory class.
+
 ## Production proof
 
 - [x] Define the 72-hour evaluation protocol and metrics.
