@@ -17,12 +17,19 @@ credentials and performs no game action.
 6. Restart production only after equivalence checks pass.
 7. Record the deployed commit in the operator handoff.
 
+The local operator node can build a secret-free immutable release with
+`build-release.sh REPOSITORY GIT_REF`. After the release passes an isolated
+loopback smoke test, `activate-release.sh FULL_COMMIT` atomically changes
+`/opt/cerberus-current` and restarts production. Releases contain tracked Git
+content only; `.env`, runtime memory, wallet identities, and credentials remain
+outside the release.
+
 ## Rollback
 
-Prefer a new Git revert commit for a published change. For an unpublished local
-branch, switch to the last recorded known-good commit only after confirming the
-working tree is clean. Restart `cerberus.service`, verify `/healthz`, and confirm
-runtime status freshness within five minutes. Do not delete or replace
+Prefer a new Git revert commit for a published change. On the local operator
+node, activate an already-tested prior release commit; do not check out or
+rewrite the shared working tree. Verify `/healthz` and confirm runtime status
+freshness within five minutes. Do not delete or replace
 `/var/data/.cerberus`, `.env`, wallet identities, API keys, or signing material.
 
 If rollback cannot restore health, stop the production service while leaving
