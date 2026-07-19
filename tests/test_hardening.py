@@ -4262,6 +4262,7 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(plan["loadout"]["complete_full_set"])
         self.assertEqual(plan["loadout"]["chosen"]["sub_pack"]["id"], "sub-pack-1")
         self.assertEqual(plan["reforge"][0]["relicInstanceId"], "blue-1")
+        self.assertEqual(plan["reforge"][0]["recommendedItemKey"], "reforge_effect_add")
         self.assertTrue(any(item["item"] == "reforge_stone_bundle" for item in plan["shop"]))
         self.assertEqual(plan["execution_order"], ["shop", "reforge", "loadout"])
         self.assertTrue(plan["ready_for_paid"])

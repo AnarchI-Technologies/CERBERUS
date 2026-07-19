@@ -324,7 +324,9 @@ def reforge_candidates(relics_payload: Any, *, max_items: int = 3) -> list[dict[
                     "score": score,
                     "negative_affixes": len(negatives),
                     "missing_affixes": missing,
-                    "recommendedItemKey": "effect_add" if missing else "effect_reroll",
+                    # The reforge route accepts inventory material item keys,
+                    # not the shorter outcome names returned after a reforge.
+                    "recommendedItemKey": "reforge_effect_add" if missing else "reforge_effect_reroll",
                 }
             )
     return sorted(rows, key=lambda item: (item["negative_affixes"], item["missing_affixes"], -item["score"]), reverse=True)[:max_items]

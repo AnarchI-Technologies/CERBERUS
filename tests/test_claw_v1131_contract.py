@@ -136,6 +136,31 @@ def test_marketplace_listed_items_are_never_selected_or_reforged() -> None:
     assert all(item.get("relicInstanceId") != "listed" for item in plan["reforge"])
 
 
+def test_reforge_candidates_use_official_material_item_keys() -> None:
+    plan = build_prejoin_plan(
+        loadout={},
+        packs=[],
+        relics=[
+            {"instanceId": "missing", "typeIndex": 0, "affixes": []},
+            {
+                "instanceId": "negative",
+                "typeIndex": 1,
+                "affixes": [
+                    {"stat": "HP", "value": -1},
+                    {"stat": "ATK", "value": 1},
+                    {"stat": "EP", "value": 1},
+                ],
+            },
+        ],
+    )
+
+    keys = {item["relicInstanceId"]: item["recommendedItemKey"] for item in plan["reforge"]}
+    assert keys == {
+        "missing": "reforge_effect_add",
+        "negative": "reforge_effect_reroll",
+    }
+
+
 def test_sub_pack_execution_uses_dedicated_official_route() -> None:
     calls = []
 
