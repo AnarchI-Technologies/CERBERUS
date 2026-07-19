@@ -3949,6 +3949,7 @@ class HardeningTests(unittest.TestCase):
     def test_optional_x_auth_email_failure_does_not_abort_authorization(self) -> None:
         old_env_config = x_oauth.env_config
         old_save_latest_auth_url = x_oauth.save_latest_auth_url
+        old_save_oauth_session = x_oauth.save_oauth_session
         old_send_authorization_email = x_oauth.send_authorization_email
         old_open = x_oauth.webbrowser.open
         old_wait_for_callback = x_oauth.wait_for_callback
@@ -3962,6 +3963,7 @@ class HardeningTests(unittest.TestCase):
                 "redirect_uri": "http://127.0.0.1:8765/x/callback",
             }
             x_oauth.save_latest_auth_url = lambda url: Path("x_auth_url.txt")  # type: ignore[assignment]
+            x_oauth.save_oauth_session = lambda **kwargs: Path("x_oauth_session.json")  # type: ignore[assignment]
             x_oauth.send_authorization_email = (  # type: ignore[assignment]
                 lambda url, to_email="": (_ for _ in ()).throw(RuntimeError("smtp down"))
             )
@@ -3978,6 +3980,7 @@ class HardeningTests(unittest.TestCase):
         finally:
             x_oauth.env_config = old_env_config
             x_oauth.save_latest_auth_url = old_save_latest_auth_url
+            x_oauth.save_oauth_session = old_save_oauth_session
             x_oauth.send_authorization_email = old_send_authorization_email
             x_oauth.webbrowser.open = old_open
             x_oauth.wait_for_callback = old_wait_for_callback
