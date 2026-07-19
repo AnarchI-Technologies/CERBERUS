@@ -23,3 +23,8 @@ The local operator node also runs `cerberus-claw-knowledge-sync.timer` every six
 hours. Its runtime copy is stored outside Git at
 `/var/data/.cerberus/claw_royale_canonical_snapshot.md`; only a reviewed manual
 sync is promoted into the tracked `data/` snapshot.
+
+Windows also runs `update-official-knowledge.ps1` every six hours. It rebuilds
+the provenance-bound local embedding index beside Windows Ollama because WSL
+cannot reach Ollama's loopback listener. The task reads no production `.env`,
+uses only hard-coded official sources, and leaves all retrieved text advisory.
