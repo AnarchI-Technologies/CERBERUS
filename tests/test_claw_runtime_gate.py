@@ -168,6 +168,21 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
 
         self.assertTrue(claw_runtime.has_free_action_window(claw_runtime.TurnState.from_snapshot(snapshot)))
 
+    def test_dead_agent_never_gets_main_or_free_action_window(self) -> None:
+        snapshot = {
+            "gameId": "game-1",
+            "status": "running",
+            "canAct": True,
+            "view": {
+                "self": {"id": "me", "hp": 0, "ep": 10, "isAlive": False},
+                "currentRegion": {"id": "r1", "items": [{"id": "blade-1", "typeId": "sniper"}]},
+            },
+        }
+        state = claw_runtime.TurnState.from_snapshot(snapshot)
+
+        self.assertFalse(claw_runtime.wants_action(snapshot, snapshot, gameplay_ready=True))
+        self.assertFalse(claw_runtime.has_free_action_window(state))
+
     def test_action_signature_is_turn_bound_and_reason_insensitive(self) -> None:
         first = claw_runtime.action_signature({"type": "move", "regionId": "r2", "reason": "one"}, turn=7)
         second = claw_runtime.action_signature({"type": "move", "regionId": "r2", "reason": "two"}, turn=7)

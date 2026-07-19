@@ -877,6 +877,8 @@ def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None, *, ga
         state = TurnState.from_snapshot(snapshot)
         if not has_usable_turn_facts(state):
             return False
+        if not state.self.is_alive or state.self.hp <= 0:
+            return False
         if not state.can_take_main_action:
             return False
     if frame_type in {"agent_view", "turn_advanced"}:
@@ -891,6 +893,8 @@ def has_free_action_window(state: TurnState | None) -> bool:
     if not isinstance(state, TurnState):
         return False
     try:
+        if not state.self.is_alive or state.self.hp <= 0:
+            return False
         if not state.has_broadcast_channel and not state.visible_items and not state.current_region.items and not state.inventory:
             return False
         return bool(FreeActionCortex().evaluate(state, {}))
