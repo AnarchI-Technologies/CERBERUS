@@ -64,6 +64,17 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(claw_runtime.websocket_paths(), ["/ws/join", "/ws/agent"])
 
+    def test_server_cooldown_truth_closes_stale_snapshot_action_window(self) -> None:
+        state = claw_runtime.TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {"self": {"id": "me", "hp": 100, "ep": 4}, "currentRegion": {"id": "r1"}},
+            }
+        )
+        self.assertTrue(claw_runtime.server_action_window_open(state, None))
+        self.assertTrue(claw_runtime.server_action_window_open(state, True))
+        self.assertFalse(claw_runtime.server_action_window_open(state, False))
+
     def test_agent_view_waiting_status_does_not_act(self) -> None:
         payload = {
             "type": "agent_view",
