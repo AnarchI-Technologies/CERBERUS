@@ -152,6 +152,18 @@ class ClawRoyaleClient:
     def waiting_games(self, *, timeout: float = 5.0) -> dict[str, Any]:
         return self._request("GET", "/games", params={"status": "waiting"}, timeout=timeout)
 
+    def game_state(self, game_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/games/{quote(str(game_id).strip(), safe='')}/state", timeout=10)
+
+    def redeem(self, code: str, idempotency_key: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/redeem",
+            headers={"Idempotency-Key": str(idempotency_key).strip()[:80]},
+            json={"code": str(code).strip()[:64]},
+            timeout=10,
+        )
+
     def preseason1_quests(self) -> dict[str, Any]:
         return self._request("GET", "/preseason1/quests", timeout=10)
 

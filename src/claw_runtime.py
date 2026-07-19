@@ -19,7 +19,7 @@ import websockets
 
 from autonomy_suggestions import record_autonomy_observation
 from action_postmortem import build_action_postmortem
-from claw_contract import COOLDOWN_ACTIONS, FREE_ACTIONS, JOIN_DECISIONS, THOUGHT_MAX_CHARS
+from claw_contract import COOLDOWN_ACTIONS, FREE_ACTIONS, JOIN_DECISIONS, PAID_WINNER_FIELDS, THOUGHT_MAX_CHARS
 from claw_policy_shadow import ENFORCED_FREE_ACTIONS, authorize_free_action_execution
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
@@ -58,6 +58,7 @@ DEFAULT_MAX_RECONNECT_SECONDS = 90
 DEFAULT_ROUTE_PROBE_SECONDS = 15
 DEFAULT_PAID_RETRY_COOLDOWN_SECONDS = 600
 DEFAULT_PRESEASON1_CLAIM_INTERVAL_SECONDS = 60
+WEB_SESSION_BACKOFF_SECONDS = 60
 BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 JOIN_PATH = "/ws/join"
 AGENT_PATH = "/ws/agent"
@@ -220,6 +221,48 @@ def extract_game_id(payload: Any) -> str:
         view.get("gameId") if isinstance(view, dict) else "",
     ]
     return next((str(item) for item in candidates if item), "")
+
+
+def paid_room_winners(payload: Any) -> list[dict[str, Any]]:
+    """Return only display-safe v1.13.1 paid-room winner fields."""
+    if not isinstance(payload, dict):
+        return []
+    containers = [payload]
+    for key in ("data", "room", "state"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            containers.append(value)
+            room = value.get("room")
+            if isinstance(room, dict):
+                containers.append(room)
+    winners = next((item.get("winners") for item in containers if isinstance(item.get("winners"), list)), [])
+    return [
+        {key: row.get(key) for key in PAID_WINNER_FIELDS if key in row}
+        for row in winners[:5]
+        if isinstance(row, dict)
+    ]
+
+
+def record_paid_room_winners(
+    config: ClawRuntimeConfig, game_id: str, payload: Any | None = None
+) -> list[dict[str, Any]]:
+    winners = paid_room_winners(payload)
+    source = "game_ended"
+    if not winners and game_id:
+        try:
+            winners = paid_room_winners(
+                ClawRoyaleClient(api_key=config.api_key, base_url=config.base_url).game_state(game_id)
+            )
+            source = "finished_game_state"
+        except Exception:
+            winners = []
+    if winners:
+        update_status(
+            paid_room_winners=winners,
+            paid_room_winner_unit="Moltz",
+            paid_room_winner_source=source,
+        )
+    return winners
 
 
 def frame_value(payload: dict[str, Any], key: str) -> Any:
@@ -994,6 +1037,8 @@ def websocket_url(config: ClawRuntimeConfig, path: str) -> str:
 
 def reconnect_delay_seconds(config: ClawRuntimeConfig, reconnects: int, error: Exception) -> int:
     message = str(error).lower()
+    if web_session_controls_agent(error):
+        return max(WEB_SESSION_BACKOFF_SECONDS, config.min_reconnect_seconds)
     if "http 404" in message or "not found" in message:
         raw = os.getenv("CLAW_ROYALE_ROUTE_PROBE_SECONDS", str(DEFAULT_ROUTE_PROBE_SECONDS))
         try:
@@ -1001,6 +1046,21 @@ def reconnect_delay_seconds(config: ClawRuntimeConfig, reconnects: int, error: E
         except ValueError:
             return DEFAULT_ROUTE_PROBE_SECONDS
     return min(config.max_reconnect_seconds, config.min_reconnect_seconds * reconnects)
+
+
+def websocket_close_code(error: Exception) -> int | None:
+    for candidate in (getattr(error, "code", None), getattr(getattr(error, "rcvd", None), "code", None)):
+        try:
+            if candidate is not None:
+                return int(candidate)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def web_session_controls_agent(error: Exception) -> bool:
+    message = str(error).lower()
+    return websocket_close_code(error) == 4030 or "web session active" in message or "4030" in message
 
 
 def account_status_summary(config: ClawRuntimeConfig) -> dict[str, Any]:
@@ -1429,6 +1489,9 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             if not isinstance(payload, dict):
                 continue
             frame_type = str(payload.get("type") or payload.get("event") or payload.get("op") or "message")
+            winners = paid_room_winners(payload) if frame_type == "game_ended" else []
+            if winners:
+                update_status(paid_room_winners=winners, paid_room_winner_unit="Moltz")
             if frame_type in {"ping"}:
                 await ws.send(json.dumps({"type": "pong"}))
                 continue
@@ -1499,6 +1562,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                     record_action_result_learning(payload, status=action_status)
                 if is_terminal_game_error(error_text):
                     terminal_id = str(action_status.get("current_game_id") or stored_game_id() or "")
+                    record_paid_room_winners(config, terminal_id, payload)
                     clear_game_id()
                     update_status(postgame_maintenance_pending=True)
                     record_account_balance(config, stage="game_ended")
@@ -1574,6 +1638,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 gameplay_ready = False
             elif is_terminal_game_error(str(payload.get("message") or payload.get("error") or status)):
                 terminal_id = game_id or str(terminal_status.get("current_game_id") or stored_game_id() or "")
+                record_paid_room_winners(config, terminal_id, payload)
                 clear_game_id()
                 update_status(postgame_maintenance_pending=True)
                 record_account_balance(config, stage="game_ended")
@@ -1601,6 +1666,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             state = TurnState.from_snapshot(snapshot) if snapshot else None
             if agent_state_terminal(state):
                 terminal_id = game_id or str(terminal_status.get("current_game_id") or stored_game_id() or "")
+                record_paid_room_winners(config, terminal_id, payload)
                 clear_game_id()
                 update_status(postgame_maintenance_pending=True)
                 record_account_balance(config, stage="game_ended")
@@ -1755,16 +1821,21 @@ async def run_forever(config: ClawRuntimeConfig | None = None) -> None:
             await asyncio.sleep(max(1, config.min_reconnect_seconds))
         except Exception as exc:
             reconnects += 1
-            path_index += 1
+            web_controlled = web_session_controls_agent(exc)
+            if not web_controlled:
+                path_index += 1
             delay = reconnect_delay_seconds(config, reconnects, exc)
             status = read_json(claw_runtime_status_file())
             status["reconnects"] = reconnects
-            status["state"] = "reconnecting"
+            status["state"] = "owner_controlled" if web_controlled else "reconnecting"
             status["last_error"] = str(exc)[:500]
             status["next_retry_seconds"] = delay
             status["last_failed_path"] = path
             status["next_path"] = paths[path_index % len(paths)]
             status["candidate_paths"] = paths
+            if web_controlled:
+                status["owner_attention"] = "Claw website play view currently controls this agent; bot is waiting before retry."
+                status["connection_close_code"] = 4030
             status["updated_at"] = int(time.time())
             write_json(claw_runtime_status_file(), status)
             try:
