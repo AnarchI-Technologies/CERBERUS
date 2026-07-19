@@ -40,6 +40,8 @@ REST_ENDPOINTS = {
     "loadout": "GET /loadout",
     "loadout_pack": "PUT /loadout/pack",
     "loadout_pack_delete": "DELETE /loadout/pack",
+    "loadout_sub_pack": "PUT /loadout/sub-pack",
+    "loadout_sub_pack_delete": "DELETE /loadout/sub-pack",
     "loadout_slot": "PUT /loadout/slot/:typeIndex",
     "loadout_slot_delete": "DELETE /loadout/slot/:typeIndex",
     "inventory_relics": "GET /inventory/relics",

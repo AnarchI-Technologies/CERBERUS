@@ -10,6 +10,7 @@ for folder in (ROOT / "src", ROOT / "data"):
 import claw_contract
 import claw_runtime
 from onboarding_clients import ClawRoyaleClient
+from loadout_shop_reforge import build_prejoin_plan, execute_loadout_operations, loadout_operation_idempotency_key
 
 
 def test_v1131_connection_ownership_and_backoff() -> None:
@@ -74,6 +75,18 @@ def test_v1131_client_routes_are_exact(monkeypatch) -> None:
     assert calls[1][2]["headers"] == {"Idempotency-Key": "cerberus-welcome-v1"}
 
 
+def test_live_mutation_instance_ids_follow_official_integer_schema(monkeypatch) -> None:
+    calls = []
+    client = ClawRoyaleClient(api_key="fixture")
+    monkeypatch.setattr(client, "_request", lambda method, path, **kwargs: calls.append(kwargs["json"]) or {})
+
+    client.set_active_pack("101", "idem-main")
+    client.set_sub_pack("102", "idem-sub")
+    client.set_relic_slot(1, "201", "idem-relic")
+
+    assert calls == [{"packInstanceId": 101}, {"packInstanceId": 102}, {"relicInstanceId": 201}]
+
+
 def test_v1131_mechanics_and_units_match_official_contract() -> None:
     assert claw_contract.ITEM_MECHANICS_1_13_1["binoculars"]["reveals_stealthed_assassins_in_vision"] is True
     assert claw_contract.ITEM_MECHANICS_1_13_1["binoculars"]["bypasses_cave_concealment"] is False
@@ -86,3 +99,62 @@ def test_v1131_mechanics_and_units_match_official_contract() -> None:
     assert claw_contract.WELCOME_BUNDLE == {
         "code": "WELCOME", "once_per_account": True, "packs": 2, "relics": 3, "effect_reroll_stones": 20,
     }
+
+
+def test_value_wrapped_inventory_fills_missing_main_sub_and_relics() -> None:
+    plan = build_prejoin_plan(
+        loadout={"mainPack": None, "subPack": None, "slots": {}},
+        packs={"value": [
+            {"instanceId": "duelist", "category": "Duelist", "tier": "T2"},
+            {"instanceId": "iron", "category": "Iron Heart", "tier": "T3"},
+        ]},
+        relics={"value": [
+            {"instanceId": "r", "typeIndex": 0},
+            {"instanceId": "g", "typeIndex": 1},
+            {"instanceId": "b", "typeIndex": 2},
+        ]},
+    )
+
+    operations = plan["loadout"]["operations"]
+    assert [item["type"] for item in operations[:2]] == ["set_active_pack", "set_sub_pack"]
+    assert plan["loadout"]["complete_full_set"] is True
+    assert plan["ready_for_paid"] is True
+
+
+def test_marketplace_listed_items_are_never_selected_or_reforged() -> None:
+    plan = build_prejoin_plan(
+        loadout={"mainPack": {"instanceId": "main"}, "subPack": {"instanceId": "sub"}, "slots": {}},
+        packs={"value": []},
+        relics={"value": [
+            {"instanceId": "listed", "typeIndex": 0, "isListed": True, "affixes": [{"stat": "ATK", "value": 100}]},
+            {"instanceId": "available", "typeIndex": 0, "isListed": False, "affixes": [{"stat": "ATK", "value": 1}]},
+        ]},
+    )
+    operations = plan["loadout"]["operations"]
+    assert any(item.get("relicInstanceId") == "available" for item in operations)
+    assert all(item.get("relicInstanceId") != "listed" for item in operations)
+    assert all(item.get("relicInstanceId") != "listed" for item in plan["reforge"])
+
+
+def test_sub_pack_execution_uses_dedicated_official_route() -> None:
+    calls = []
+
+    class Client:
+        def set_sub_pack(self, *args):  # type: ignore[no-untyped-def]
+            calls.append(args)
+            return {"ok": True}
+
+    report = execute_loadout_operations(
+        Client(), [{"type": "set_sub_pack", "packInstanceId": "sub-1", "idempotencyKey": "idem"}], dry_run=False
+    )
+    assert report["ok"] is True
+    assert calls == [("sub-1", "idem")]
+
+
+def test_loadout_retry_key_is_stable_and_bounded() -> None:
+    operation = {"type": "set_relic_slot", "typeIndex": 1, "relicInstanceId": "relic-1", "score": 99}
+    first = loadout_operation_idempotency_key(operation)
+    second = loadout_operation_idempotency_key({**operation, "score": 1})
+    assert first == second
+    assert first.startswith("cerberus-loadout-")
+    assert len(first) <= 80

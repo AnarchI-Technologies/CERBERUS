@@ -8,6 +8,8 @@ not a mid-match combat action.
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import uuid
 from typing import Any
 
@@ -42,7 +44,7 @@ def _items(payload: Any, *keys: str) -> list[dict[str, Any]]:
         return [item for item in payload if isinstance(item, dict)]
     if not isinstance(payload, dict):
         return []
-    for key in (*keys, "items", "data", "results", "relics", "packs", "inventory"):
+    for key in (*keys, "items", "data", "value", "results", "relics", "packs", "inventory"):
         value = payload.get(key)
         if isinstance(value, list):
             return [item for item in value if isinstance(item, dict)]
@@ -59,6 +61,16 @@ def instance_id(item: dict[str, Any]) -> str:
         if value:
             return value
     return ""
+
+
+def item_equipable(item: dict[str, Any]) -> bool:
+    return not bool(
+        item.get("isListed")
+        or item.get("listed")
+        or item.get("marketplaceListingId")
+        or item.get("escrowed")
+        or item.get("locked")
+    )
 
 
 def _label(item: dict[str, Any]) -> str:
@@ -154,6 +166,22 @@ def pack_score(item: dict[str, Any]) -> float:
     return round(score or 50.0, 3)
 
 
+def pack_category(item: dict[str, Any]) -> str:
+    value = str(item.get("category") or item.get("packCategory") or item.get("type") or "").strip().lower()
+    return value.replace(" ", "_").replace("-", "_")
+
+
+def sub_pack_eligible(item: dict[str, Any], main_pack: dict[str, Any]) -> bool:
+    category = pack_category(item)
+    main_category = pack_category(main_pack)
+    return bool(
+        instance_id(item)
+        and instance_id(item) != instance_id(main_pack)
+        and category not in {"scout", "assassin"}
+        and (not category or not main_category or category != main_category)
+    )
+
+
 def _loadout_pack_id(loadout: dict[str, Any], slot: str) -> str:
     if slot == "main":
         keys = ("mainPack", "activeMainPack", "activePack", "pack", "equippedPack")
@@ -187,8 +215,8 @@ def _slot_id(loadout: dict[str, Any], slot: int) -> str:
 
 
 def choose_best_loadout(loadout: dict[str, Any], relics_payload: Any, packs_payload: Any) -> dict[str, Any]:
-    relics = _items(relics_payload, "relics")
-    packs = _items(packs_payload, "packs")
+    relics = [item for item in _items(relics_payload, "relics") if item_equipable(item)]
+    packs = [item for item in _items(packs_payload, "packs") if item_equipable(item)]
     sub_pack_id = _loadout_pack_id(loadout, "sub")
     chosen_pack = max((pack for pack in packs if instance_id(pack) != sub_pack_id), key=pack_score, default={})
     current_main_pack_id = _loadout_pack_id(loadout, "main")
@@ -203,6 +231,18 @@ def choose_best_loadout(loadout: dict[str, Any], relics_payload: Any, packs_payl
         operations.append(
             {"type": "set_active_pack", "packInstanceId": selected_pack_id, "score": pack_score(chosen_pack)}
         )
+    chosen_sub_pack = {}
+    if not sub_pack_id:
+        chosen_sub_pack = max(
+            (pack for pack in packs if sub_pack_eligible(pack, chosen_pack)),
+            key=pack_score,
+            default={},
+        )
+        sub_pack_id = instance_id(chosen_sub_pack)
+        if sub_pack_id:
+            operations.append(
+                {"type": "set_sub_pack", "packInstanceId": sub_pack_id, "score": pack_score(chosen_sub_pack)}
+            )
     for slot, relic in chosen_relics.items():
         relic_id = instance_id(relic)
         if relic_id and relic_id != _slot_id(loadout, slot):
@@ -229,7 +269,11 @@ def choose_best_loadout(loadout: dict[str, Any], relics_payload: Any, packs_payl
                 "score": pack_score(chosen_pack) if selected_pack_id else None,
                 "source": "inventory_selection" if selected_pack_id else "currently_equipped",
             } if pack_id else {},
-            "sub_pack": {"id": sub_pack_id, "source": "currently_equipped"} if sub_pack_id else {},
+            "sub_pack": {
+                "id": sub_pack_id,
+                "score": pack_score(chosen_sub_pack) if chosen_sub_pack else None,
+                "source": "inventory_selection" if chosen_sub_pack else "currently_equipped",
+            } if sub_pack_id else {},
             "relics": {
                 SLOT_NAMES[slot]: {
                     "id": instance_id(relic) or _slot_id(loadout, slot),
@@ -266,6 +310,8 @@ def choose_best_loadout(loadout: dict[str, Any], relics_payload: Any, packs_payl
 def reforge_candidates(relics_payload: Any, *, max_items: int = 3) -> list[dict[str, Any]]:
     rows = []
     for relic in _items(relics_payload, "relics"):
+        if not item_equipable(relic):
+            continue
         affixes = relic.get("affixes") if isinstance(relic.get("affixes"), list) else []
         negatives = [affix for affix in affixes if isinstance(affix, dict) and _affix_value(affix) < 0]
         missing = max(0, 3 - len(affixes))
@@ -358,14 +404,30 @@ def execute_loadout_operations(client: Any, operations: list[dict[str, Any]], *,
         if dry_run:
             results.append({"ok": True, "dry_run": True, "operation": op})
             continue
-        idem = str(op.get("idempotencyKey") or uuid.uuid4())
+        idem = str(op.get("idempotencyKey") or loadout_operation_idempotency_key(op))
         if op_type == "set_active_pack":
             results.append(client.set_active_pack(str(op["packInstanceId"]), idem))
+        elif op_type == "set_sub_pack":
+            results.append(client.set_sub_pack(str(op["packInstanceId"]), idem))
         elif op_type == "set_relic_slot":
             results.append(client.set_relic_slot(int(op["typeIndex"]), str(op["relicInstanceId"]), idem))
         else:
             results.append({"ok": False, "error": f"unsupported operation: {op_type}", "operation": op})
     return {"ok": all(item.get("ok", True) for item in results if isinstance(item, dict)), "results": results}
+
+
+def loadout_operation_idempotency_key(operation: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        {
+            key: operation.get(key)
+            for key in ("type", "packInstanceId", "typeIndex", "relicInstanceId")
+            if operation.get(key) not in (None, "")
+        },
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    return "cerberus-loadout-" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:48]
 
 
 def execute_shop_recommendations(client: Any, recommendations: list[dict[str, Any]], *, dry_run: bool = True) -> dict[str, Any]:

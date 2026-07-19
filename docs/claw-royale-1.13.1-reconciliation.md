@@ -17,3 +17,18 @@ Authoritative input: the official Claw Royale server snapshot fetched on
 
 This reconciliation does not widen paid-entry, signing, wallet, movement, or
 combat authority. Dynamic server snapshots and OpenAPI remain authoritative.
+
+## Production evidence — 2026-07-19 UTC
+
+- The official WELCOME redeem route accepted stable key `cerberus-welcome-v1`
+  and returned `replayed=false`: Duelist T2, Iron Heart T3, Ruby, Emerald,
+  Sapphire, and 20 Effect Reroll Stones were granted.
+- Live OpenAPI verification confirmed numeric `int64` pack/relic instance IDs,
+  the dedicated `/api/loadout/sub-pack` route, and mandatory redeem idempotency.
+- A legacy string-ID request was rejected without mutation; the corrected
+  numeric request was accepted.
+- An escrowed marketplace relic was rejected by the server and is now filtered
+  from both equip and reforge candidates.
+- After applying only a non-listed relic operation, the official loadout response
+  reports `fullSet=true`; the deterministic planner reports no missing components
+  and no remaining loadout operations.
