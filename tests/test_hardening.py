@@ -694,6 +694,7 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(len(lessons), 1)
         self.assertIn("Rival eliminated us", lessons[0])
 
+    @unittest.skipUnless(os.name == "nt", "DPAPI vault roundtrip is Windows-specific")
     def test_memory_encrypt_decrypt_roundtrip_in_isolated_instance(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")
         os.environ["CERBERUS_PIN"] = "2468"
@@ -712,6 +713,7 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(str(path).endswith(".vault.json"))
         self.assertEqual(len(reloaded.memory.data["turns"]), 1)
 
+    @unittest.skipUnless(os.name == "nt", "DPAPI wrong-PIN behavior is Windows-specific")
     def test_memory_wrong_pin_loads_empty_with_warning(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")
         try:
@@ -3290,7 +3292,7 @@ class HardeningTests(unittest.TestCase):
                     self.assertIn(action["type"], {"equip", "move", "rest", "pickup", "use_item", "attack", "explore"})
                     if index % 6 == 0:
                         isolated.memory.rewrite()
-                        isolated.dossiers.save(encrypt=True)
+                        isolated.dossiers.save(encrypt=(os.name == "nt"))
                         isolated = isolated.reload()
                 self.assertTrue(observed_actions.intersection({"equip", "pickup", "use_item"}))
                 self.assertLessEqual(len(isolated.memory.data["turns"]), isolated.memory.max_short_turns)
