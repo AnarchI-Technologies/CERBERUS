@@ -1,4 +1,4 @@
-"""Deterministic Claw Royale gameplay contract aligned through v1.13.0.
+"""Deterministic Claw Royale gameplay contract aligned through v1.13.1.
 
 Keep volatile API versioning in ``claw_config``. Live OpenAPI and per-snapshot
 fields win; static values here are compatibility fallbacks and stable rules.

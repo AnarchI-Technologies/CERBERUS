@@ -26,7 +26,7 @@ class FakeResponse:
 class FakeSession:
     def get(self, url: str, **kwargs):  # type: ignore[no-untyped-def]
         if url.endswith("/version"):
-            return FakeResponse(url, b'{"version":"1.13.0"}', "application/json")
+            return FakeResponse(url, b'{"version":"1.13.1"}', "application/json")
         return FakeResponse(url, b"<html><body><h1>Patch Note</h1><p>Safe update</p></body></html>", "text/html")
 
 
@@ -37,7 +37,7 @@ def test_sync_writes_official_provenance_and_readable_content() -> None:
         text = output.read_text(encoding="utf-8")
 
     assert changed
-    assert "1.13.0" in text
+    assert "1.13.1" in text
     assert "Patch Note" in text
     assert "SHA-256" in text
     assert "does not modify live policy automatically" in text

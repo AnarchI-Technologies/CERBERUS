@@ -1,6 +1,6 @@
-# Claw Royale Confirmed Integration Truths (updated through v1.13.0)
+# Claw Royale Confirmed Integration Truths (updated through v1.13.1)
 
-Source: Claw Royale docs, June 10, 2026 patch notes, and the owner's v1.13.0
+Source: Claw Royale official docs and canonical server snapshot fetched July 18, 2026.
 Read One File `SKILL.md`. `/openapi.yaml` remains authoritative for API fields.
 
 ## Runtime

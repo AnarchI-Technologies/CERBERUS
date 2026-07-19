@@ -917,7 +917,7 @@ def discover_version(api_base: str = CLAW_API_BASE) -> str:
         return version
     except Exception as exc:
         update_status(last_error=f"version discovery failed: {str(exc)[:180]}")
-        return os.getenv("CLAW_ROYALE_VERSION", "1.9.0").strip() or "1.9.0"
+        return active_claw_version()
 
 
 def load_config() -> ClawRuntimeConfig:
