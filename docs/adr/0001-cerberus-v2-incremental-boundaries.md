@@ -28,6 +28,11 @@ The following constraints apply:
    deterministic policy, budgets, capability grants, or execution validation.
 5. Experimental architecture remains on isolated branches until production
    evidence supports promotion.
+6. The primary deployment is an operator-controlled local node. Ollama is the
+   preferred private inference runtime, accessed only through a future central
+   gateway. Cloud services are optional sanitized control/observability planes.
+7. Ollama unavailability or rejection must leave the deterministic runtime
+   operational; models never receive execution authority.
 
 ## Consequences
 
@@ -36,4 +41,3 @@ The following constraints apply:
 - Claw Royale adapters will be extracted before less critical integrations.
 - Production proof and rollback evidence are required before merging behavioral
   changes to `main`.
-

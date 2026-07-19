@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-18",
+  "hardware_profile": "deployment/local-windows/README.md",
+  "ollama_version": "0.32.1",
+  "fixture": {
+    "input": "action rejected because cooldown is active",
+    "expected_category": "runtime",
+    "schema_categories": ["runtime", "economy", "combat", "unknown"]
+  },
+  "results": [
+    {
+      "model": "qwen3:1.7b",
+      "digest": "8f68893c685c3ddff2aa3fffce2aa60a30bb2da65ca488b61fff134a4d1730e7",
+      "wall_seconds": 6.4,
+      "load_seconds": 4.45,
+      "tokens_per_second": 14.54,
+      "schema_valid": true,
+      "semantic_match": false,
+      "returned_category": "combat"
+    },
+    {
+      "model": "qwen3:4b",
+      "digest": "359d7dd4bcdab3d86b87d73ac27966f4dbb9f5efdfcc75d34a8764a09474fae7",
+      "wall_seconds": 10.51,
+      "load_seconds": 6.83,
+      "tokens_per_second": 8.64,
+      "schema_valid": true,
+      "semantic_match": false,
+      "returned_category": "combat"
+    }
+  ],
+  "promotion_decision": "rejected",
+  "reason": "Both candidates satisfied the JSON schema but failed the semantic fixture. No model is approved for runtime decisions."
+}
