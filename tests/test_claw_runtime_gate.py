@@ -60,6 +60,10 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
         self.assertEqual(updates[1]["state"], "connected")
         self.assertEqual(updates[-1], {"state": "socket_closed", "last_error": "websocket closed without terminal game frame"})
 
+    def test_default_paths_include_active_game_resume_endpoint(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(claw_runtime.websocket_paths(), ["/ws/join", "/ws/agent"])
+
     def test_agent_view_waiting_status_does_not_act(self) -> None:
         payload = {
             "type": "agent_view",

@@ -64,6 +64,7 @@ NO_HELLO_DECISIONS = {
 }
 DEFAULT_WS_PATHS = (
     "/ws/join",
+    "/ws/agent",
 )
 VALID_GAME_MODES = {"free", "offchain", "onchain"}
 ROOM_LIST_KEYS = (
@@ -1607,6 +1608,16 @@ async def run_forever(config: ClawRuntimeConfig | None = None) -> None:
         path = paths[path_index % len(paths)]
         try:
             await connect_and_play(config, path)
+            reconnects = 0
+            path_index += 1
+            update_status(
+                state="reconnecting",
+                last_error="websocket closed without exception; rotating endpoint",
+                last_failed_path=path,
+                next_path=paths[path_index % len(paths)],
+                candidate_paths=paths,
+            )
+            await asyncio.sleep(max(1, config.min_reconnect_seconds))
         except Exception as exc:
             reconnects += 1
             path_index += 1

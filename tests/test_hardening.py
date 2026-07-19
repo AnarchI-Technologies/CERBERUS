@@ -4556,7 +4556,7 @@ class HardeningTests(unittest.TestCase):
             os.environ.pop("CLAW_ROYALE_WS_PATHS", None)
             os.environ.pop("CLAW_ROYALE_WS_PATH", None)
             defaults = claw_runtime.websocket_paths()
-            self.assertEqual(defaults, ["/ws/join"])
+            self.assertEqual(defaults, ["/ws/join", "/ws/agent"])
 
             os.environ["CLAW_ROYALE_WS_PATHS"] = "agent-live,/custom,wss://example.test/ws"
             self.assertEqual(claw_runtime.websocket_paths(), ["/agent-live", "/custom", "wss://example.test/ws"])
