@@ -30,7 +30,8 @@ production secret or signing host.
 ## Isolated staging service
 
 `cerberus-staging.service` runs a second dashboard on `127.0.0.1:10001` with a
-separate memory directory. Its default environment disables every external
+separate memory directory. It runs the release selected atomically by
+`activate-staging-release.sh`, independently of production. Its default environment disables every external
 runtime, claim, social, loadout, and model effect. It deliberately does not load
 the production `.env`, so Hellion's identity and wallet material are absent.
 

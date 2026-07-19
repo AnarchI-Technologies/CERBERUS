@@ -29,6 +29,19 @@ class LocalRuntimeProfileTests(unittest.TestCase):
         self.assertIn("CERBERUS_MODEL_GATEWAY_ENABLED=false", service)
         self.assertNotIn("CERBERUS/src/render_app.py", service)
 
+    def test_staging_and_scheduled_jobs_use_immutable_release_pointers(self) -> None:
+        staging = (ROOT / "deployment" / "local-linux" / "cerberus-staging.service").read_text(encoding="utf-8")
+        evaluation = (ROOT / "deployment" / "local-linux" / "cerberus-evaluation.service").read_text(encoding="utf-8")
+        knowledge = (ROOT / "deployment" / "local-linux" / "cerberus-claw-knowledge-sync.service").read_text(encoding="utf-8")
+        activator = (ROOT / "deployment" / "local-linux" / "activate-staging-release.sh").read_text(encoding="utf-8")
+
+        self.assertIn("/opt/cerberus-staging-current/src/render_app.py", staging)
+        self.assertIn("/opt/cerberus-current/src/production_evaluation.py", evaluation)
+        self.assertIn("/opt/cerberus-current/src/claw_knowledge_sync.py", knowledge)
+        self.assertIn("mv -Tf", activator)
+        for content in (staging, evaluation, knowledge):
+            self.assertNotIn("/mnt/c/Users/", content)
+
     def test_render_app_honors_explicit_local_bind_host(self) -> None:
         server = mock.Mock()
         with mock.patch.dict("os.environ", {"CERBERUS_BIND_HOST": "127.0.0.1", "PORT": "18443", "CLAW_ROYALE_RUNTIME_ENABLED": "false"}, clear=False), mock.patch.object(render_app, "ThreadingHTTPServer", return_value=server) as factory:

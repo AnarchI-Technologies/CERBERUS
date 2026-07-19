@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/mnt/c/Users/alexg/Documents/Codex/CERBERUS
+WorkingDirectory=/opt/cerberus-staging-current
 EnvironmentFile=/etc/cerberus/staging.env
-ExecStart=/opt/cerberus-venv/bin/python /mnt/c/Users/alexg/Documents/Codex/CERBERUS/src/render_app.py
+ExecStart=/opt/cerberus-venv/bin/python /opt/cerberus-staging-current/src/render_app.py
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
