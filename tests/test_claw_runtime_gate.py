@@ -188,6 +188,7 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
 
         self.assertFalse(claw_runtime.wants_action(snapshot, snapshot, gameplay_ready=True))
         self.assertFalse(claw_runtime.has_free_action_window(state))
+        self.assertTrue(claw_runtime.agent_state_terminal(state))
 
     def test_action_signature_is_turn_bound_and_reason_insensitive(self) -> None:
         first = claw_runtime.action_signature({"type": "move", "regionId": "r2", "reason": "one"}, turn=7)

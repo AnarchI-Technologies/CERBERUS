@@ -883,7 +883,7 @@ def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None, *, ga
         state = TurnState.from_snapshot(snapshot)
         if not has_usable_turn_facts(state):
             return False
-        if not state.self.is_alive or state.self.hp <= 0:
+        if agent_state_terminal(state):
             return False
         if not state.can_take_main_action:
             return False
@@ -899,13 +899,17 @@ def has_free_action_window(state: TurnState | None) -> bool:
     if not isinstance(state, TurnState):
         return False
     try:
-        if not state.self.is_alive or state.self.hp <= 0:
+        if agent_state_terminal(state):
             return False
         if not state.has_broadcast_channel and not state.visible_items and not state.current_region.items and not state.inventory:
             return False
         return bool(FreeActionCortex().evaluate(state, {}))
     except Exception:
         return False
+
+
+def agent_state_terminal(state: TurnState | None) -> bool:
+    return isinstance(state, TurnState) and (not state.self.is_alive or state.self.hp <= 0)
 
 
 def has_usable_turn_facts(state: TurnState) -> bool:
@@ -1580,6 +1584,23 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 live_map=build_live_map(snapshot),
             )
             state = TurnState.from_snapshot(snapshot) if snapshot else None
+            if agent_state_terminal(state):
+                terminal_id = game_id or str(terminal_status.get("current_game_id") or stored_game_id() or "")
+                clear_game_id()
+                update_status(postgame_maintenance_pending=True)
+                record_account_balance(config, stage="game_ended")
+                schedule_preseason1_claim_sweep(config, force=True)
+                update_status(
+                    state="game_ended",
+                    current_game_id="",
+                    terminal_game_id=terminal_id,
+                    game_status="ended",
+                    gameplay_ready=False,
+                    can_act=False,
+                    last_error="server snapshot reports terminal agent state",
+                )
+                await ws.close(code=1000, reason="terminal agent snapshot")
+                return
             if frame_type == "turn_advanced":
                 reported_can_act = frame_value(payload, "canAct")
                 server_can_act = bool(reported_can_act) if reported_can_act is not None else None
