@@ -1,0 +1,10 @@
+[Unit]
+Description=Collect sanitized CERBERUS production evidence
+After=cerberus.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/mnt/c/Users/alexg/Documents/Codex/CERBERUS
+ExecStart=/opt/cerberus-venv/bin/python /mnt/c/Users/alexg/Documents/Codex/CERBERUS/src/production_evaluation.py --memory-root /var/data/.cerberus
+NoNewPrivileges=true
+PrivateTmp=true
