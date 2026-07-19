@@ -9,5 +9,6 @@ systemctl is-active --quiet cerberus-staging.service
 curl --fail --silent --show-error --max-time 5 "${production_url}" | grep --quiet '"ok":true'
 curl --fail --silent --show-error --max-time 5 "${staging_url}" | grep --quiet '"ok":true'
 systemctl is-active --quiet cerberus-evaluation.timer
+systemctl is-active --quiet cerberus-claw-knowledge-sync.timer
 
 echo "CERBERUS local smoke test passed"

@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh official Claw Royale canonical knowledge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/mnt/c/Users/alexg/Documents/Codex/CERBERUS
+ExecStart=/opt/cerberus-venv/bin/python /mnt/c/Users/alexg/Documents/Codex/CERBERUS/src/claw_knowledge_sync.py --output /var/data/.cerberus/claw_royale_canonical_snapshot.md
+NoNewPrivileges=true
+PrivateTmp=true

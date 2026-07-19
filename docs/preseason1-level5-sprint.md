@@ -18,3 +18,8 @@ Official game knowledge can be refreshed with:
 ```
 
 The sync uses unauthenticated GET requests against official `clawroyale.ai` sources, rejects redirects outside that domain, records source hashes, and writes `data/claw_royale_canonical_snapshot.md`. Generated text is review evidence only and cannot change live gameplay policy by itself.
+
+The local operator node also runs `cerberus-claw-knowledge-sync.timer` every six
+hours. Its runtime copy is stored outside Git at
+`/var/data/.cerberus/claw_royale_canonical_snapshot.md`; only a reviewed manual
+sync is promoted into the tracked `data/` snapshot.
