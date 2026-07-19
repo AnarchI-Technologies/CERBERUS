@@ -11,6 +11,7 @@
 - [ ] Remove test-suite working-tree side effects.
 - [ ] Record deployment smoke-test and rollback procedures.
 - [x] Record the initial Windows operator-node hardware profile.
+- [x] Record deterministic action post-mortems with bounded, observation-only experiments.
 - [x] Install and benchmark evaluation-only Ollama candidates.
 - [x] Build a repeatable Ollama health/readiness check with no-model fallback.
 

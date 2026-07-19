@@ -99,6 +99,10 @@ def policy_shadow_file() -> Path:
     return memory_dir() / "policy_shadow.json"
 
 
+def action_postmortems_file() -> Path:
+    return memory_dir() / "action_postmortems.json"
+
+
 def social_event_stack_file() -> Path:
     return memory_dir() / "social_event_stack.json"
 
@@ -194,6 +198,21 @@ def append_policy_shadow(record: dict[str, Any], *, limit: int = 500) -> list[di
     records.append(_scrub_mapping(record, text_limit=240))
     records = records[-limit:]
     write_json(policy_shadow_file(), {"records": records, "updated_at": int(time.time())})
+    return records
+
+
+def action_postmortems(limit: int = 500) -> list[dict[str, Any]]:
+    records = read_json(action_postmortems_file()).get("records", [])
+    if not isinstance(records, list):
+        return []
+    return [item for item in records if isinstance(item, dict)][-limit:]
+
+
+def append_action_postmortem(record: dict[str, Any], *, limit: int = 500) -> list[dict[str, Any]]:
+    records = action_postmortems(limit=limit)
+    records.append(_scrub_mapping(record, text_limit=240))
+    records = records[-limit:]
+    write_json(action_postmortems_file(), {"records": records, "updated_at": int(time.time())})
     return records
 
 

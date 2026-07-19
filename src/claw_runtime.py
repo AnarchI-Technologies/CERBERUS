@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 import websockets
 
 from autonomy_suggestions import record_autonomy_observation
+from action_postmortem import build_action_postmortem
 from claw_contract import FREE_ACTIONS, JOIN_DECISIONS, THOUGHT_MAX_CHARS
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
@@ -38,6 +39,7 @@ from onboarding_clients import ClawRoyaleClient
 from postgame_hardening import run_postgame_hardening_pass
 from preseason1_claims import claim_reached_preseason1_points
 from runtime_state import (
+    append_action_postmortem,
     append_social_event,
     claw_runtime_status_file,
     clear_game_id,
@@ -1103,6 +1105,12 @@ def record_action_result_learning(payload: dict[str, Any], *, status: dict[str, 
             "state": status.get("state") or "",
         }
     )
+    try:
+        append_action_postmortem(
+            build_action_postmortem(action=last_action, payload=payload, snapshot=snapshot)
+        )
+    except Exception:
+        pass
 
     store = CompactMemoryStore().load()
     store.remember_turn(
