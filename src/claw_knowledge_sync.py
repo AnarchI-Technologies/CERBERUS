@@ -13,6 +13,9 @@ from urllib.parse import urlparse
 
 import requests
 
+from memory_admission import evaluate_memory_admission
+from v2_contracts import MemoryRecord
+
 
 DEFAULT_SOURCES = (
     "https://cdn.clawroyale.ai/api/version",
@@ -24,6 +27,7 @@ DEFAULT_SOURCES = (
 )
 MAX_SOURCE_BYTES = 2_000_000
 MAX_RENDERED_CHARS = 80_000
+SNAPSHOT_SCHEMA_VERSION = 2
 
 
 def _official_url(url: str) -> bool:
@@ -77,17 +81,55 @@ def _record_set_hash(records: list[dict[str, str | int]]) -> str:
     return hashlib.sha256(evidence.encode("utf-8")).hexdigest()
 
 
+def memory_admission_shadow(records: list[dict[str, str | int]], *, recorded_at: str) -> dict[str, object]:
+    decisions: list[dict[str, object]] = []
+    for record in records:
+        digest = str(record["sha256"])
+        url = str(record["url"])
+        decision = evaluate_memory_admission(
+            MemoryRecord(
+                record_id=f"claw-official-{digest[:20]}",
+                classification="knowledge",
+                source_ref=f"official:{url}#{digest}",
+                recorded_at=recorded_at,
+                content=str(record["content"]),
+                retention="durable",
+                confidence=1.0,
+            ),
+            source_trust="official",
+            raw_context={"url": url, "status": record["status"], "sha256": digest},
+        )
+        decisions.append(
+            {
+                "url": url,
+                "admitted": decision.admitted,
+                "authority": decision.authority,
+                "reasons": list(decision.reasons),
+            }
+        )
+    return {
+        "mode": "shadow",
+        "admitted": sum(1 for item in decisions if item["admitted"]),
+        "flagged": sum(1 for item in decisions if not item["admitted"]),
+        "decisions": decisions,
+    }
+
+
 def render_snapshot(records: list[dict[str, str | int]], *, generated_at: str | None = None) -> str:
     stamp = generated_at or datetime.now(timezone.utc).isoformat()
     set_hash = _record_set_hash(records)
+    admission = memory_admission_shadow(records, recorded_at=stamp)
     lines = [
         "# Claw Royale canonical server snapshot",
         "",
+        f"Snapshot schema: `{SNAPSHOT_SCHEMA_VERSION}`",
         f"Generated: `{stamp}`",
         f"Canonical set SHA-256: `{set_hash}`",
         "",
         "> Generated from public, official clawroyale.ai sources using GET requests only. "
         "This is evidence for review; it does not modify live policy automatically.",
+        "",
+        f"Memory admission shadow: `{admission['admitted']}` admitted, `{admission['flagged']}` flagged.",
     ]
     for record in records:
         lines.extend(
@@ -109,7 +151,9 @@ def render_snapshot(records: list[dict[str, str | int]], *, generated_at: str | 
 def sync(output: Path, session: requests.Session | None = None) -> bool:
     records = fetch_canonical_sources(session)
     previous = output.read_text(encoding="utf-8") if output.exists() else ""
-    if f"Canonical set SHA-256: `{_record_set_hash(records)}`" in previous:
+    current_hash = f"Canonical set SHA-256: `{_record_set_hash(records)}`"
+    current_schema = f"Snapshot schema: `{SNAPSHOT_SCHEMA_VERSION}`"
+    if current_hash in previous and current_schema in previous:
         return False
     rendered = render_snapshot(records)
     output.parent.mkdir(parents=True, exist_ok=True)

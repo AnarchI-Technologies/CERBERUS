@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from memory_system import secret_like_key
 from v2_contracts import MemoryRecord
 
 
@@ -23,6 +22,23 @@ INJECTION_MARKERS = (
     "execute this command",
     "send the private key",
 )
+SECRET_KEYS = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "mnemonic",
+    "password",
+    "privatekey",
+    "private_key",
+    "secret",
+    "seed",
+    "token",
+}
+
+
+def _secret_like_key(key: str) -> bool:
+    normalized = "".join(ch for ch in key.lower() if ch.isalnum() or ch == "_")
+    return any(marker in normalized for marker in SECRET_KEYS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +52,7 @@ def _contains_secret(value: Any, *, depth: int = 0) -> bool:
     if depth > 6:
         return True
     if isinstance(value, dict):
-        return any(secret_like_key(str(key)) or _contains_secret(item, depth=depth + 1) for key, item in value.items())
+        return any(_secret_like_key(str(key)) or _contains_secret(item, depth=depth + 1) for key, item in value.items())
     if isinstance(value, (list, tuple, set)):
         return any(_contains_secret(item, depth=depth + 1) for item in value)
     return bool(SECRET_VALUE.search(str(value)))
