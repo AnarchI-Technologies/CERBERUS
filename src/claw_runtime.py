@@ -20,11 +20,12 @@ import websockets
 from autonomy_suggestions import record_autonomy_observation
 from action_postmortem import build_action_postmortem
 from claw_contract import COOLDOWN_ACTIONS, FREE_ACTIONS, JOIN_DECISIONS, THOUGHT_MAX_CHARS
-from claw_policy_shadow import authorize_broadcast
+from claw_policy_shadow import authorize_broadcast_execution
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
 from env_loader import hydrate_env
+from execution_coordinator import execute_authorized
 from external_wisdom import shared_public_line
 from free_action_abuse import FreeActionCortex
 from game_map import build_live_map
@@ -80,6 +81,7 @@ ROOM_LIST_KEYS = (
     "value",
 )
 from turn_state_model import TurnState
+from v2_contracts import contract_dict
 ROOM_COUNT_KEYS = (
     "agentCount",
     "agentsCount",
@@ -1645,7 +1647,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 free_actions = free_actions_from_side_effects(action)
                 for free_action in free_actions:
                     if str(free_action.get("type") or "") == "broadcast":
-                        allowed, policy_record = authorize_broadcast(state, free_action)
+                        allowed, request, policy, policy_record = authorize_broadcast_execution(state, free_action)
                         if not allowed:
                             append_action_audit(
                                 {
@@ -1656,14 +1658,35 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                                 }
                             )
                             continue
-                    free_envelope = action_envelope(free_action)
-                    await ws.send(json.dumps(free_envelope, ensure_ascii=True, separators=(",", ":")))
+                        free_envelope = action_envelope(free_action)
+
+                        async def send_broadcast() -> dict[str, Any]:
+                            await ws.send(json.dumps(free_envelope, ensure_ascii=True, separators=(",", ":")))
+                            return {"code": "sent"}
+
+                        execution = await execute_authorized(request, policy, send_broadcast)
+                        if execution.status != "accepted":
+                            append_action_audit(
+                                {
+                                    "kind": "free_action_execution_suppressed",
+                                    "action": free_action,
+                                    "reason": execution.status,
+                                    "state": "playing",
+                                }
+                            )
+                            continue
+                        execution_result = contract_dict(execution)
+                    else:
+                        free_envelope = action_envelope(free_action)
+                        await ws.send(json.dumps(free_envelope, ensure_ascii=True, separators=(",", ":")))
+                        execution_result = {}
                     append_action_audit(
                         {
                             "kind": "free_action_sent",
                             "action": free_action,
                             "reason": str(free_action.get("reason") or ""),
                             "state": "playing",
+                            "execution_result": execution_result,
                         }
                     )
                 update_status(

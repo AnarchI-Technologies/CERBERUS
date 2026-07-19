@@ -103,6 +103,10 @@ def action_postmortems_file() -> Path:
     return memory_dir() / "action_postmortems.json"
 
 
+def execution_ledger_file() -> Path:
+    return memory_dir() / "execution_ledger.json"
+
+
 def social_event_stack_file() -> Path:
     return memory_dir() / "social_event_stack.json"
 
@@ -214,6 +218,39 @@ def append_action_postmortem(record: dict[str, Any], *, limit: int = 500) -> lis
     records = records[-limit:]
     write_json(action_postmortems_file(), {"records": records, "updated_at": int(time.time())})
     return records
+
+
+def execution_ledger_records(limit: int = 500) -> list[dict[str, Any]]:
+    records = read_json(execution_ledger_file()).get("records", [])
+    if not isinstance(records, list):
+        return []
+    return [item for item in records if isinstance(item, dict)][-limit:]
+
+
+def reserve_execution(idempotency_key: str, request_id: str, *, limit: int = 500) -> bool:
+    if not idempotency_key:
+        return False
+    records = execution_ledger_records(limit=limit)
+    if any(item.get("idempotency_key") == idempotency_key for item in records):
+        return False
+    records.append(
+        {
+            "idempotency_key": idempotency_key,
+            "request_id": request_id,
+            "status": "reserved",
+            "updated_at": int(time.time()),
+        }
+    )
+    return write_json(execution_ledger_file(), {"records": records[-limit:], "updated_at": int(time.time())})
+
+
+def finalize_execution(idempotency_key: str, result: dict[str, Any], *, limit: int = 500) -> None:
+    records = execution_ledger_records(limit=limit)
+    for item in reversed(records):
+        if item.get("idempotency_key") == idempotency_key:
+            item.update({"status": str(result.get("status") or "unknown"), "result": result, "updated_at": int(time.time())})
+            break
+    write_json(execution_ledger_file(), {"records": records[-limit:], "updated_at": int(time.time())})
 
 
 def owner_messages(limit: int = 25) -> list[dict[str, Any]]:

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 for folder in (ROOT / "src", ROOT / "data"):
     sys.path.insert(0, str(folder))
 
-from claw_policy_shadow import authorize_broadcast, evaluate_claw_action_shadow
+from claw_policy_shadow import authorize_broadcast, authorize_broadcast_execution, evaluate_claw_action_shadow
 from core_loop import cerberus_tick
 from runtime_state import policy_shadow_records
 from turn_state_model import TurnState
@@ -120,3 +120,23 @@ def test_broadcast_is_enforced_and_emergency_suspension_denies_it() -> None:
     assert allowed_record["enforced"] is True
     assert not denied
     assert denied_record["policy"]["reasons"] == ["emergency_suspension"]
+
+
+def test_broadcast_execution_contract_has_stable_idempotency_key() -> None:
+    state = TurnState.from_snapshot(snapshot())
+    action = {"type": "broadcast", "message": "Arena update"}
+    with tempfile.TemporaryDirectory() as tmp:
+        old_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        os.environ["CERBERUS_MEMORY_DIR"] = tmp
+        try:
+            first = authorize_broadcast_execution(state, action)
+            second = authorize_broadcast_execution(state, action)
+        finally:
+            if old_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_dir
+
+    assert first[0] is True
+    assert first[1].idempotency_key == second[1].idempotency_key
+    assert first[2].request_id == first[1].request_id
