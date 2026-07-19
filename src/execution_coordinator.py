@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
+from audit_ledger import append_execution_audit
 from runtime_state import finalize_execution, reserve_execution
 from v2_contracts import ActionRequest, ExecutionResult, PolicyDecision, PolicyOutcome, contract_dict
 
@@ -37,6 +38,13 @@ def _result(
     )
 
 
+def _audited(
+    request: ActionRequest, policy: PolicyDecision, result: ExecutionResult
+) -> ExecutionResult:
+    append_execution_audit(request, policy, result)
+    return result
+
+
 async def execute_authorized(
     request: ActionRequest,
     policy: PolicyDecision,
@@ -45,13 +53,13 @@ async def execute_authorized(
     timeout_seconds: float = 5.0,
 ) -> ExecutionResult:
     if policy.request_id != request.request_id:
-        return _result(request, policy, "policy_mismatch", detail="policy request ID mismatch")
+        return _audited(request, policy, _result(request, policy, "policy_mismatch", detail="policy request ID mismatch"))
     if policy.outcome is not PolicyOutcome.ALLOW:
-        return _result(request, policy, "policy_blocked", detail=",".join(policy.reasons))
+        return _audited(request, policy, _result(request, policy, "policy_blocked", detail=",".join(policy.reasons)))
     if not request.idempotency_key:
-        return _result(request, policy, "invalid_request", detail="missing idempotency key")
+        return _audited(request, policy, _result(request, policy, "invalid_request", detail="missing idempotency key"))
     if not reserve_execution(request.idempotency_key, request.request_id):
-        return _result(request, policy, "duplicate_suppressed", detail="idempotency key already reserved")
+        return _audited(request, policy, _result(request, policy, "duplicate_suppressed", detail="idempotency key already reserved"))
     try:
         response = await asyncio.wait_for(adapter(), timeout=max(0.1, min(timeout_seconds, 30.0)))
         result = _result(
@@ -66,4 +74,4 @@ async def execute_authorized(
     except Exception as exc:
         result = _result(request, policy, "failed", retryable=False, detail=type(exc).__name__)
     finalize_execution(request.idempotency_key, contract_dict(result))
-    return result
+    return _audited(request, policy, result)

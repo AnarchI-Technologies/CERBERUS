@@ -7,7 +7,7 @@ preserved until each seam has fixture coverage and production evidence.
 - [x] Add a timeout-bounded execution coordinator with durable idempotency.
 - [x] Route arena broadcasts through policy, coordination, and normalized
   execution results.
-- [ ] Add a hash-linked append-only audit ledger connecting request, policy,
+- [x] Add a hash-linked append-only audit ledger connecting request, policy,
   execution, and outcome records.
 - [ ] Route pickup and equip free actions through the same seam.
 - [ ] Reconcile reserved executions after interruption before allowing retry.

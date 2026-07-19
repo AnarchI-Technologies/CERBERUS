@@ -10,6 +10,7 @@ for folder in (ROOT / "src", ROOT / "data"):
     sys.path.insert(0, str(folder))
 
 from execution_coordinator import execute_authorized
+from audit_ledger import audit_rows, verify_audit_ledger
 from runtime_state import execution_ledger_records, overridden_memory_dir
 from v2_contracts import ActionRequest, PolicyDecision, PolicyOutcome
 
@@ -50,11 +51,14 @@ def test_executes_allowed_request_once_and_persists_result() -> None:
         first = asyncio.run(execute_authorized(request(), policy(), adapter))
         second = asyncio.run(execute_authorized(request(), policy(), adapter))
         ledger = execution_ledger_records()
+        audit = audit_rows()
 
     assert first.status == "accepted"
     assert second.status == "duplicate_suppressed"
     assert calls == 1
     assert ledger[0]["status"] == "accepted"
+    assert [item["execution_status"] for item in audit] == ["accepted", "duplicate_suppressed"]
+    assert verify_audit_ledger()["ok"] is True
 
 
 def test_denied_policy_never_calls_adapter_or_reserves_key() -> None:
