@@ -119,6 +119,7 @@ class OllamaModelGateway:
         endpoint: str | None = None,
         aliases_path: str | Path = DEFAULT_ALIASES_FILE,
         transport: Callable[[str, dict[str, Any], float], dict[str, Any]] | None = None,
+        health_transport: Callable[[str, float], dict[str, Any]] | None = None,
     ):
         self.endpoint = (endpoint or os.getenv("CERBERUS_OLLAMA_ENDPOINT") or DEFAULT_ENDPOINT).rstrip("/")
         host = (urlparse(self.endpoint).hostname or "").lower()
@@ -126,6 +127,7 @@ class OllamaModelGateway:
             raise GatewayValidationError("Ollama endpoint must be loopback-only")
         self.aliases_path = Path(aliases_path)
         self.transport = transport or self._http_post
+        self.health_transport = health_transport or self._http_get
 
     def enabled(self) -> bool:
         return _truthy("CERBERUS_MODEL_GATEWAY_ENABLED") and not _truthy("CERBERUS_INFERENCE_KILL_SWITCH")
@@ -139,10 +141,47 @@ class OllamaModelGateway:
         if not self.enabled():
             return {"ok": False, "mode": "deterministic", "reason": "gateway_disabled"}
         try:
-            response = self.transport("/api/version", {}, max(0.1, timeout))
+            response = self.health_transport("/api/version", max(0.1, timeout))
             return {"ok": True, "mode": "model_available", "version": str(response.get("version") or "")[:40]}
         except Exception as exc:
             return {"ok": False, "mode": "deterministic", "reason": type(exc).__name__}
+
+    def readiness(self, *, timeout: float = 3.0) -> dict[str, Any]:
+        health = self.health(timeout=timeout)
+        if not health.get("ok"):
+            return {**health, "aliases_ready": False, "missing": [], "digest_mismatches": []}
+        try:
+            payload = self.health_transport("/api/tags", max(0.1, timeout))
+            installed = {
+                str(item.get("name") or item.get("model") or ""): str(item.get("digest") or "")
+                for item in payload.get("models", [])
+                if isinstance(item, dict)
+            }
+            missing: list[str] = []
+            mismatches: list[str] = []
+            for alias, config in self.aliases().items():
+                model = str(config.get("model") or "")
+                expected = str(config.get("digest") or "")
+                actual = installed.get(model, "")
+                if not actual:
+                    missing.append(alias)
+                elif expected and actual != expected:
+                    mismatches.append(alias)
+            return {
+                **health,
+                "aliases_ready": not missing and not mismatches,
+                "missing": missing,
+                "digest_mismatches": mismatches,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "mode": "deterministic",
+                "reason": type(exc).__name__,
+                "aliases_ready": False,
+                "missing": [],
+                "digest_mismatches": [],
+            }
 
     def propose(
         self,
@@ -213,6 +252,14 @@ class OllamaModelGateway:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        with urlopen(request, timeout=timeout) as response:
+            result = json.loads(response.read(1_000_000).decode("utf-8"))
+        if not isinstance(result, dict):
+            raise GatewayValidationError("Ollama response must be an object")
+        return result
+
+    def _http_get(self, path: str, timeout: float) -> dict[str, Any]:
+        request = Request(f"{self.endpoint}{path}", method="GET")
         with urlopen(request, timeout=timeout) as response:
             result = json.loads(response.read(1_000_000).decode("utf-8"))
         if not isinstance(result, dict):

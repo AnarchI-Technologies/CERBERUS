@@ -12,7 +12,7 @@
 - [ ] Record deployment smoke-test and rollback procedures.
 - [x] Record the initial Windows operator-node hardware profile.
 - [x] Install and benchmark evaluation-only Ollama candidates.
-- [ ] Build a repeatable Ollama health/readiness check with no-model fallback.
+- [x] Build a repeatable Ollama health/readiness check with no-model fallback.
 
 ## Phase 1 — contracts and policy boundary
 
@@ -22,8 +22,8 @@
 - [x] Add capability grants and emergency suspension to the isolated policy engine.
 - [ ] Route one free Claw Royale action through the policy/execution seam.
 - [ ] Add adapter contract and sanitized replay tests.
-- [ ] Add a single model gateway; prohibit direct Ollama calls elsewhere.
-- [ ] Add pinned model aliases, deadlines, schema validation, and an inference
+- [x] Add a single model gateway; prohibit direct Ollama calls elsewhere.
+- [x] Add pinned model aliases, deadlines, schema validation, and an inference
   kill switch.
 - [ ] Require semantic evaluation, not merely schema validity, before model
   promotion.
