@@ -17,7 +17,7 @@ mv -Tf "$temporary" "$current"
 systemctl restart cerberus.service
 
 for _ in $(seq 1 100); do
-  if curl -fsS http://127.0.0.1:10000/healthz >/dev/null; then
+  if curl -fsS http://127.0.0.1:10000/healthz >/dev/null 2>&1; then
     printf '%s\n' "$commit"
     exit 0
   fi

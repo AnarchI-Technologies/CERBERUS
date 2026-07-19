@@ -18,9 +18,20 @@ credential, signature, or private runtime payload.
 Result: no duplicate or stale gameplay action was emitted after restart/retry,
 and deterministic service recovery completed well within five minutes.
 
-## Remaining proof
+## Prior-release rollback drill
 
-An actual prior-release rollback has not yet been exercised. The documented
-rollback procedure remains available, but the backlog item stays open until a
-separate release directory or equivalent atomic deployment target permits a
-rollback without rewriting the live shared working tree.
+- Built credential-free immutable releases for the current commit and prior
+  known-good commit `c9de016…` under `/opt/cerberus-releases`.
+- Smoke-tested the current release on isolated loopback port 10002 with all
+  external workers disabled and no production environment file.
+- Activated the prior release atomically without changing the Git working tree.
+- Prior-release rollback health recovery: **443 ms**.
+- Observation window after rollback: **15 seconds**.
+- Action post-mortems before and after rollback: **30 → 30**.
+- Production and staging during rollback: **healthy**.
+- Roll-forward health recovery: **338 ms**.
+- Production, staging, evaluation timer, and official-knowledge timer after
+  roll-forward: **healthy**.
+
+Result: rollback and recovery completed within five minutes without copying or
+changing `.env`, runtime memory, wallet identity, API keys, or signing data.

@@ -41,5 +41,5 @@
 
 - [x] Define the 72-hour evaluation protocol and metrics.
 - [x] Demonstrate no duplicate consequential actions after restart/retry.
-- [ ] Demonstrate rollback and recovery within five minutes.
+- [x] Demonstrate rollback and recovery within five minutes.
 - [ ] Merge behavioral branches only after recorded production evidence.
