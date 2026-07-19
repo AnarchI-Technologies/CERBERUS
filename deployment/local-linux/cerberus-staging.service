@@ -1,0 +1,18 @@
+[Unit]
+Description=CERBERUS isolated staging runtime
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/c/Users/alexg/Documents/Codex/CERBERUS
+EnvironmentFile=/etc/cerberus/staging.env
+ExecStart=/opt/cerberus-venv/bin/python /mnt/c/Users/alexg/Documents/Codex/CERBERUS/src/render_app.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

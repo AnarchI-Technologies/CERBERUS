@@ -2960,6 +2960,23 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(any(edit.get("detector") == "runtime.target_blocked" for edit in suggestions))
         self.assertTrue(any(item.get("outcome", {}).get("message") == "TARGET_BLOCKED" for item in evidence))
 
+    def test_runtime_memory_defaults_follow_current_environment_not_import_time(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                store = CompactMemoryStore()
+                rules_path = postgame_hardening.hardened_strategy_rules_file()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(store.path.parent, Path(tmp))
+        self.assertEqual(store.encrypted_path.parent, Path(tmp))
+        self.assertEqual(rules_path.parent, Path(tmp))
+
     def test_retained_death_lesson_changes_next_turn_policy(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         try:

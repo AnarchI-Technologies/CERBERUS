@@ -27,3 +27,15 @@ rejects non-Windows secret-vault use until a vetted Linux crypto backend exists.
 WSL is a development and compatibility environment. It is not yet an approved
 production secret or signing host.
 
+## Isolated staging service
+
+`cerberus-staging.service` runs a second dashboard on `127.0.0.1:10001` with a
+separate memory directory. Its default environment disables every external
+runtime, claim, social, loadout, and model effect. It deliberately does not load
+the production `.env`, so Hellion's identity and wallet material are absent.
+
+Install the checked-in service and environment template under `/etc`, then
+enable it with systemd. A future live A/B agent must receive its own dedicated
+environment file and identity; never add those credentials to this template or
+reuse Hellion's memory directory.
+

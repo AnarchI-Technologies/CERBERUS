@@ -264,8 +264,8 @@ class CompactMemoryStore:
     def __init__(
         self,
         *,
-        path: str | Path = DEFAULT_MEMORY_FILE,
-        encrypted_path: str | Path = DEFAULT_ENCRYPTED_FILE,
+        path: str | Path | None = None,
+        encrypted_path: str | Path | None = None,
         max_turns: int = DEFAULT_MAX_TURNS,
         max_short_turns: int | None = None,
         max_summaries: int = DEFAULT_MAX_SUMMARIES,
@@ -273,8 +273,12 @@ class CompactMemoryStore:
         max_facts: int = DEFAULT_MAX_FACTS,
         context_bytes: int = DEFAULT_CONTEXT_BYTES,
     ):
-        self.path = Path(path)
-        self.encrypted_path = Path(encrypted_path)
+        runtime_root = os.getenv("CERBERUS_MEMORY_DIR") or os.getenv("CERBERUS_HOME")
+        runtime_dir = Path(runtime_root) if runtime_root else DEFAULT_MEMORY_DIR
+        self.path = Path(path) if path is not None else runtime_dir / DEFAULT_MEMORY_FILE.name
+        self.encrypted_path = (
+            Path(encrypted_path) if encrypted_path is not None else runtime_dir / DEFAULT_ENCRYPTED_FILE.name
+        )
         self.max_turns = max_turns
         self.max_short_turns = min(max_short_turns or DEFAULT_MAX_SHORT_TURNS, max_turns)
         self.max_summaries = max_summaries
