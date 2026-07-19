@@ -12,6 +12,11 @@ python -m unittest discover -s tests -p "test_*.py"
 
 Result: 277 tests passed in 68.006 seconds.
 
+Local WSL 2 reproduction on Ubuntu 26.04 LTS with Python 3.14.4: 277 tests
+passed in 8.173 seconds with two Windows-only DPAPI tests skipped. GitHub Actions
+also passes on `windows-latest` and `ubuntu-latest` after making those DPAPI
+expectations platform-aware.
+
 The suite currently writes temporary X authorization artifacts in the working
 directory during mocked tests and may rewrite `data/hardened_strategy_rules.json`.
 Those side effects are test-harness debt and must not be committed as product
@@ -31,8 +36,8 @@ does not merge or close them automatically.
 ## Current release gate
 
 - Windows unit suite: passing.
-- Linux unit suite: newly added to CI; not yet production-proven.
+- Linux unit suite: passing in GitHub Actions and local WSL 2; this is test
+  portability evidence, not production-runtime proof.
 - Adapter contract tests: absent.
 - Replay and resilience suites: incomplete.
 - Rollback verification: not yet documented.
-

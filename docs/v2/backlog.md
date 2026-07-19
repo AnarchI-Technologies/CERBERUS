@@ -5,7 +5,7 @@
 - [x] Record the Windows baseline test suite.
 - [x] Document the current Claw event-to-action path.
 - [x] Inventory external effect families and provisional capabilities.
-- [x] Add Linux to continuous integration.
+- [x] Add Linux to continuous integration and reproduce it locally in WSL 2.
 - [x] Record the incremental-restructure architecture decision.
 - [ ] Review PRs #1-#3 for unique coverage and consolidate or close them.
 - [ ] Remove test-suite working-tree side effects.
