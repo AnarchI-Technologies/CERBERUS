@@ -1,0 +1,21 @@
+[Unit]
+Description=CERBERUS deterministic local runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT_WSL__
+EnvironmentFile=__REPO_ROOT_WSL__/.env
+Environment=PORT=10000
+Environment=CERBERUS_BIND_HOST=127.0.0.1
+Environment=CERBERUS_MEMORY_DIR=/var/lib/cerberus/memory
+Environment=CERBERUS_MEMORY_BACKEND=sqlite
+Environment=CERBERUS_MODEL_GATEWAY_ENABLED=false
+ExecStart=/opt/cerberus-venv/bin/python __REPO_ROOT_WSL__/src/render_app.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
