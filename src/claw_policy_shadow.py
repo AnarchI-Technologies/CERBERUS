@@ -28,6 +28,7 @@ def _visible_targets(state: TurnState) -> frozenset[str]:
     )
     values.update(agent.id for agent in (*state.visible_agents, *state.visible_monsters))
     values.update(str(item.get("id") or "") for item in state.local_ground_items())
+    values.update(str(item.get("id") or "") for item in state.inventory)
     return frozenset(value for value in values if value)
 
 

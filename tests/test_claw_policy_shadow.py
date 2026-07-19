@@ -72,3 +72,23 @@ def test_core_tick_returns_same_selected_action_with_shadow_enabled() -> None:
     assert with_shadow["type"] == without_shadow["type"]
     assert with_shadow.get("regionId") == without_shadow.get("regionId")
     assert saved
+
+
+def test_shadow_allows_use_of_carried_inventory_item() -> None:
+    payload = snapshot()
+    payload["view"]["self"]["inventory"] = [{"id": "med-1", "typeId": "medkit"}]
+    with tempfile.TemporaryDirectory() as tmp:
+        old = os.environ.get("CERBERUS_MEMORY_DIR")
+        os.environ["CERBERUS_MEMORY_DIR"] = tmp
+        try:
+            record = evaluate_claw_action_shadow(
+                TurnState.from_snapshot(payload),
+                {"type": "use_item", "itemId": "med-1"},
+            )
+        finally:
+            if old is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old
+
+    assert record["policy"]["outcome"] == "ALLOW"
