@@ -16,10 +16,10 @@
 
 ## Phase 1 — contracts and policy boundary
 
-- [ ] Define versioned Event, Decision, ActionRequest, PolicyDecision,
+- [x] Define versioned Event, Decision, ActionRequest, PolicyDecision,
   ExecutionResult, MemoryRecord, and AuditRecord schemas.
-- [ ] Implement `ALLOW`, `DENY`, `REVIEW`, and `DEFER` policy outcomes.
-- [ ] Add capability grants and emergency suspension.
+- [x] Implement `ALLOW`, `DENY`, `REVIEW`, and `DEFER` policy outcomes.
+- [x] Add capability grants and emergency suspension to the isolated policy engine.
 - [ ] Route one free Claw Royale action through the policy/execution seam.
 - [ ] Add adapter contract and sanitized replay tests.
 - [ ] Add a single model gateway; prohibit direct Ollama calls elsewhere.
