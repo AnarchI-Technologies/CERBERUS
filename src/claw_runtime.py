@@ -20,6 +20,7 @@ import websockets
 from autonomy_suggestions import record_autonomy_observation
 from action_postmortem import build_action_postmortem
 from claw_contract import COOLDOWN_ACTIONS, FREE_ACTIONS, JOIN_DECISIONS, THOUGHT_MAX_CHARS
+from claw_policy_shadow import authorize_broadcast
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
@@ -1599,6 +1600,18 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 append_action_audit({"kind": "action_sent", "action": action, "reason": str(action.get("reason") or ""), "state": "playing"})
                 free_actions = free_actions_from_side_effects(action)
                 for free_action in free_actions:
+                    if str(free_action.get("type") or "") == "broadcast":
+                        allowed, policy_record = authorize_broadcast(state, free_action)
+                        if not allowed:
+                            append_action_audit(
+                                {
+                                    "kind": "free_action_policy_denied",
+                                    "action": free_action,
+                                    "reason": ",".join(policy_record["policy"].get("reasons") or []),
+                                    "state": "playing",
+                                }
+                            )
+                            continue
                     free_envelope = action_envelope(free_action)
                     await ws.send(json.dumps(free_envelope, ensure_ascii=True, separators=(",", ":")))
                     append_action_audit(

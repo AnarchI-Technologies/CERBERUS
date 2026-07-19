@@ -8,7 +8,7 @@ from uuid import uuid4
 from policy_engine import evaluate_action_request
 from runtime_state import append_policy_shadow
 from turn_state_model import TurnState
-from v2_contracts import ActionRequest, PolicyContext, contract_dict
+from v2_contracts import ActionRequest, PolicyContext, PolicyOutcome, contract_dict
 
 
 def shadow_enabled() -> bool:
@@ -32,8 +32,7 @@ def _visible_targets(state: TurnState) -> frozenset[str]:
     return frozenset(value for value in values if value)
 
 
-def evaluate_claw_action_shadow(state: TurnState, action: dict) -> dict:
-    """Record policy evidence without altering or executing the selected action."""
+def _evaluate_claw_action(state: TurnState, action: dict, *, enforced: bool) -> dict:
     action_type = str(action.get("type") or "rest")
     correlation_id = str(state.game_id or f"turn-{state.turn}")
     request = ActionRequest(
@@ -50,7 +49,7 @@ def evaluate_claw_action_shadow(state: TurnState, action: dict) -> dict:
         idempotency_key=str(uuid4()),
     )
     context = PolicyContext(
-        policy_id="claw-shadow-v1",
+        policy_id="claw-free-action-v1" if enforced else "claw-shadow-v1",
         capabilities=frozenset({"game.action.execute"}),
         allowed_targets=_visible_targets(state),
         suspended=os.getenv("CERBERUS_EMERGENCY_SUSPEND", "false").strip().lower() in {"1", "true", "yes", "on"},
@@ -63,7 +62,20 @@ def evaluate_claw_action_shadow(state: TurnState, action: dict) -> dict:
         "request": contract_dict(request),
         "policy": contract_dict(policy),
         "selected_action": {key: value for key, value in action.items() if not str(key).startswith("_")},
-        "enforced": False,
+        "enforced": enforced,
     }
     append_policy_shadow(record)
     return record
+
+
+def evaluate_claw_action_shadow(state: TurnState, action: dict) -> dict:
+    """Record policy evidence without altering or executing the selected action."""
+    return _evaluate_claw_action(state, action, enforced=False)
+
+
+def authorize_broadcast(state: TurnState, action: dict) -> tuple[bool, dict]:
+    """Enforce the first v2 seam for the non-financial broadcast action only."""
+    if str(action.get("type") or "") != "broadcast":
+        raise ValueError("authorize_broadcast only accepts broadcast actions")
+    record = _evaluate_claw_action(state, action, enforced=True)
+    return record["policy"]["outcome"] == PolicyOutcome.ALLOW.value, record

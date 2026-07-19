@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 for folder in (ROOT / "src", ROOT / "data"):
     sys.path.insert(0, str(folder))
 
-from claw_policy_shadow import evaluate_claw_action_shadow
+from claw_policy_shadow import authorize_broadcast, evaluate_claw_action_shadow
 from core_loop import cerberus_tick
 from runtime_state import policy_shadow_records
 from turn_state_model import TurnState
@@ -92,3 +92,31 @@ def test_shadow_allows_use_of_carried_inventory_item() -> None:
                 os.environ["CERBERUS_MEMORY_DIR"] = old
 
     assert record["policy"]["outcome"] == "ALLOW"
+
+
+def test_broadcast_is_enforced_and_emergency_suspension_denies_it() -> None:
+    state = TurnState.from_snapshot(snapshot())
+    action = {"type": "broadcast", "message": "Arena update"}
+    with tempfile.TemporaryDirectory() as tmp:
+        old_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        old_suspend = os.environ.get("CERBERUS_EMERGENCY_SUSPEND")
+        os.environ["CERBERUS_MEMORY_DIR"] = tmp
+        try:
+            os.environ["CERBERUS_EMERGENCY_SUSPEND"] = "false"
+            allowed, allowed_record = authorize_broadcast(state, action)
+            os.environ["CERBERUS_EMERGENCY_SUSPEND"] = "true"
+            denied, denied_record = authorize_broadcast(state, action)
+        finally:
+            if old_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_dir
+            if old_suspend is None:
+                os.environ.pop("CERBERUS_EMERGENCY_SUSPEND", None)
+            else:
+                os.environ["CERBERUS_EMERGENCY_SUSPEND"] = old_suspend
+
+    assert allowed
+    assert allowed_record["enforced"] is True
+    assert not denied
+    assert denied_record["policy"]["reasons"] == ["emergency_suspension"]
