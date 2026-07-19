@@ -2,7 +2,7 @@
 
 ## Smoke test
 
-Run `deployment/local-linux/smoke-test.sh` inside WSL. It verifies that the
+Run `bash deployment/local-linux/smoke-test.sh` inside WSL. It verifies that the
 production and isolated staging services are active, both loopback health
 endpoints answer, and the production-evidence timer is running. It reads no
 credentials and performs no game action.

@@ -7,7 +7,7 @@
 - [x] Inventory external effect families and provisional capabilities.
 - [x] Add Linux to continuous integration and reproduce it locally in WSL 2.
 - [x] Record the incremental-restructure architecture decision.
-- [ ] Review PRs #1-#3 for unique coverage and consolidate or close them.
+- [x] Review PRs #1-#3 and consolidate unique in-scope coverage; close them after publication.
 - [ ] Remove test-suite working-tree side effects.
 - [x] Record deployment smoke-test and rollback procedures.
 - [x] Record the initial Windows operator-node hardware profile.

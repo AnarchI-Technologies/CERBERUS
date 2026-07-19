@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import sys
 import os
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +19,47 @@ import claw_runtime
 
 
 class ClawRuntimeGameplayGateTests(unittest.TestCase):
+    def test_clean_socket_close_records_terminal_connector_state(self) -> None:
+        updates: list[dict[str, object]] = []
+
+        class FakeSocket:
+            def __aiter__(self):  # type: ignore[no-untyped-def]
+                return self
+
+            async def __anext__(self) -> str:
+                raise StopAsyncIteration
+
+        class FakeConnect:
+            async def __aenter__(self) -> FakeSocket:
+                return FakeSocket()
+
+            async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+                return None
+
+        config = claw_runtime.ClawRuntimeConfig(
+            api_key="fixture-key",
+            api_base="https://cdn.clawroyale.ai/api",
+            version="1.13.1",
+            mode="free",
+            enabled=True,
+        )
+        with (
+            mock.patch.object(claw_runtime, "discover_version", return_value="1.13.1"),
+            mock.patch.object(claw_runtime, "record_account_balance", return_value={"ok": True}),
+            mock.patch.object(claw_runtime, "record_stale_paid_waiting_games", return_value=[]),
+            mock.patch.object(claw_runtime, "join_blocker_for_account", return_value=""),
+            mock.patch.object(claw_runtime, "prejoin_loadout_report", return_value={"ok": True}),
+            mock.patch.object(claw_runtime, "schedule_preseason1_claim_sweep"),
+            mock.patch.object(claw_runtime, "read_json", return_value={}),
+            mock.patch.object(claw_runtime, "update_status", side_effect=lambda **kwargs: updates.append(kwargs)),
+            mock.patch.object(claw_runtime.websockets, "connect", return_value=FakeConnect()),
+        ):
+            asyncio.run(claw_runtime.connect_and_play(config, "/ws/join"))
+
+        self.assertEqual(updates[0]["state"], "connecting")
+        self.assertEqual(updates[1]["state"], "connected")
+        self.assertEqual(updates[-1], {"state": "socket_closed", "last_error": "websocket closed without terminal game frame"})
+
     def test_agent_view_waiting_status_does_not_act(self) -> None:
         payload = {
             "type": "agent_view",
