@@ -75,6 +75,20 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
         self.assertTrue(claw_runtime.server_action_window_open(state, True))
         self.assertFalse(claw_runtime.server_action_window_open(state, False))
 
+    def test_accepted_cooldown_result_recloses_out_of_order_ready_event(self) -> None:
+        status = {"last_action": {"type": "use_item"}}
+        self.assertTrue(claw_runtime.accepted_cooldown_action_result({"ok": True}, status))
+        self.assertFalse(
+            claw_runtime.accepted_cooldown_action_result(
+                {"ok": False, "error": {"code": "COOLDOWN_ACTIVE"}}, status
+            )
+        )
+        self.assertFalse(
+            claw_runtime.accepted_cooldown_action_result(
+                {"ok": True}, {"last_action": {"type": "pickup"}}
+            )
+        )
+
     def test_agent_view_waiting_status_does_not_act(self) -> None:
         payload = {
             "type": "agent_view",

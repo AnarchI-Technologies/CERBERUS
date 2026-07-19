@@ -19,7 +19,7 @@ import websockets
 
 from autonomy_suggestions import record_autonomy_observation
 from action_postmortem import build_action_postmortem
-from claw_contract import FREE_ACTIONS, JOIN_DECISIONS, THOUGHT_MAX_CHARS
+from claw_contract import COOLDOWN_ACTIONS, FREE_ACTIONS, JOIN_DECISIONS, THOUGHT_MAX_CHARS
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
@@ -1153,6 +1153,15 @@ def server_action_window_open(state: TurnState, server_can_act: bool | None) -> 
     return state.can_take_main_action and server_can_act is not False
 
 
+def accepted_cooldown_action_result(payload: dict[str, Any], status: dict[str, Any]) -> bool:
+    """Recognize an accepted cooldown action even when event order is reversed."""
+    last_action = status.get("last_action") if isinstance(status.get("last_action"), dict) else {}
+    action_type = str(last_action.get("type") or "")
+    error_text = str(payload.get("message") or payload.get("error") or "")
+    success_raw = payload.get("success", payload.get("ok"))
+    return action_type in COOLDOWN_ACTIONS and not error_text and success_raw is not False
+
+
 def _balance_float(value: Any) -> float:
     try:
         return float(value or 0)
@@ -1455,7 +1464,10 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 elif frame_type == "action_result" and "cooldown" in error_text.lower():
                     server_can_act = False
                 if frame_type == "action_result":
-                    record_action_result_learning(payload)
+                    action_status = read_json(claw_runtime_status_file())
+                    if accepted_cooldown_action_result(payload, action_status):
+                        server_can_act = False
+                    record_action_result_learning(payload, status=action_status)
                 if is_terminal_game_error(error_text):
                     clear_game_id()
                     update_status(postgame_maintenance_pending=True)
