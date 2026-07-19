@@ -40,6 +40,6 @@
 ## Production proof
 
 - [x] Define the 72-hour evaluation protocol and metrics.
-- [ ] Demonstrate no duplicate consequential actions after restart/retry.
+- [x] Demonstrate no duplicate consequential actions after restart/retry.
 - [ ] Demonstrate rollback and recovery within five minutes.
 - [ ] Merge behavioral branches only after recorded production evidence.
