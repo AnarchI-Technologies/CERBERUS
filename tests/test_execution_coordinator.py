@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 for folder in (ROOT / "src", ROOT / "data"):
     sys.path.insert(0, str(folder))
 
-from execution_coordinator import execute_authorized
+from execution_coordinator import execute_authorized, reconcile_reserved_free_actions
 from claw_runtime import coordinate_free_action_send
 from audit_ledger import audit_rows, verify_audit_ledger
 from runtime_state import execution_ledger_records, overridden_memory_dir
@@ -107,3 +107,47 @@ def test_runtime_coordinates_visible_pickup_once() -> None:
     assert first.status == "accepted"
     assert second.status == "duplicate_suppressed"
     assert len(socket.sent) == 1
+
+
+def test_reconciles_crash_left_pickup_without_allowing_retry() -> None:
+    from runtime_state import reserve_execution
+    from turn_state_model import TurnState
+
+    state = TurnState.from_snapshot(
+        {
+            "view": {
+                "self": {
+                    "id": "hellion",
+                    "hp": 100,
+                    "ep": 5,
+                    "inventory": [{"id": "relic-1", "typeId": "relic"}],
+                },
+                "currentRegion": {"id": "r1", "items": []},
+            }
+        }
+    )
+    with tempfile.TemporaryDirectory() as tmp, overridden_memory_dir(tmp):
+        assert reserve_execution(
+            "key-pickup",
+            "request-pickup",
+            metadata={"operation": "pickup", "target": "relic-1"},
+        )
+        reconciled = reconcile_reserved_free_actions(state)
+        ledger = execution_ledger_records()
+
+    assert reconciled == [{"status": "reconciled_observed", "operation": "pickup", "target": "relic-1"}]
+    assert ledger[0]["status"] == "reconciled_observed"
+
+
+def test_unobservable_reserved_broadcast_becomes_indeterminate() -> None:
+    from runtime_state import reserve_execution
+    from turn_state_model import TurnState
+
+    state = TurnState.from_snapshot({"view": {"self": {"id": "hellion", "hp": 100, "ep": 5}}})
+    with tempfile.TemporaryDirectory() as tmp, overridden_memory_dir(tmp):
+        assert reserve_execution(
+            "key-broadcast", "request-broadcast", metadata={"operation": "broadcast", "target": ""}
+        )
+        reconciled = reconcile_reserved_free_actions(state)
+
+    assert reconciled[0]["status"] == "indeterminate_no_retry"

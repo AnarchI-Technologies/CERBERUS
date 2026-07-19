@@ -25,7 +25,7 @@ from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, recon
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
 from env_loader import hydrate_env
-from execution_coordinator import execute_authorized
+from execution_coordinator import execute_authorized, reconcile_reserved_free_actions
 from external_wisdom import shared_public_line
 from free_action_abuse import FreeActionCortex
 from game_map import build_live_map
@@ -1616,6 +1616,16 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 )
                 await ws.close(code=1000, reason="terminal agent snapshot")
                 return
+            if state:
+                for reconciled in reconcile_reserved_free_actions(state):
+                    append_action_audit(
+                        {
+                            "kind": "execution_reconciled",
+                            "action": {"type": reconciled.get("operation"), "target": reconciled.get("target")},
+                            "reason": reconciled.get("status"),
+                            "state": "playing",
+                        }
+                    )
             if frame_type == "turn_advanced":
                 reported_can_act = frame_value(payload, "canAct")
                 server_can_act = bool(reported_can_act) if reported_can_act is not None else None

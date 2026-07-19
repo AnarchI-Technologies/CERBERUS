@@ -227,7 +227,13 @@ def execution_ledger_records(limit: int = 500) -> list[dict[str, Any]]:
     return [item for item in records if isinstance(item, dict)][-limit:]
 
 
-def reserve_execution(idempotency_key: str, request_id: str, *, limit: int = 500) -> bool:
+def reserve_execution(
+    idempotency_key: str,
+    request_id: str,
+    *,
+    metadata: dict[str, Any] | None = None,
+    limit: int = 500,
+) -> bool:
     if not idempotency_key:
         return False
     records = execution_ledger_records(limit=limit)
@@ -238,6 +244,7 @@ def reserve_execution(idempotency_key: str, request_id: str, *, limit: int = 500
             "idempotency_key": idempotency_key,
             "request_id": request_id,
             "status": "reserved",
+            "metadata": _scrub_mapping(metadata or {}, text_limit=120),
             "updated_at": int(time.time()),
         }
     )
