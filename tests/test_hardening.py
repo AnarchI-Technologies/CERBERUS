@@ -200,6 +200,68 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(any(result.intent == "quest_discover_ruin" for result in results))
         self.assertTrue(any(result.action and result.action["type"] == "explore" for result in results))
 
+    def test_quest_rush_acquires_known_relic_with_capacity_and_reserves(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {
+                        "id": "me", "hp": 100, "maxHp": 100, "ep": 3,
+                        "inventory": [{"id": f"relic-{index}", "typeId": "relic_red"} for index in range(4)],
+                    },
+                    "currentRegion": {"id": "r1", "terrain": "Ruin"},
+                },
+                "events": [
+                    {"type": "ruin_state_changed", "data": {"ruinId": "ru-1", "contentType": "relic", "gauge": 1}}
+                ],
+            }
+        )
+
+        result = next(
+            result for result in QuestRushCortex().evaluate(state, {})
+            if result.intent == "quest_relic_acquisition"
+        )
+
+        self.assertEqual(result.action["type"], "explore")
+
+    def test_quest_rush_stops_known_relic_ruin_when_match_bag_is_full(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {
+                        "id": "me", "hp": 100, "maxHp": 100, "ep": 5,
+                        "inventory": [{"id": f"relic-{index}", "typeId": "relic_red"} for index in range(5)],
+                    },
+                    "currentRegion": {"id": "r1", "terrain": "Ruin"},
+                },
+                "events": [
+                    {"type": "ruin_state_changed", "data": {"ruinId": "ru-1", "contentType": "relic", "gauge": 1}}
+                ],
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.action and result.action["type"] == "explore" for result in results))
+
+    def test_economy_skips_relic_pickup_when_match_bag_is_full(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {
+                        "id": "me", "hp": 100, "maxHp": 100, "ep": 5,
+                        "inventory": [{"id": f"owned-{index}", "typeId": "relic_red"} for index in range(5)],
+                    },
+                    "currentRegion": {
+                        "id": "r1", "items": [{"id": "relic-extra", "typeId": "relic_blue"}]
+                    },
+                }
+            }
+        )
+
+        results = EconomyCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.action and result.action.get("itemId") == "relic-extra" for result in results))
+
     def test_quest_rush_targets_safe_guardian_progress(self) -> None:
         state = TurnState.from_snapshot(
             {
@@ -219,6 +281,47 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(guardian.action["type"], "attack")
         self.assertEqual(guardian.action["targetId"], "guardian-1")
+        self.assertNotIn("Q|season.kills", guardian.source_facts)
+
+    def test_quest_rush_targets_only_favorable_rival_fights(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5, "atk": 45, "def": 10},
+                    "currentRegion": {"id": "r1"},
+                    "visibleAgents": [
+                        {"id": "rival-1", "hp": 25, "maxHp": 100, "atk": 8, "def": 2, "regionId": "r1"}
+                    ],
+                    "aliveCount": 35,
+                }
+            }
+        )
+
+        result = next(
+            result for result in QuestRushCortex().evaluate(state, {})
+            if result.intent == "quest_safe_rival_hunt"
+        )
+
+        self.assertEqual(result.action["targetId"], "rival-1")
+        self.assertIn("Q|season.rival_kills", result.source_facts)
+
+    def test_quest_rush_rejects_dangerous_rival_fight(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 75, "maxHp": 100, "ep": 5, "atk": 15, "def": 4},
+                    "currentRegion": {"id": "r1"},
+                    "visibleAgents": [
+                        {"id": "rival-1", "hp": 100, "maxHp": 100, "atk": 40, "def": 15, "regionId": "r1"}
+                    ],
+                    "aliveCount": 35,
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.intent == "quest_safe_rival_hunt" for result in results))
 
     def test_quest_rush_banks_survival_near_top_ten_even_with_full_ep(self) -> None:
         state = TurnState.from_snapshot(
@@ -235,6 +338,7 @@ class HardeningTests(unittest.TestCase):
         reserve = next(result for result in results if result.intent == "quest_top10_reserve")
 
         self.assertEqual(reserve.action["type"], "rest")
+        self.assertGreater(reserve.priority, 76)
 
     def test_quest_rush_does_not_rest_early_at_alive_twelve(self) -> None:
         state = TurnState.from_snapshot(

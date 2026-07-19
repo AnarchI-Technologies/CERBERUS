@@ -1,0 +1,132 @@
+"""Read-only synchronization of canonical public Claw Royale knowledge."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import html
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse
+
+import requests
+
+
+DEFAULT_SOURCES = (
+    "https://cdn.clawroyale.ai/api/version",
+    "https://www.clawroyale.ai/skill.md",
+    "https://www.clawroyale.ai/docs",
+    "https://www.clawroyale.ai/game-guide",
+    "https://www.clawroyale.ai/pack-catalog",
+    "https://www.clawroyale.ai/news?filter=patch_note",
+)
+MAX_SOURCE_BYTES = 2_000_000
+MAX_RENDERED_CHARS = 80_000
+
+
+def _official_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host == "clawroyale.ai" or host.endswith(".clawroyale.ai")
+
+
+def _readable_body(response: requests.Response) -> str:
+    raw = response.content[:MAX_SOURCE_BYTES]
+    text = raw.decode(response.encoding or "utf-8", errors="replace")
+    content_type = response.headers.get("Content-Type", "").lower()
+    if "json" in content_type:
+        try:
+            text = json.dumps(json.loads(text), indent=2, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            pass
+    elif "html" in content_type or "<html" in text[:500].lower():
+        text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", text)
+        text = re.sub(r"(?s)<[^>]+>", "\n", text)
+        text = html.unescape(text)
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()[:MAX_RENDERED_CHARS]
+
+
+def fetch_canonical_sources(session: requests.Session | None = None) -> list[dict[str, str | int]]:
+    client = session or requests.Session()
+    records: list[dict[str, str | int]] = []
+    for url in DEFAULT_SOURCES:
+        if not _official_url(url):
+            raise ValueError(f"non-official source rejected: {url}")
+        response = client.get(url, timeout=20, allow_redirects=True, headers={"User-Agent": "CERBERUS-canonical-sync/1"})
+        response.raise_for_status()
+        final_url = str(response.url or url)
+        if not _official_url(final_url):
+            raise ValueError(f"redirect outside clawroyale.ai rejected: {final_url}")
+        body = _readable_body(response)
+        records.append(
+            {
+                "url": final_url,
+                "status": response.status_code,
+                "sha256": hashlib.sha256(response.content[:MAX_SOURCE_BYTES]).hexdigest(),
+                "content": body,
+            }
+        )
+    return records
+
+
+def _record_set_hash(records: list[dict[str, str | int]]) -> str:
+    evidence = "\n".join(f"{record['url']}|{record['sha256']}" for record in records)
+    return hashlib.sha256(evidence.encode("utf-8")).hexdigest()
+
+
+def render_snapshot(records: list[dict[str, str | int]], *, generated_at: str | None = None) -> str:
+    stamp = generated_at or datetime.now(timezone.utc).isoformat()
+    set_hash = _record_set_hash(records)
+    lines = [
+        "# Claw Royale canonical server snapshot",
+        "",
+        f"Generated: `{stamp}`",
+        f"Canonical set SHA-256: `{set_hash}`",
+        "",
+        "> Generated from public, official clawroyale.ai sources using GET requests only. "
+        "This is evidence for review; it does not modify live policy automatically.",
+    ]
+    for record in records:
+        lines.extend(
+            [
+                "",
+                f"## {record['url']}",
+                "",
+                f"- HTTP status: `{record['status']}`",
+                f"- SHA-256: `{record['sha256']}`",
+                "",
+                "```text",
+                str(record["content"]).replace("```", "` ` `"),
+                "```",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def sync(output: Path, session: requests.Session | None = None) -> bool:
+    records = fetch_canonical_sources(session)
+    previous = output.read_text(encoding="utf-8") if output.exists() else ""
+    if f"Canonical set SHA-256: `{_record_set_hash(records)}`" in previous:
+        return False
+    rendered = render_snapshot(records)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(rendered, encoding="utf-8")
+    temporary.replace(output)
+    return True
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=Path("data/claw_royale_canonical_snapshot.md"))
+    args = parser.parse_args()
+    changed = sync(args.output)
+    print("updated" if changed else "unchanged")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
