@@ -1106,11 +1106,6 @@ def record_action_result_learning(payload: dict[str, Any], *, status: dict[str, 
             "state": status.get("state") or "",
         }
     )
-
-
-def server_action_window_open(state: TurnState, server_can_act: bool | None) -> bool:
-    """Outcome/event truth may close a stale snapshot's main-action window."""
-    return state.can_take_main_action and server_can_act is not False
     try:
         append_action_postmortem(
             build_action_postmortem(action=last_action, payload=payload, snapshot=snapshot)
@@ -1151,6 +1146,11 @@ def server_action_window_open(state: TurnState, server_can_act: bool | None) -> 
             update_status(last_lesson_compile=compiled)
     except Exception:
         return
+
+
+def server_action_window_open(state: TurnState, server_can_act: bool | None) -> bool:
+    """Outcome/event truth may close a stale snapshot's main-action window."""
+    return state.can_take_main_action and server_can_act is not False
 
 
 def _balance_float(value: Any) -> float:
