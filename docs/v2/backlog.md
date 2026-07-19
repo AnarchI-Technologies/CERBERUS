@@ -35,7 +35,7 @@
   prompt-injection checks.
 - [x] Route one existing knowledge write through admission in shadow mode.
 - [x] Add local embedding retrieval with source IDs and freshness.
-- [ ] Define retention compaction and deletion tests per memory class.
+- [x] Define retention compaction and deletion tests per memory class.
 
 ## Production proof
 
