@@ -1773,6 +1773,7 @@ class CerberusHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     port = int(os.getenv("PORT", "10000"))
+    bind_host = os.getenv("CERBERUS_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0"
     if claw_runtime_enabled():
         thread = threading.Thread(target=lambda: asyncio.run(run_claw_runtime()), daemon=True)
         thread.start()
@@ -1781,8 +1782,8 @@ def main() -> int:
         thread = threading.Thread(target=lambda: asyncio.run(run_moltstation_runtime()), daemon=True)
         thread.start()
         print("MoltStation runtime worker started", flush=True)
-    server = ThreadingHTTPServer(("0.0.0.0", port), CerberusHandler)
-    print(f"Cerberus Render service listening on 0.0.0.0:{port}", flush=True)
+    server = ThreadingHTTPServer((bind_host, port), CerberusHandler)
+    print(f"Cerberus service listening on {bind_host}:{port}", flush=True)
     server.serve_forever()
     return 0
 
