@@ -22,6 +22,14 @@ def test_collects_sanitized_policy_and_postmortem_evidence() -> None:
                     "state": "playing",
                     "updated_at": 100,
                     "live_version": "1.13.1",
+                    "terminal_game_id": "server-stale-game",
+                    "preseason1_claims": {
+                        "summary": {"totalPoints": 12795, "walletAddress": "never-retain"},
+                        "progress": [
+                            {"key": "explore", "level": 0},
+                            {"key": "items", "level": 6},
+                        ],
+                    },
                     "action_audit": [
                         {"kind": "action_result", "outcome": {"ok": True}},
                         {"kind": "action_result", "outcome": {"ok": False, "code": "COOLDOWN_ACTIVE"}},
@@ -46,6 +54,10 @@ def test_collects_sanitized_policy_and_postmortem_evidence() -> None:
     assert report["action_result_success_rate"] == 0.5
     assert report["cooldown_rejections_window"] == 1
     assert report["duplicate_actions_suppressed_window"] == 1
+    assert report["terminal_game_quarantined"] is True
+    assert report["preseason_points"] == 12795
+    assert report["objective_level_gaps"] == [{"key": "explore", "level": 0, "levels_to_five": 5}]
+    assert "wallet" not in json.dumps(report).lower()
     assert report["credentials_collected"] is False
     assert report["policy_enforcement_active"] is False
 

@@ -28,6 +28,13 @@ def _json(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _integer(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _loopback_health(url: str, timeout: float = 3.0) -> bool:
     host = (urlparse(url).hostname or "").lower()
     if host not in {"127.0.0.1", "localhost", "::1"}:
@@ -65,6 +72,17 @@ def collect(memory_root: Path, *, health_url: str = "http://127.0.0.1:10000/heal
         for row in policy_rows
         if isinstance(row, dict) and isinstance(row.get("policy"), dict)
     )
+    claims = runtime.get("preseason1_claims") if isinstance(runtime.get("preseason1_claims"), dict) else {}
+    progress = claims.get("progress") if isinstance(claims.get("progress"), list) else []
+    objective_gaps = [
+        {
+            "key": str(item.get("key") or "")[:80],
+            "level": _integer(item.get("level")),
+            "levels_to_five": max(0, 5 - _integer(item.get("level"))),
+        }
+        for item in progress
+        if isinstance(item, dict) and item.get("key") and _integer(item.get("level")) < 5
+    ]
     return {
         "schema_version": "cerberus.production_evaluation.v1",
         "recorded_at": int(time.time()),
@@ -72,6 +90,11 @@ def collect(memory_root: Path, *, health_url: str = "http://127.0.0.1:10000/heal
         "runtime_state": str(runtime.get("state") or "unknown")[:40],
         "runtime_status_age_seconds": max(0, int(time.time()) - int(runtime.get("updated_at") or 0)),
         "live_claw_version": str(runtime.get("live_version") or "")[:40],
+        "terminal_game_quarantined": bool(runtime.get("terminal_game_id")),
+        "preseason_points": _integer((claims.get("summary") or {}).get("totalPoints"))
+        if isinstance(claims.get("summary"), dict)
+        else 0,
+        "objective_level_gaps": objective_gaps,
         "actions_sent_window": len(sent),
         "action_results_window": len(results),
         "accepted_results_window": len(accepted),
