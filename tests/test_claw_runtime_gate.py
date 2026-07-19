@@ -19,6 +19,12 @@ import claw_runtime
 
 
 class ClawRuntimeGameplayGateTests(unittest.TestCase):
+    def test_server_terminal_game_id_blocks_stale_resume_snapshot_only(self) -> None:
+        status = {"terminal_game_id": "dead-game"}
+        self.assertTrue(claw_runtime.terminal_game_blocked(status, "dead-game"))
+        self.assertFalse(claw_runtime.terminal_game_blocked(status, "new-game"))
+        self.assertFalse(claw_runtime.terminal_game_blocked({}, "dead-game"))
+
     def test_clean_socket_close_records_terminal_connector_state(self) -> None:
         updates: list[dict[str, object]] = []
 

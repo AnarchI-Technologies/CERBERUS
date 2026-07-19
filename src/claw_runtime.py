@@ -295,6 +295,11 @@ def is_terminal_game_error(message: str) -> bool:
     )
 
 
+def terminal_game_blocked(status: dict[str, Any], game_id: str) -> bool:
+    terminal_id = str(status.get("terminal_game_id") or "")
+    return bool(terminal_id and game_id and terminal_id == game_id)
+
+
 def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
     thought = public_action_thought(action)
     data = {key: value for key, value in action.items() if not key.startswith("_")}
@@ -1461,6 +1466,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 continue
             if frame_type in {"action_result", "can_act_changed"}:
                 error_text = str(payload.get("message") or payload.get("error") or "")
+                action_status = read_json(claw_runtime_status_file())
                 if "not running" in error_text.lower():
                     gameplay_ready = False
                 reported_can_act = frame_value(payload, "canAct")
@@ -1469,11 +1475,11 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 elif frame_type == "action_result" and "cooldown" in error_text.lower():
                     server_can_act = False
                 if frame_type == "action_result":
-                    action_status = read_json(claw_runtime_status_file())
                     if accepted_cooldown_action_result(payload, action_status):
                         server_can_act = False
                     record_action_result_learning(payload, status=action_status)
                 if is_terminal_game_error(error_text):
+                    terminal_id = str(action_status.get("current_game_id") or stored_game_id() or "")
                     clear_game_id()
                     update_status(postgame_maintenance_pending=True)
                     record_account_balance(config, stage="game_ended")
@@ -1482,6 +1488,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                         state="game_ended",
                         last_frame_type=frame_type,
                         current_game_id="",
+                        terminal_game_id=terminal_id,
                         game_status="ended",
                         gameplay_ready=False,
                         can_act=False,
@@ -1525,6 +1532,20 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 continue
             snapshot = unwrap_snapshot(payload)
             game_id = extract_game_id(payload) or extract_game_id(snapshot or {})
+            terminal_status = read_json(claw_runtime_status_file())
+            if terminal_game_blocked(terminal_status, game_id):
+                gameplay_ready = False
+                clear_game_id()
+                update_status(
+                    state="terminal_game_waiting",
+                    current_game_id="",
+                    gameplay_ready=False,
+                    can_act=False,
+                    last_error="server-terminal game snapshot suppressed",
+                )
+                continue
+            if game_id and terminal_status.get("terminal_game_id"):
+                update_status(terminal_game_id="")
             if game_id:
                 remember_game_id(game_id)
             status = game_status(payload, snapshot)
@@ -1533,6 +1554,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             elif is_non_running_game_status(status):
                 gameplay_ready = False
             elif is_terminal_game_error(str(payload.get("message") or payload.get("error") or status)):
+                terminal_id = game_id or str(terminal_status.get("current_game_id") or stored_game_id() or "")
                 clear_game_id()
                 update_status(postgame_maintenance_pending=True)
                 record_account_balance(config, stage="game_ended")
@@ -1541,6 +1563,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                     state="game_ended",
                     last_frame_type=frame_type,
                     current_game_id="",
+                    terminal_game_id=terminal_id,
                     game_status="ended",
                     gameplay_ready=False,
                     can_act=False,
