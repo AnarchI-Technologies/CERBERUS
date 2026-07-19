@@ -117,7 +117,7 @@ class QuestRushCortex:
 
         results: list[CortexResult] = []
         pickup = _generic_quest_pickup(state)
-        if pickup and not state.visible_agents:
+        if pickup and state.objective_needs_progress("items") and not state.visible_agents:
             results.append(
                 CortexResult(
                     cortex=self.name,
@@ -136,11 +136,13 @@ class QuestRushCortex:
 
         region_label = f"{state.current_region.name} {state.current_region.terrain}".lower()
         known_relic_ruin = _known_relic_ruin(state)
+        explore_needed = state.objective_needs_progress("explore")
         relic_capacity_available = _carried_relic_count(state) < MATCH_RELIC_CAP
         ruin_available = (
             ("ruin" in region_label or bool(state.ruins))
             and _ruin_progressable(state)
             and (not known_relic_ruin or relic_capacity_available)
+            and (known_relic_ruin or explore_needed)
         )
         explore_cost = state.action_ep_cost("explore", 1)
         if ruin_available and state.self.ep >= explore_cost and not _combat_active(state):
@@ -170,7 +172,7 @@ class QuestRushCortex:
             and _guardian_engagement_is_safe(state, target)
         ]
         attack_cost = state.action_ep_cost("attack", 1)
-        if guardians and state.self.ep >= attack_cost:
+        if guardians and state.self.ep >= attack_cost and state.objective_needs_progress("damage"):
             target = sorted(guardians, key=lambda item: (item.hp, item.atk, item.id))[0]
             results.append(
                 CortexResult(
@@ -193,7 +195,9 @@ class QuestRushCortex:
             and is_worth_attacking(state, target)
             and _rival_engagement_is_safe(state, target)
         ]
-        if rivals and state.self.ep >= attack_cost:
+        if rivals and state.self.ep >= attack_cost and (
+            state.objective_needs_progress("kills") or state.objective_needs_progress("damage")
+        ):
             target = sorted(rivals, key=lambda item: (item.hp, item.atk, item.id))[0]
             results.append(
                 CortexResult(
@@ -210,7 +214,11 @@ class QuestRushCortex:
 
         # A top-ten placement is worth more than one blind movement. Preserve an
         # EP escape reserve once the field is nearly cut to the daily threshold.
-        if 0 < state.alive_count <= 10 and not state.visible_agents:
+        if (
+            0 < state.alive_count <= 10
+            and not state.visible_agents
+            and (state.objective_needs_progress("top5") or state.objective_needs_progress("survival"))
+        ):
             results.append(
                 CortexResult(
                     cortex=self.name,
@@ -223,7 +231,7 @@ class QuestRushCortex:
                     source_facts=["Q|daily_top10", "Q|season.top5", "Q|season.survival"],
                 )
             )
-        elif state.self.ep >= 3 and not state.visible_agents:
+        elif explore_needed and state.self.ep >= 3 and not state.visible_agents:
             target_region = best_fallback_region(state)
             if target_region:
                 results.append(

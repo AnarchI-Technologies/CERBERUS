@@ -346,6 +346,20 @@ def terminal_game_blocked(status: dict[str, Any], game_id: str) -> bool:
     return bool(terminal_id and game_id and terminal_id == game_id)
 
 
+def objective_levels_from_status(status: dict[str, Any]) -> dict[str, int]:
+    claims = status.get("preseason1_claims") if isinstance(status.get("preseason1_claims"), dict) else {}
+    progress = claims.get("progress") if isinstance(claims.get("progress"), list) else []
+    levels: dict[str, int] = {}
+    for row in progress:
+        if not isinstance(row, dict) or not row.get("key") or row.get("level") is None:
+            continue
+        try:
+            levels[str(row["key"])] = max(0, int(row["level"]))
+        except (TypeError, ValueError):
+            continue
+    return levels
+
+
 def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
     thought = public_action_thought(action)
     data = {key: value for key, value in action.items() if not key.startswith("_")}
@@ -1716,7 +1730,9 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             free_action_window = bool(state and not state.can_take_main_action and has_free_action_window(state))
             main_action_window = bool(state and server_action_window_open(state, server_can_act))
             if snapshot and ((wants_action(payload, snapshot, gameplay_ready=gameplay_ready) and main_action_window) or free_action_window):
-                action = cerberus_tick(snapshot)
+                decision_snapshot = dict(snapshot)
+                decision_snapshot["_cerberusObjectiveLevels"] = objective_levels_from_status(runtime_status)
+                action = cerberus_tick(decision_snapshot)
                 turn = int(state.turn if state else 0)
                 if duplicate_action_sent(runtime_status, action, turn=turn):
                     append_action_audit(
