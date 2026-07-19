@@ -9,7 +9,7 @@ preserved until each seam has fixture coverage and production evidence.
   execution results.
 - [x] Add a hash-linked append-only audit ledger connecting request, policy,
   execution, and outcome records.
-- [ ] Route pickup and equip free actions through the same seam.
+- [x] Route pickup and equip free actions through the same seam.
 - [ ] Reconcile reserved executions after interruption before allowing retry.
 - [ ] Add a sanitized operator decision/execution timeline.
 - [ ] Move one complete Claw Royale workflow behind v2 contracts.

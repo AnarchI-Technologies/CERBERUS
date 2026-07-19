@@ -13,6 +13,9 @@ from turn_state_model import TurnState
 from v2_contracts import ActionRequest, PolicyContext, PolicyDecision, PolicyOutcome, contract_dict
 
 
+ENFORCED_FREE_ACTIONS = frozenset({"pickup", "equip", "broadcast"})
+
+
 def shadow_enabled() -> bool:
     return os.getenv("CERBERUS_V2_POLICY_SHADOW_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
 
@@ -101,5 +104,15 @@ def authorize_broadcast_execution(
 ) -> tuple[bool, ActionRequest, PolicyDecision, dict]:
     if str(action.get("type") or "") != "broadcast":
         raise ValueError("authorize_broadcast_execution only accepts broadcast actions")
+    request, policy, record = _evaluate_claw_action_contracts(state, action, enforced=True)
+    return policy.outcome is PolicyOutcome.ALLOW, request, policy, record
+
+
+def authorize_free_action_execution(
+    state: TurnState, action: dict
+) -> tuple[bool, ActionRequest, PolicyDecision, dict]:
+    action_type = str(action.get("type") or "")
+    if action_type not in ENFORCED_FREE_ACTIONS:
+        raise ValueError(f"unsupported coordinated free action: {action_type}")
     request, policy, record = _evaluate_claw_action_contracts(state, action, enforced=True)
     return policy.outcome is PolicyOutcome.ALLOW, request, policy, record

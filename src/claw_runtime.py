@@ -20,7 +20,7 @@ import websockets
 from autonomy_suggestions import record_autonomy_observation
 from action_postmortem import build_action_postmortem
 from claw_contract import COOLDOWN_ACTIONS, FREE_ACTIONS, JOIN_DECISIONS, THOUGHT_MAX_CHARS
-from claw_policy_shadow import authorize_broadcast_execution
+from claw_policy_shadow import ENFORCED_FREE_ACTIONS, authorize_free_action_execution
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
@@ -306,6 +306,19 @@ def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
     thought = public_action_thought(action)
     data = {key: value for key, value in action.items() if not key.startswith("_")}
     return {"type": "action", "data": data, "thought": thought}
+
+
+async def coordinate_free_action_send(ws: Any, state: TurnState, action: dict[str, Any]):  # type: ignore[no-untyped-def]
+    allowed, request, policy, policy_record = authorize_free_action_execution(state, action)
+    if not allowed:
+        return None, policy_record
+    envelope = action_envelope(action)
+
+    async def send() -> dict[str, Any]:
+        await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
+        return {"code": "sent"}
+
+    return await execute_authorized(request, policy, send), policy_record
 
 
 def action_signature(action: dict[str, Any], *, turn: int = 0) -> str:
@@ -1640,37 +1653,36 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                         last_action_candidate=action,
                     )
                     continue
-                await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
+                action_type = str(action.get("type") or "")
+                execution_result: dict[str, Any] = {}
+                if action_type in ENFORCED_FREE_ACTIONS:
+                    coordinated, policy_record = await coordinate_free_action_send(ws, state, action)
+                    if coordinated is None or coordinated.status != "accepted":
+                        append_action_audit(
+                            {
+                                "kind": "free_action_execution_suppressed",
+                                "action": action,
+                                "reason": coordinated.status if coordinated else ",".join(policy_record["policy"].get("reasons") or []),
+                                "state": "playing",
+                            }
+                        )
+                        continue
+                    execution_result = contract_dict(coordinated)
+                else:
+                    await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
                 if str(action.get("type") or "") not in FREE_ACTIONS:
                     server_can_act = False
-                append_action_audit({"kind": "action_sent", "action": action, "reason": str(action.get("reason") or ""), "state": "playing"})
+                append_action_audit({"kind": "action_sent", "action": action, "reason": str(action.get("reason") or ""), "state": "playing", "execution_result": execution_result})
                 free_actions = free_actions_from_side_effects(action)
                 for free_action in free_actions:
-                    if str(free_action.get("type") or "") == "broadcast":
-                        allowed, request, policy, policy_record = authorize_broadcast_execution(state, free_action)
-                        if not allowed:
-                            append_action_audit(
-                                {
-                                    "kind": "free_action_policy_denied",
-                                    "action": free_action,
-                                    "reason": ",".join(policy_record["policy"].get("reasons") or []),
-                                    "state": "playing",
-                                }
-                            )
-                            continue
-                        free_envelope = action_envelope(free_action)
-
-                        async def send_broadcast() -> dict[str, Any]:
-                            await ws.send(json.dumps(free_envelope, ensure_ascii=True, separators=(",", ":")))
-                            return {"code": "sent"}
-
-                        execution = await execute_authorized(request, policy, send_broadcast)
-                        if execution.status != "accepted":
+                    if str(free_action.get("type") or "") in ENFORCED_FREE_ACTIONS:
+                        execution, policy_record = await coordinate_free_action_send(ws, state, free_action)
+                        if execution is None or execution.status != "accepted":
                             append_action_audit(
                                 {
                                     "kind": "free_action_execution_suppressed",
                                     "action": free_action,
-                                    "reason": execution.status,
+                                    "reason": execution.status if execution else ",".join(policy_record["policy"].get("reasons") or []),
                                     "state": "playing",
                                 }
                             )

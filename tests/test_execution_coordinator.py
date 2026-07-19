@@ -10,6 +10,7 @@ for folder in (ROOT / "src", ROOT / "data"):
     sys.path.insert(0, str(folder))
 
 from execution_coordinator import execute_authorized
+from claw_runtime import coordinate_free_action_send
 from audit_ledger import audit_rows, verify_audit_ledger
 from runtime_state import execution_ledger_records, overridden_memory_dir
 from v2_contracts import ActionRequest, PolicyDecision, PolicyOutcome
@@ -76,3 +77,33 @@ def test_denied_policy_never_calls_adapter_or_reserves_key() -> None:
     assert result.status == "policy_blocked"
     assert not called
     assert ledger == []
+
+
+def test_runtime_coordinates_visible_pickup_once() -> None:
+    from turn_state_model import TurnState
+
+    class Socket:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, value: str) -> None:
+            self.sent.append(value)
+
+    state = TurnState.from_snapshot(
+        {
+            "gameId": "game-1",
+            "turn": 7,
+            "view": {
+                "self": {"id": "hellion", "hp": 100, "ep": 5},
+                "currentRegion": {"id": "r1", "items": [{"id": "relic-1", "typeId": "relic"}]},
+            },
+        }
+    )
+    socket = Socket()
+    with tempfile.TemporaryDirectory() as tmp, overridden_memory_dir(tmp):
+        first, _ = asyncio.run(coordinate_free_action_send(socket, state, {"type": "pickup", "itemId": "relic-1"}))
+        second, _ = asyncio.run(coordinate_free_action_send(socket, state, {"type": "pickup", "itemId": "relic-1"}))
+
+    assert first.status == "accepted"
+    assert second.status == "duplicate_suppressed"
+    assert len(socket.sent) == 1
