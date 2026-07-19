@@ -52,3 +52,9 @@ identity separation, then explicitly enable the instance for a bounded test.
 Experiment evidence never contains wallet or API material, and candidate support
 still requires operator review before production promotion.
 
+Before enabling an experiment instance, run `src/agent_lab_guard.py` against its
+protected profile and the production profile. The default pass requires the
+runtime to remain disabled. A live pass additionally requires a distinct official
+Claw API identity. Signing keys are rejected unless separately and explicitly
+allowed; an Edge extension wallet should stay outside the service profile.
+
