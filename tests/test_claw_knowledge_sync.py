@@ -24,7 +24,11 @@ class FakeResponse:
 
 
 class FakeSession:
+    def __init__(self) -> None:
+        self.calls = []
+
     def get(self, url: str, **kwargs):  # type: ignore[no-untyped-def]
+        self.calls.append((url, kwargs))
         if url.endswith("/version"):
             return FakeResponse(url, b'{"version":"1.13.1"}', "application/json")
         return FakeResponse(url, b"<html><body><h1>Patch Note</h1><p>Safe update</p></body></html>", "text/html")
@@ -40,9 +44,9 @@ def test_sync_writes_official_provenance_and_readable_content() -> None:
     assert "1.13.1" in text
     assert "Patch Note" in text
     assert "SHA-256" in text
-    assert "Snapshot schema: `2`" in text
+    assert "Snapshot schema: `3`" in text
     assert "does not modify live policy automatically" in text
-    assert "Memory admission shadow: `6` admitted, `0` flagged" in text
+    assert "Memory admission shadow: `9` admitted, `0` flagged" in text
 
     with tempfile.TemporaryDirectory() as tmp:
         output = Path(tmp) / "canonical.md"
@@ -54,11 +58,20 @@ def test_sync_migrates_older_snapshot_with_unchanged_source_hash() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         output = Path(tmp) / "canonical.md"
         records = claw_knowledge_sync.fetch_canonical_sources(FakeSession())
-        old = claw_knowledge_sync.render_snapshot(records).replace("Snapshot schema: `2`\n", "")
+        old = claw_knowledge_sync.render_snapshot(records).replace("Snapshot schema: `3`\n", "")
         output.write_text(old, encoding="utf-8")
 
         assert claw_knowledge_sync.sync(output, FakeSession())
-        assert "Snapshot schema: `2`" in output.read_text(encoding="utf-8")
+        assert "Snapshot schema: `3`" in output.read_text(encoding="utf-8")
+
+
+def test_versioned_canonical_api_sources_use_discovered_version() -> None:
+    session = FakeSession()
+    claw_knowledge_sync.fetch_canonical_sources(session)
+    calls = {url: kwargs for url, kwargs in session.calls}
+    assert calls["https://cdn.clawroyale.ai/api/pack-catalog"]["headers"]["X-Version"] == "1.13.1"
+    assert calls["https://cdn.clawroyale.ai/api/posts?page=1&limit=20&type=patch_note"]["headers"]["X-Version"] == "1.13.1"
+    assert "X-Version" not in calls["https://cdn.clawroyale.ai/api/version"]["headers"]
 
 
 def test_rejects_redirect_outside_official_domain() -> None:

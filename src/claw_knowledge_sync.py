@@ -20,14 +20,17 @@ from v2_contracts import MemoryRecord
 DEFAULT_SOURCES = (
     "https://cdn.clawroyale.ai/api/version",
     "https://www.clawroyale.ai/skill.md",
-    "https://www.clawroyale.ai/docs",
-    "https://www.clawroyale.ai/game-guide",
-    "https://www.clawroyale.ai/pack-catalog",
-    "https://www.clawroyale.ai/news?filter=patch_note",
+    "https://cdn.clawroyale.ai/openapi.yaml",
+    "https://www.clawroyale.ai/game-guide.md",
+    "https://www.clawroyale.ai/references/changelog.md",
+    "https://www.clawroyale.ai/references/combat-items.md",
+    "https://www.clawroyale.ai/references/preseason1-quests.md",
+    "https://cdn.clawroyale.ai/api/posts?page=1&limit=20&type=patch_note",
+    "https://cdn.clawroyale.ai/api/pack-catalog",
 )
 MAX_SOURCE_BYTES = 2_000_000
-MAX_RENDERED_CHARS = 80_000
-SNAPSHOT_SCHEMA_VERSION = 2
+MAX_RENDERED_CHARS = 200_000
+SNAPSHOT_SCHEMA_VERSION = 3
 
 
 def _official_url(url: str) -> bool:
@@ -56,15 +59,30 @@ def _readable_body(response: requests.Response) -> str:
 def fetch_canonical_sources(session: requests.Session | None = None) -> list[dict[str, str | int]]:
     client = session or requests.Session()
     records: list[dict[str, str | int]] = []
+    live_version = ""
     for url in DEFAULT_SOURCES:
         if not _official_url(url):
             raise ValueError(f"non-official source rejected: {url}")
-        response = client.get(url, timeout=20, allow_redirects=True, headers={"User-Agent": "CERBERUS-canonical-sync/1"})
+        headers = {"User-Agent": "CERBERUS-canonical-sync/1"}
+        parsed = urlparse(url)
+        if parsed.hostname == "cdn.clawroyale.ai" and parsed.path.startswith("/api/") and not parsed.path.endswith("/version"):
+            if not live_version:
+                raise ValueError("official version must be discovered before versioned API sources")
+            headers["X-Version"] = live_version
+        response = client.get(url, timeout=20, allow_redirects=True, headers=headers)
         response.raise_for_status()
         final_url = str(response.url or url)
         if not _official_url(final_url):
             raise ValueError(f"redirect outside clawroyale.ai rejected: {final_url}")
         body = _readable_body(response)
+        if parsed.path.endswith("/version"):
+            try:
+                version_payload = json.loads(response.content.decode(response.encoding or "utf-8"))
+                live_version = str(version_payload.get("version") or "").strip()
+            except (AttributeError, TypeError, ValueError, UnicodeDecodeError):
+                live_version = ""
+            if not live_version:
+                raise ValueError("official version response did not contain a version")
         records.append(
             {
                 "url": final_url,

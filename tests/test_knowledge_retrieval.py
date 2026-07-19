@@ -12,12 +12,19 @@ from knowledge_retrieval import build_index, query_index
 
 
 class FakeGateway:
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
     def embed(self, *, alias, texts, allow_evaluation):  # type: ignore[no-untyped-def]
+        self.calls.append(list(texts))
         vectors = []
         for text in texts:
             lowered = text.lower()
             vectors.append((1.0 if "relic" in lowered else 0.0, 1.0 if "combat" in lowered else 0.0))
         return SimpleNamespace(vectors=tuple(vectors), model="local:embed", digest="pinned")
+
+    def aliases(self):  # type: ignore[no-untyped-def]
+        return {"cerberus-embed": {"model": "local:embed", "digest": "pinned"}}
 
 
 def test_index_excludes_flagged_source_and_preserves_provenance() -> None:
@@ -74,3 +81,34 @@ def test_query_returns_deterministic_scored_sources_with_freshness() -> None:
     assert results[0]["content"] == "Relic exploration rules."
     assert results[0]["source_id"]
     assert results[0]["indexed_at"] == "2026-07-19T00:00:00Z"
+
+
+def test_index_reuses_unchanged_vectors_without_calling_gateway() -> None:
+    records = [{"url": "https://www.clawroyale.ai/game-guide.md", "status": 200,
+                "sha256": "a" * 64, "content": "Relic exploration rules."}]
+    first_gateway = FakeGateway()
+    first = build_index(records, gateway=first_gateway, indexed_at="2026-07-19T00:00:00Z")
+    second_gateway = FakeGateway()
+
+    second = build_index(
+        records, gateway=second_gateway, indexed_at="2026-07-19T01:00:00Z", prior_index=first
+    )
+
+    assert second_gateway.calls == []
+    assert second["records"][0]["vector"] == first["records"][0]["vector"]
+    assert second["records"][0]["indexed_at"] == "2026-07-19T01:00:00Z"
+
+
+def test_index_embeds_only_new_or_changed_chunks() -> None:
+    original = [{"url": "https://www.clawroyale.ai/game-guide.md", "status": 200,
+                 "sha256": "a" * 64, "content": "Relic exploration rules."}]
+    prior = build_index(original, gateway=FakeGateway(), indexed_at="2026-07-19T00:00:00Z")
+    expanded = original + [{"url": "https://www.clawroyale.ai/combat.md", "status": 200,
+                            "sha256": "b" * 64, "content": "Combat targeting rules."}]
+    gateway = FakeGateway()
+
+    result = build_index(expanded, gateway=gateway, prior_index=prior)
+
+    assert len(gateway.calls) == 1
+    assert gateway.calls[0] == ["search_document: Combat targeting rules."]
+    assert result["record_count"] == 2

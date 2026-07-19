@@ -62,25 +62,56 @@ def build_index(
     gateway: OllamaModelGateway,
     alias: str = "cerberus-embed",
     indexed_at: str | None = None,
+    prior_index: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stamp = indexed_at or datetime.now(timezone.utc).isoformat()
     chunks = admitted_chunks(records, indexed_at=stamp)
-    output_rows: list[dict[str, Any]] = []
-    for start in range(0, len(chunks), 32):
-        batch = chunks[start : start + 32]
+    prior = prior_index if isinstance(prior_index, dict) else {}
+    reusable = {
+        str(item.get("source_id")): item
+        for item in prior.get("records", [])
+        if isinstance(item, dict) and isinstance(item.get("vector"), list)
+    }
+    reuse_allowed = str(prior.get("alias") or "") == alias
+    try:
+        config = gateway.aliases().get(alias, {})
+    except AttributeError:
+        config = {}
+    expected_model = str(config.get("model") or "")
+    expected_digest = str(config.get("digest") or "")
+    if expected_model and str(prior.get("model") or "") != expected_model:
+        reuse_allowed = False
+    if expected_digest and str(prior.get("digest") or "") != expected_digest:
+        reuse_allowed = False
+
+    output_by_id: dict[str, dict[str, Any]] = {}
+    pending: list[dict[str, str]] = []
+    for item in chunks:
+        old = reusable.get(item["source_id"]) if reuse_allowed else None
+        if old is not None and old.get("content") == item["content"]:
+            output_by_id[item["source_id"]] = {**item, "vector": list(old["vector"])}
+        else:
+            pending.append(item)
+
+    embedded = None
+    # Keep offline indexing batches below the same strict latency bound used by
+    # the local gateway. CPU-only Ollama hosts can exceed it with larger batches.
+    for start in range(0, len(pending), 4):
+        batch = pending[start : start + 4]
         embedded = gateway.embed(
             alias=alias,
             texts=[f"search_document: {item['content']}" for item in batch],
             allow_evaluation=True,
         )
         for item, vector in zip(batch, embedded.vectors, strict=True):
-            output_rows.append({**item, "vector": list(vector)})
+            output_by_id[item["source_id"]] = {**item, "vector": list(vector)}
+    output_rows = [output_by_id[item["source_id"]] for item in chunks]
     return {
         "schema_version": "cerberus.knowledge_index.v1",
         "indexed_at": stamp,
         "alias": alias,
-        "model": embedded.model if chunks else "",
-        "digest": embedded.digest if chunks else "",
+        "model": embedded.model if embedded else (str(prior.get("model") or "") if chunks else ""),
+        "digest": embedded.digest if embedded else (str(prior.get("digest") or "") if chunks else ""),
         "record_count": len(output_rows),
         "records": output_rows,
     }
@@ -126,7 +157,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("/var/data/.cerberus/official_knowledge_index.json"))
     args = parser.parse_args()
-    index = build_index(fetch_canonical_sources(), gateway=OllamaModelGateway())
+    prior_index = None
+    if args.output.exists():
+        try:
+            loaded = json.loads(args.output.read_text(encoding="utf-8"))
+            prior_index = loaded if isinstance(loaded, dict) else None
+        except (OSError, json.JSONDecodeError):
+            prior_index = None
+    index = build_index(
+        fetch_canonical_sources(), gateway=OllamaModelGateway(), prior_index=prior_index
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output.with_suffix(args.output.suffix + ".tmp")
     temporary.write_text(json.dumps(index, ensure_ascii=True, separators=(",", ":")), encoding="utf-8")
