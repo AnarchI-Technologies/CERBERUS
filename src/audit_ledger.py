@@ -11,7 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from runtime_state import memory_dir
-from v2_contracts import ActionRequest, AuditRecord, ExecutionResult, PolicyDecision, contract_dict
+from v2_contracts import ActionRequest, AuditRecord, Decision, Event, ExecutionResult, PolicyDecision, contract_dict
 
 
 def audit_ledger_file() -> Path:
@@ -47,6 +47,8 @@ def append_execution_audit(
     policy: PolicyDecision,
     result: ExecutionResult,
     *,
+    event: Event | None = None,
+    decision: Decision | None = None,
     path: Path | None = None,
 ) -> dict[str, Any]:
     target = path or audit_ledger_file()
@@ -59,8 +61,8 @@ def append_execution_audit(
     audit = AuditRecord(
         audit_id=str(uuid4()),
         correlation_id=request.correlation_id,
-        event_id="",
-        decision_id=request.decision_id,
+        event_id=event.event_id if event else "",
+        decision_id=decision.decision_id if decision else request.decision_id,
         request_id=request.request_id,
         policy_decision_id=policy.policy_decision_id,
         execution_result_id=result.result_id,
@@ -75,6 +77,17 @@ def append_execution_audit(
         "policy_outcome": policy.outcome.value,
         "execution_status": result.status[:80],
         "retryable": result.retryable,
+        "event": {
+            "source": event.source,
+            "observed_at": event.observed_at,
+            "trust": event.trust,
+        } if event else {},
+        "decision": {
+            "intent": decision.intent,
+            "selected_route": decision.selected_route,
+            "confidence": decision.confidence,
+            "assisted_by_model": decision.assisted_by_model,
+        } if decision else {},
     }
     row["record_hash"] = _hash(row)
     target.parent.mkdir(parents=True, exist_ok=True)

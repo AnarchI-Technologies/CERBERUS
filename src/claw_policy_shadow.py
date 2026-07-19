@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import hashlib
 import json
+import os
 from uuid import uuid4
 
+from claw_v2_workflow import build_free_action_contracts
 from policy_engine import evaluate_action_request
 from runtime_state import append_policy_shadow
 from turn_state_model import TurnState
-from v2_contracts import ActionRequest, PolicyContext, PolicyDecision, PolicyOutcome, contract_dict
+from v2_contracts import ActionRequest, Decision, Event, PolicyContext, PolicyDecision, PolicyOutcome, contract_dict
 
 
 ENFORCED_FREE_ACTIONS = frozenset({"pickup", "equip", "broadcast"})
@@ -110,9 +111,28 @@ def authorize_broadcast_execution(
 
 def authorize_free_action_execution(
     state: TurnState, action: dict
-) -> tuple[bool, ActionRequest, PolicyDecision, dict]:
+) -> tuple[bool, Event, Decision, ActionRequest, PolicyDecision, dict]:
     action_type = str(action.get("type") or "")
     if action_type not in ENFORCED_FREE_ACTIONS:
         raise ValueError(f"unsupported coordinated free action: {action_type}")
-    request, policy, record = _evaluate_claw_action_contracts(state, action, enforced=True)
-    return policy.outcome is PolicyOutcome.ALLOW, request, policy, record
+    event, decision, request = build_free_action_contracts(state, action)
+    context = PolicyContext(
+        policy_id="claw-free-action-v1",
+        capabilities=frozenset({"game.action.execute"}),
+        allowed_targets=_visible_targets(state),
+        suspended=os.getenv("CERBERUS_EMERGENCY_SUSPEND", "false").strip().lower() in {"1", "true", "yes", "on"},
+        state_fresh=state.can_take_main_action or action_type in ENFORCED_FREE_ACTIONS,
+        maximum_financial_amount=0.0,
+        review_financial_threshold=0.0,
+    )
+    policy = evaluate_action_request(request, context)
+    record = {
+        "event": contract_dict(event),
+        "decision": contract_dict(decision),
+        "request": contract_dict(request),
+        "policy": contract_dict(policy),
+        "selected_action": {key: value for key, value in action.items() if not str(key).startswith("_")},
+        "enforced": True,
+    }
+    append_policy_shadow(record)
+    return policy.outcome is PolicyOutcome.ALLOW, event, decision, request, policy, record

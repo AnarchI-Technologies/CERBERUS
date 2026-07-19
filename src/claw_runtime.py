@@ -309,7 +309,7 @@ def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
 
 
 async def coordinate_free_action_send(ws: Any, state: TurnState, action: dict[str, Any]):  # type: ignore[no-untyped-def]
-    allowed, request, policy, policy_record = authorize_free_action_execution(state, action)
+    allowed, event, decision, request, policy, policy_record = authorize_free_action_execution(state, action)
     if not allowed:
         return None, policy_record
     envelope = action_envelope(action)
@@ -318,7 +318,7 @@ async def coordinate_free_action_send(ws: Any, state: TurnState, action: dict[st
         await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
         return {"code": "sent"}
 
-    return await execute_authorized(request, policy, send), policy_record
+    return await execute_authorized(request, policy, send, event=event, decision=decision), policy_record
 
 
 def action_signature(action: dict[str, Any], *, turn: int = 0) -> str:

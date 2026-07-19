@@ -12,6 +12,6 @@ preserved until each seam has fixture coverage and production evidence.
 - [x] Route pickup and equip free actions through the same seam.
 - [x] Reconcile reserved executions after interruption before allowing retry.
 - [x] Add a sanitized operator decision/execution timeline.
-- [ ] Move one complete Claw Royale workflow behind v2 contracts.
+- [x] Move one complete Claw Royale workflow behind v2 contracts (pickup/equip/broadcast free-action path).
 - [ ] Require sustained production evidence before expanding the seam to
   movement, combat, paid entry, signing, or wallet effects.

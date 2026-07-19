@@ -103,10 +103,20 @@ def test_runtime_coordinates_visible_pickup_once() -> None:
     with tempfile.TemporaryDirectory() as tmp, overridden_memory_dir(tmp):
         first, _ = asyncio.run(coordinate_free_action_send(socket, state, {"type": "pickup", "itemId": "relic-1"}))
         second, _ = asyncio.run(coordinate_free_action_send(socket, state, {"type": "pickup", "itemId": "relic-1"}))
+        audit = audit_rows()
 
     assert first.status == "accepted"
     assert second.status == "duplicate_suppressed"
     assert len(socket.sent) == 1
+    assert audit[0]["audit"]["event_id"].startswith("claw-event-")
+    assert audit[0]["audit"]["decision_id"].startswith("claw-decision-")
+    assert audit[0]["event"] == {
+        "source": "claw_royale.snapshot",
+        "observed_at": audit[0]["event"]["observed_at"],
+        "trust": "official_server",
+    }
+    assert audit[0]["decision"]["assisted_by_model"] is False
+    assert audit[0]["decision"]["selected_route"] == "pickup"
 
 
 def test_reconciles_crash_left_pickup_without_allowing_retry() -> None:
