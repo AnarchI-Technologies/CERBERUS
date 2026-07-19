@@ -3,6 +3,32 @@
 CERBERUS v2 is operator-node-first. Ollama must remain local and must not be
 exposed by port forwarding or a public reverse proxy.
 
+The production goal is to run the existing deterministic CERBERUS service on
+the operator node without Render or Railway. Ollama is optional and disabled by
+default.
+
+## Install the local runtime
+
+From PowerShell in the repository:
+
+```text
+powershell -ExecutionPolicy Bypass -File deployment/local-windows/install-local-runtime.ps1 -Start
+powershell -ExecutionPolicy Bypass -File deployment/local-windows/test-local-runtime.ps1
+```
+
+The installer creates a per-user scheduled task named
+`CERBERUS-Local-Runtime`. It launches at login, retries after failure, binds the
+dashboard/API to `127.0.0.1:10000`, uses local persistent state under
+`%LOCALAPPDATA%\CERBERUS`, and stores runtime logs there. Secrets are not copied
+into the scheduled task; the existing `.env`, vault, or persistent environment
+loading path remains responsible for credentials.
+
+To remove the startup task while preserving state:
+
+```text
+powershell -ExecutionPolicy Bypass -File deployment/local-windows/uninstall-local-runtime.ps1
+```
+
 ## Measured node profile — 2026-07-18
 
 - Windows 11 Home 64-bit, build 10.0.26200
@@ -38,4 +64,3 @@ qwen3:4b    2.5 GB
 
 Neither candidate is approved for production decisions. See the recorded
 evaluation for the current result.
-
