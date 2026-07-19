@@ -49,7 +49,16 @@ def collect(memory_root: Path, *, health_url: str = "http://127.0.0.1:10000/heal
     postmortems = postmortems if isinstance(postmortems, list) else []
     sent = [row for row in audit if isinstance(row, dict) and row.get("kind") == "action_sent"]
     results = [row for row in audit if isinstance(row, dict) and row.get("kind") == "action_result"]
+    duplicate_suppressed = [
+        row for row in audit if isinstance(row, dict) and row.get("kind") == "action_duplicate_suppressed"
+    ]
     accepted = [row for row in results if isinstance(row.get("outcome"), dict) and row["outcome"].get("ok") is True]
+    cooldown_rejected = [
+        row
+        for row in results
+        if isinstance(row.get("outcome"), dict)
+        and str(row["outcome"].get("code") or "").upper() == "COOLDOWN_ACTIVE"
+    ]
     categories = Counter(str(row.get("failure_category") or "unknown") for row in postmortems if isinstance(row, dict))
     policy_outcomes = Counter(
         str(row.get("policy", {}).get("outcome") or "unknown")
@@ -66,6 +75,9 @@ def collect(memory_root: Path, *, health_url: str = "http://127.0.0.1:10000/heal
         "actions_sent_window": len(sent),
         "action_results_window": len(results),
         "accepted_results_window": len(accepted),
+        "action_result_success_rate": len(accepted) / max(1, len(results)),
+        "cooldown_rejections_window": len(cooldown_rejected),
+        "duplicate_actions_suppressed_window": len(duplicate_suppressed),
         "policy_shadow_records": len(policy_rows),
         "policy_outcomes": dict(policy_outcomes),
         "postmortem_records": len(postmortems),

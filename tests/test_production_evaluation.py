@@ -17,7 +17,18 @@ def test_collects_sanitized_policy_and_postmortem_evidence() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "claw_runtime_status.json").write_text(
-            json.dumps({"state": "playing", "updated_at": 100, "live_version": "1.13.1", "action_audit": []}),
+            json.dumps(
+                {
+                    "state": "playing",
+                    "updated_at": 100,
+                    "live_version": "1.13.1",
+                    "action_audit": [
+                        {"kind": "action_result", "outcome": {"ok": True}},
+                        {"kind": "action_result", "outcome": {"ok": False, "code": "COOLDOWN_ACTIVE"}},
+                        {"kind": "action_duplicate_suppressed"},
+                    ],
+                }
+            ),
             encoding="utf-8",
         )
         (root / "policy_shadow.json").write_text(
@@ -32,6 +43,9 @@ def test_collects_sanitized_policy_and_postmortem_evidence() -> None:
     assert report["health_ok"] is True
     assert report["policy_outcomes"] == {"ALLOW": 1}
     assert report["postmortem_categories"] == {"target": 1}
+    assert report["action_result_success_rate"] == 0.5
+    assert report["cooldown_rejections_window"] == 1
+    assert report["duplicate_actions_suppressed_window"] == 1
     assert report["credentials_collected"] is False
     assert report["policy_enforcement_active"] is False
 
