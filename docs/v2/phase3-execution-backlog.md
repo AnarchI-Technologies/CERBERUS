@@ -15,3 +15,5 @@ preserved until each seam has fixture coverage and production evidence.
 - [x] Move one complete Claw Royale workflow behind v2 contracts (pickup/equip/broadcast free-action path).
 - [ ] Require sustained production evidence before expanding the seam to
   movement, combat, paid entry, signing, or wallet effects.
+  Evidence is now measured by `execution_evidence.py`; expansion remains locked
+  pending sufficient production samples and operator review.
