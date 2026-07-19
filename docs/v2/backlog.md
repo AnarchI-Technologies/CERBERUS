@@ -26,7 +26,7 @@
 - [x] Add a single model gateway; prohibit direct Ollama calls elsewhere.
 - [x] Add pinned model aliases, deadlines, schema validation, and an inference
   kill switch.
-- [ ] Require semantic evaluation, not merely schema validity, before model
+- [x] Require semantic evaluation, not merely schema validity, before model
   promotion.
 
 ## Phase 2 — memory and retrieval boundary
