@@ -1,0 +1,25 @@
+{
+  "type": "agent_view",
+  "gameId": "fixture-game",
+  "turn": 12,
+  "canAct": true,
+  "view": {
+    "self": {
+      "id": "fixture-agent",
+      "hp": 82,
+      "maxHp": 100,
+      "ep": 4,
+      "maxEp": 10,
+      "inventory": []
+    },
+    "currentRegion": {
+      "id": "fixture-r1",
+      "terrain": "ruin",
+      "connections": ["fixture-r2"]
+    },
+    "aliveCount": 18,
+    "visibleAgents": [],
+    "visibleMonsters": [],
+    "visibleItems": []
+  }
+}

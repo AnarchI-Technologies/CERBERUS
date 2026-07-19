@@ -22,7 +22,7 @@
 - [x] Implement `ALLOW`, `DENY`, `REVIEW`, and `DEFER` policy outcomes.
 - [x] Add capability grants and emergency suspension to the isolated policy engine.
 - [ ] Route one free Claw Royale action through the policy/execution seam.
-- [ ] Add adapter contract and sanitized replay tests.
+- [x] Add the provider-neutral game adapter contract and sanitized Claw replay tests.
 - [x] Add a single model gateway; prohibit direct Ollama calls elsewhere.
 - [x] Add pinned model aliases, deadlines, schema validation, and an inference
   kill switch.
