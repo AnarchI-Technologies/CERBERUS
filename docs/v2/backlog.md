@@ -9,7 +9,7 @@
 - [x] Record the incremental-restructure architecture decision.
 - [ ] Review PRs #1-#3 for unique coverage and consolidate or close them.
 - [ ] Remove test-suite working-tree side effects.
-- [ ] Record deployment smoke-test and rollback procedures.
+- [x] Record deployment smoke-test and rollback procedures.
 - [x] Record the initial Windows operator-node hardware profile.
 - [x] Record deterministic action post-mortems with bounded, observation-only experiments.
 - [x] Install and benchmark evaluation-only Ollama candidates.
