@@ -94,6 +94,16 @@ def _known_relic_ruin(state: TurnState) -> bool:
     return any("relic" in ruin.content_type.lower() for ruin in state.ruins.values() if not ruin.is_empty)
 
 
+def _combat_active(state: TurnState) -> bool:
+    targets = (*state.visible_agents, *state.visible_monsters)
+    return any(
+        target.is_alive
+        and target.id not in {state.self.id, state.agent_id}
+        and target_in_attack_range(state, target)
+        for target in targets
+    )
+
+
 class QuestRushCortex:
     """Prioritize actions known to feed daily and season point tracks."""
 
@@ -133,7 +143,7 @@ class QuestRushCortex:
             and (not known_relic_ruin or relic_capacity_available)
         )
         explore_cost = state.action_ep_cost("explore", 1)
-        if ruin_available and state.self.ep >= explore_cost and not state.visible_agents:
+        if ruin_available and state.self.ep >= explore_cost and not _combat_active(state):
             relic_sprint = known_relic_ruin and state.self.ep >= explore_cost + 1
             results.append(
                 CortexResult(

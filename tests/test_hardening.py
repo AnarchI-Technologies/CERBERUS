@@ -200,6 +200,39 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(any(result.intent == "quest_discover_ruin" for result in results))
         self.assertTrue(any(result.action and result.action["type"] == "explore" for result in results))
 
+    def test_quest_rush_explores_with_visible_non_attackable_agent(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5},
+                    "currentRegion": {"id": "ruin-1", "terrain": "Ruin"},
+                    "visibleAgents": [
+                        {"id": "distant", "hp": 100, "isAlive": True, "attackable": False}
+                    ],
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertTrue(any(result.action and result.action["type"] == "explore" for result in results))
+
+    def test_quest_rush_blocks_ruin_exploration_during_attack_range_combat(self) -> None:
+        for field in ("visibleAgents", "visibleMonsters"):
+            state = TurnState.from_snapshot(
+                {
+                    "view": {
+                        "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5},
+                        "currentRegion": {"id": "ruin-1", "terrain": "Ruin"},
+                        field: [{"id": "threat", "hp": 100, "isAlive": True, "attackable": True}],
+                    }
+                }
+            )
+
+            results = QuestRushCortex().evaluate(state, {})
+
+            self.assertFalse(any(result.action and result.action["type"] == "explore" for result in results))
+
     def test_quest_rush_acquires_known_relic_with_capacity_and_reserves(self) -> None:
         state = TurnState.from_snapshot(
             {
