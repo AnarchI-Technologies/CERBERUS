@@ -141,32 +141,29 @@ def objective_progress_snapshot(payload: Any) -> list[dict[str, Any]]:
         key = _quest_key(record, inherited_key)
         if not key:
             continue
-        item: dict[str, Any] = {"key": key}
+        item = snapshots.setdefault(key, {"key": key})
         level = _number(record, LEVEL_FIELDS)
         progress = _number(record, PROGRESS_FIELDS)
         target = _number(record, TARGET_FIELDS)
         tier = _tier(record)
         status = str(record.get("status") or "").strip().lower()
         if level is not None:
-            item["level"] = level
+            item["level"] = max(level, item.get("level", level))
         if progress is not None:
             item["progress"] = progress
         if target is not None:
             item["target"] = target
-        if tier is not None:
-            item["tier"] = tier
         if status in CLAIMABLE_STATUSES or status in {"claimed", "locked", "active", "in_progress"}:
             item["status"] = status
         if _is_claimed(record):
             item["claimed"] = True
+            if tier is not None:
+                item["level"] = max(tier, item.get("level", tier))
         if _is_explicitly_claimable(record) and not _is_claimed(record):
             item["claimable"] = True
-        if len(item) == 1:
-            continue
-        prior = snapshots.get(key)
-        if prior is None or len(item) > len(prior):
-            snapshots[key] = item
-    return [snapshots[key] for key in sorted(snapshots)]
+            if tier is not None:
+                item["next_tier"] = min(tier, item.get("next_tier", tier))
+    return [snapshots[key] for key in sorted(snapshots) if len(snapshots[key]) > 1]
 
 
 def claim_reached_preseason1_points(
