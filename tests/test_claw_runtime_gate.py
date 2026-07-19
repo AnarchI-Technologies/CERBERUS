@@ -19,6 +19,16 @@ import claw_runtime
 
 
 class ClawRuntimeGameplayGateTests(unittest.TestCase):
+    def test_terminal_quarantine_uses_slow_clean_close_retry(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="fixture", min_reconnect_seconds=5)
+        self.assertEqual(
+            claw_runtime.clean_close_delay_seconds(
+                config, {"state": "terminal_game_waiting", "terminal_game_id": "stale"}
+            ),
+            60,
+        )
+        self.assertEqual(claw_runtime.clean_close_delay_seconds(config, {"state": "connected"}), 5)
+
     def test_server_terminal_game_id_blocks_stale_resume_snapshot_only(self) -> None:
         status = {"terminal_game_id": "dead-game"}
         self.assertTrue(claw_runtime.terminal_game_blocked(status, "dead-game"))

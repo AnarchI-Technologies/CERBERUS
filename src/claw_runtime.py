@@ -59,6 +59,7 @@ DEFAULT_ROUTE_PROBE_SECONDS = 15
 DEFAULT_PAID_RETRY_COOLDOWN_SECONDS = 600
 DEFAULT_PRESEASON1_CLAIM_INTERVAL_SECONDS = 60
 WEB_SESSION_BACKOFF_SECONDS = 60
+TERMINAL_QUARANTINE_BACKOFF_SECONDS = 60
 BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 JOIN_PATH = "/ws/join"
 AGENT_PATH = "/ws/agent"
@@ -1048,6 +1049,12 @@ def reconnect_delay_seconds(config: ClawRuntimeConfig, reconnects: int, error: E
     return min(config.max_reconnect_seconds, config.min_reconnect_seconds * reconnects)
 
 
+def clean_close_delay_seconds(config: ClawRuntimeConfig, status: dict[str, Any]) -> int:
+    if status.get("terminal_game_id") or str(status.get("state") or "") == "terminal_game_waiting":
+        return max(TERMINAL_QUARANTINE_BACKOFF_SECONDS, config.min_reconnect_seconds)
+    return max(1, config.min_reconnect_seconds)
+
+
 def websocket_close_code(error: Exception) -> int | None:
     for candidate in (getattr(error, "code", None), getattr(getattr(error, "rcvd", None), "code", None)):
         try:
@@ -1811,14 +1818,17 @@ async def run_forever(config: ClawRuntimeConfig | None = None) -> None:
             await connect_and_play(config, path)
             reconnects = 0
             path_index += 1
+            clean_status = read_json(claw_runtime_status_file())
+            clean_delay = clean_close_delay_seconds(config, clean_status)
             update_status(
                 state="reconnecting",
                 last_error="websocket closed without exception; rotating endpoint",
                 last_failed_path=path,
                 next_path=paths[path_index % len(paths)],
                 candidate_paths=paths,
+                next_retry_seconds=clean_delay,
             )
-            await asyncio.sleep(max(1, config.min_reconnect_seconds))
+            await asyncio.sleep(clean_delay)
         except Exception as exc:
             reconnects += 1
             web_controlled = web_session_controls_agent(exc)

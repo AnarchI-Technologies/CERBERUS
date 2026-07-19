@@ -32,3 +32,7 @@ combat authority. Dynamic server snapshots and OpenAPI remain authoritative.
 - After applying only a non-listed relic operation, the official loadout response
   reports `fullSet=true`; the deterministic planner reports no missing components
   and no remaining loadout operations.
+- The stale terminal room remains in `accounts/me.currentGames`; live OpenAPI has
+  no leave/forfeit/recovery route and its finished-state read returns 403 for the
+  agent key. CERBERUS therefore keeps the room quarantined and limits clean-close
+  reconnect attempts to at most once per 60 seconds until official state clears.
