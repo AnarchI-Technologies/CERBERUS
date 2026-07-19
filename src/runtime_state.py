@@ -95,6 +95,10 @@ def suggested_edits_file() -> Path:
     return memory_dir() / "suggested_edits.json"
 
 
+def policy_shadow_file() -> Path:
+    return memory_dir() / "policy_shadow.json"
+
+
 def social_event_stack_file() -> Path:
     return memory_dir() / "social_event_stack.json"
 
@@ -176,6 +180,21 @@ def append_stream_chat(message: dict[str, Any], *, limit: int = 50) -> list[dict
     except Exception:
         return messages
     return messages
+
+
+def policy_shadow_records(limit: int = 500) -> list[dict[str, Any]]:
+    records = read_json(policy_shadow_file()).get("records", [])
+    if not isinstance(records, list):
+        return []
+    return [item for item in records if isinstance(item, dict)][-limit:]
+
+
+def append_policy_shadow(record: dict[str, Any], *, limit: int = 500) -> list[dict[str, Any]]:
+    records = policy_shadow_records(limit=limit)
+    records.append(_scrub_mapping(record, text_limit=240))
+    records = records[-limit:]
+    write_json(policy_shadow_file(), {"records": records, "updated_at": int(time.time())})
+    return records
 
 
 def owner_messages(limit: int = 25) -> list[dict[str, Any]]:

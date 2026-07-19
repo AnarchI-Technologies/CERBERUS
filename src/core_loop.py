@@ -21,6 +21,7 @@ for folder in (ROOT / "src", ROOT / "data"):
 from agent_dossiers import AgentDossierStore
 from autonomy_suggestions import record_autonomy_observation
 from claw_contract import KNOWN_ACTION_TYPES, REQUIRED_ACTION_FIELDS, action_cost, is_cooldown_action
+from claw_policy_shadow import evaluate_claw_action_shadow, shadow_enabled
 from combat_decider import CombatCortex
 from combat_decider import target_in_attack_range
 from cortex_types import rest_action
@@ -544,6 +545,17 @@ def _record_autonomy_or_warn(action: dict[str, Any], state: TurnState | dict[str
         )
 
 
+def _record_policy_shadow_or_warn(action: dict[str, Any], state: TurnState) -> None:
+    if not shadow_enabled():
+        return
+    try:
+        evaluate_claw_action_shadow(state, action)
+    except Exception as exc:
+        action.setdefault("_warnings", []).append(
+            {"type": "save_error", "store": "policy_shadow", "error": str(exc)[:240]}
+        )
+
+
 def cerberus_tick(
     state: dict[str, Any],
     *,
@@ -621,6 +633,7 @@ def cerberus_tick(
     )
     action = normalize_action(action)
     action = normalize_action(legalize_action(action, turn_state))
+    _record_policy_shadow_or_warn(action, turn_state)
     _respond_to_owner_command_or_warn(action, owner_directives)
     _remember_settlement_or_warn(action, state, memory)
     _remember_event_learning_or_warn(action, memory, dossiers, turn_state)

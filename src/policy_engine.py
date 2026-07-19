@@ -24,7 +24,7 @@ def evaluate_action_request(request: ActionRequest, context: PolicyContext) -> P
         outcome, reasons = PolicyOutcome.DEFER, ["stale_state"]
     elif request.capability not in context.capabilities:
         outcome, reasons = PolicyOutcome.DENY, [f"capability_not_granted:{request.capability}"]
-    elif context.allowed_targets and request.target not in context.allowed_targets:
+    elif request.target and context.allowed_targets and request.target not in context.allowed_targets:
         outcome, reasons = PolicyOutcome.DENY, [f"target_not_allowed:{request.target or 'empty'}"]
     elif request.financial_amount > context.maximum_financial_amount:
         outcome, reasons = PolicyOutcome.DENY, ["financial_limit_exceeded"]
