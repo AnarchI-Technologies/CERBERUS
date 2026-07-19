@@ -39,3 +39,9 @@ enable it with systemd. A future live A/B agent must receive its own dedicated
 environment file and identity; never add those credentials to this template or
 reuse Hellion's memory directory.
 
+`cerberus-agent-lab@.service` is the opt-in live A/B template. Each instance
+requires a separately protected `/etc/cerberus/agents/<name>.env`, unique port,
+memory directory, Claw account/API key, and wallet identity. No instance is
+enabled by default. Experiment evidence never contains wallet or API material,
+and candidate support still requires operator review before production promotion.
+

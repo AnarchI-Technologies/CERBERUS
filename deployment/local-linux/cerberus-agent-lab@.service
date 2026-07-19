@@ -1,0 +1,19 @@
+[Unit]
+Description=CERBERUS isolated live experiment agent %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/c/Users/alexg/Documents/Codex/CERBERUS
+EnvironmentFile=/etc/cerberus/agents/%i.env
+Environment=CERBERUS_RUNTIME_AGENT_ID=%i
+ExecStart=/opt/cerberus-venv/bin/python /mnt/c/Users/alexg/Documents/Codex/CERBERUS/src/render_app.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
