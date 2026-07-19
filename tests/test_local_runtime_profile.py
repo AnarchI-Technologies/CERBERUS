@@ -11,9 +11,24 @@ for folder in (ROOT / "src", ROOT / "data"):
         sys.path.insert(0, str(folder))
 
 import render_app
+import runtime_state
 
 
 class LocalRuntimeProfileTests(unittest.TestCase):
+    def test_agent_identity_defaults_to_sanitized_environment_profile(self) -> None:
+        with mock.patch.dict("os.environ", {"CERBERUS_RUNTIME_AGENT_ID": " Scout Two! "}, clear=False):
+            self.assertEqual(runtime_state.runtime_agent_id(), "scouttwo")
+            self.assertEqual(runtime_state.current_game_file().name, "current_game_scouttwo.json")
+
+    def test_live_agent_template_uses_release_and_forces_isolated_state(self) -> None:
+        service = (ROOT / "deployment" / "local-linux" / "cerberus-agent-lab@.service").read_text(encoding="utf-8")
+        self.assertIn("WorkingDirectory=/opt/cerberus-current", service)
+        self.assertIn("CERBERUS_MEMORY_DIR=/var/lib/cerberus/agents/%i", service)
+        self.assertIn("StateDirectory=cerberus/agents/%i", service)
+        self.assertIn("CERBERUS_BIND_HOST=127.0.0.1", service)
+        self.assertIn("CERBERUS_MODEL_GATEWAY_ENABLED=false", service)
+        self.assertNotIn("CERBERUS/src/render_app.py", service)
+
     def test_render_app_honors_explicit_local_bind_host(self) -> None:
         server = mock.Mock()
         with mock.patch.dict("os.environ", {"CERBERUS_BIND_HOST": "127.0.0.1", "PORT": "18443", "CLAW_ROYALE_RUNTIME_ENABLED": "false"}, clear=False), mock.patch.object(render_app, "ThreadingHTTPServer", return_value=server) as factory:

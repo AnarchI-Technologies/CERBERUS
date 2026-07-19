@@ -41,7 +41,13 @@ reuse Hellion's memory directory.
 
 `cerberus-agent-lab@.service` is the opt-in live A/B template. Each instance
 requires a separately protected `/etc/cerberus/agents/<name>.env`, unique port,
-memory directory, Claw account/API key, and wallet identity. No instance is
-enabled by default. Experiment evidence never contains wallet or API material,
-and candidate support still requires operator review before production promotion.
+Claw account/API key, and wallet identity. The service itself forces a dedicated
+`/var/lib/cerberus/agents/<name>` state directory, loopback-only dashboard, local
+deterministic model mode, and the current immutable release. Do not place a
+browser-extension seed phrase or private key in this file; use only a dedicated
+agent credential supported by the official Claw API. No instance is enabled by
+default. Start with `CLAW_ROYALE_RUNTIME_ENABLED=false`, verify readiness and
+identity separation, then explicitly enable the instance for a bounded test.
+Experiment evidence never contains wallet or API material, and candidate support
+still requires operator review before production promotion.
 

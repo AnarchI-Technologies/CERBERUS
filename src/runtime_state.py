@@ -42,7 +42,11 @@ def overridden_memory_dir(path: str | Path):
 
 
 def normalize_agent_id(agent_id: str | None = None) -> str:
-    value = str(agent_id if agent_id is not None else _RUNTIME_AGENT_ID.get() or "").strip().lower()
+    value = str(
+        agent_id
+        if agent_id is not None
+        else _RUNTIME_AGENT_ID.get() or os.getenv("CERBERUS_RUNTIME_AGENT_ID") or ""
+    ).strip().lower()
     return "".join(ch for ch in value if ch.isalnum() or ch in {"-", "_"})[:32]
 
 
