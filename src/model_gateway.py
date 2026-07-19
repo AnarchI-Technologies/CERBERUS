@@ -8,6 +8,7 @@ Ollama is absent, slow, or rejected.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -47,6 +48,15 @@ class ModelProposal:
     latency_ms: int
     prompt_tokens: int
     output_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingBatch:
+    alias: str
+    model: str
+    digest: str
+    vectors: tuple[tuple[float, ...], ...]
+    latency_ms: int
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -242,6 +252,60 @@ class OllamaModelGateway:
             latency_ms=latency_ms,
             prompt_tokens=int(response.get("prompt_eval_count") or 0),
             output_tokens=int(response.get("eval_count") or 0),
+        )
+
+    def embed(
+        self,
+        *,
+        alias: str,
+        texts: list[str],
+        allow_evaluation: bool = False,
+    ) -> EmbeddingBatch:
+        """Create local vectors only; embeddings never carry execution authority."""
+        if not self.enabled():
+            raise GatewayDisabled("model gateway is disabled; retrieval must fail closed")
+        if not texts or len(texts) > 64:
+            raise GatewayValidationError("embedding batch must contain 1 to 64 texts")
+        config = self.aliases().get(alias)
+        if not config or "embedding" not in (config.get("tasks") or []):
+            raise GatewayValidationError(f"alias is not approved for embedding: {alias}")
+        status = str(config.get("status") or "")
+        if status != "production" and not (allow_evaluation and status == "evaluation_only"):
+            raise GatewayValidationError(f"model alias is not promoted: {alias}")
+        safe_texts = [_sanitize(text) for text in texts]
+        deadline = min(60.0, max(0.1, float(config.get("deadline_seconds") or 10)))
+        started = time.monotonic()
+        response = self.transport(
+            "/api/embed",
+            {
+                "model": str(config.get("model") or ""),
+                "input": safe_texts,
+                "truncate": True,
+                "keep_alive": 0,
+            },
+            deadline,
+        )
+        raw_vectors = response.get("embeddings")
+        if not isinstance(raw_vectors, list) or len(raw_vectors) != len(texts):
+            raise GatewayValidationError("embedding response count mismatch")
+        vectors: list[tuple[float, ...]] = []
+        dimensions = 0
+        for raw in raw_vectors:
+            if not isinstance(raw, list) or not raw or len(raw) > 8192:
+                raise GatewayValidationError("embedding vector has invalid dimensions")
+            vector = tuple(float(value) for value in raw)
+            if any(not math.isfinite(value) for value in vector):
+                raise GatewayValidationError("embedding vector contains non-finite values")
+            dimensions = dimensions or len(vector)
+            if len(vector) != dimensions:
+                raise GatewayValidationError("embedding vectors have inconsistent dimensions")
+            vectors.append(vector)
+        return EmbeddingBatch(
+            alias=alias,
+            model=str(config.get("model") or ""),
+            digest=str(config.get("digest") or ""),
+            vectors=tuple(vectors),
+            latency_ms=int((time.monotonic() - started) * 1000),
         )
 
     def _http_post(self, path: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:

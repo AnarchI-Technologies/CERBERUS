@@ -33,8 +33,8 @@
 
 - [x] Add classified memory admission with provenance, retention, secret, and
   prompt-injection checks.
-- [ ] Route one existing knowledge write through admission in shadow mode.
-- [ ] Add local embedding retrieval with source IDs and freshness.
+- [x] Route one existing knowledge write through admission in shadow mode.
+- [x] Add local embedding retrieval with source IDs and freshness.
 - [ ] Define retention compaction and deletion tests per memory class.
 
 ## Production proof
