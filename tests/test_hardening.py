@@ -4929,6 +4929,7 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("social_queue", report["runtime"])
         self.assertIn("stale_paid_rooms", report["runtime"])
 
+    @mock.patch.dict(os.environ, {"CLAW_ROYALE_MIN_PAID_COMPETITORS": "1"})
     def test_claw_runtime_hello_frame_follows_unified_join_docs(self) -> None:
         paid = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         free = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
@@ -5009,6 +5010,7 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(summary["paid_competitors"], 0)
         self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
 
+    @mock.patch.dict(os.environ, {"CLAW_ROYALE_MIN_PAID_COMPETITORS": "1"})
     def test_claw_runtime_joins_paid_only_at_last_start_slot(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         welcome = {
@@ -5027,6 +5029,7 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(claw_runtime.paid_room_is_last_slot_ready(welcome))
         self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "paid", "mode": "offchain"})
 
+    @mock.patch.dict(os.environ, {"CLAW_ROYALE_MIN_PAID_COMPETITORS": "1"})
     def test_claw_runtime_falls_back_when_paid_start_distance_is_unknown(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         welcome = {
@@ -5287,6 +5290,7 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(doctor["summary"], blockers[0])
         self.assertTrue(any("Claw support" in item for item in doctor["recommendations"]))
 
+    @mock.patch.dict(os.environ, {"CLAW_ROYALE_MIN_PAID_COMPETITORS": "1"})
     def test_claw_runtime_keeps_paid_when_paid_room_is_occupied(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         welcome = {
@@ -6222,4 +6226,5 @@ class HardeningTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
