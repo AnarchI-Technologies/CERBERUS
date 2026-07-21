@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(
+    cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+    pwd
+)"
+
+usage() {
+    cat <<'EOF'
+CERBERUS local runtime controller
+
+Usage:
+  cerberus status
+  cerberus doctor
+  cerberus build <full-commit-hash>
+  cerberus verify <full-commit-hash>
+  cerberus stage <full-commit-hash>
+  cerberus promote <full-commit-hash>
+  cerberus rollback
+  cerberus history
+  cerberus help
+
+Commands:
+  status     Show releases, services, ports, and health.
+  doctor     Run comprehensive local-host diagnostics.
+  build      Build an immutable release from a Git commit.
+  verify     Compile and test an immutable release.
+  stage      Activate an immutable release in staging.
+  promote    Promote the staged release to production.
+  rollback   Roll production back to the recorded previous release.
+  history    Show immutable releases, verification state, and lane assignment.
+  help       Show this help message.
+EOF
+}
+
+require_commit() {
+    if [ "$#" -ne 1 ]; then
+        echo "A full 40-character commit hash is required."
+        echo
+        usage
+        exit 64
+    fi
+}
+
+COMMAND="${1:-help}"
+
+case "$COMMAND" in
+    status)
+        [ "$#" -eq 1 ] || { usage; exit 64; }
+        exec "$SCRIPT_DIR/status.sh"
+        ;;
+
+    doctor)
+        [ "$#" -eq 1 ] || { usage; exit 64; }
+        exec "$SCRIPT_DIR/doctor.sh"
+        ;;
+
+    build)
+        shift
+        require_commit "$@"
+        exec "$SCRIPT_DIR/build-release.sh" "$1"
+        ;;
+
+    verify)
+        shift
+        require_commit "$@"
+        exec "$SCRIPT_DIR/verify-release.sh" "$1"
+        ;;
+
+    stage)
+        shift
+        require_commit "$@"
+        exec "$SCRIPT_DIR/activate-staging.sh" "$1"
+        ;;
+
+    promote)
+        shift
+        require_commit "$@"
+        exec "$SCRIPT_DIR/promote-production.sh" "$1"
+        ;;
+
+    rollback)
+        [ "$#" -eq 1 ] || { usage; exit 64; }
+        exec "$SCRIPT_DIR/rollback-production.sh"
+        ;;
+
+    history)
+        [ "$#" -eq 1 ] || { usage; exit 64; }
+        exec "$SCRIPT_DIR/history.sh"
+        ;;
+
+    help|-h|--help)
+        usage
+        ;;
+
+    *)
+        echo "Unknown command: $COMMAND"
+        echo
+        usage
+        exit 64
+        ;;
+esac
