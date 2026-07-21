@@ -14,6 +14,7 @@ COMMIT="$1"
 RELEASE_ROOT="/opt/cerberus-releases"
 RELEASE="$RELEASE_ROOT/$COMMIT"
 PYTHON="/opt/cerberus-venv/bin/python"
+MANIFEST="$RELEASE/release.json"
 
 case "$COMMIT" in
     *[!0-9a-f]*|"")
@@ -116,16 +117,78 @@ TEST_COUNT="$(
         tail -1
 )"
 
+SKIPPED_COUNT="$(
+    sed -nE 's/^OK.*skipped=([0-9]+).*/\1/p' <<<"$TEST_OUTPUT" |
+        tail -1
+)"
+
 if [ -z "$TEST_COUNT" ]; then
     echo "Unable to determine the test count."
     exit 1
 fi
+
+SKIPPED_COUNT="${SKIPPED_COUNT:-0}"
+VERIFIED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+PYTHON_VERSION="$("$PYTHON" --version 2>&1)"
+HOSTNAME_VALUE="$(hostname)"
+
+BRANCH="unknown"
+BUILT_AT="unknown"
+
+if [ -f "$MANIFEST" ]; then
+    BRANCH="$(
+        sed -nE 's/^[[:space:]]*"branch":[[:space:]]*"([^"]+)".*/\1/p' \
+            "$MANIFEST" |
+            head -1
+    )"
+
+    BUILT_AT="$(
+        sed -nE 's/^[[:space:]]*"built_at":[[:space:]]*"([^"]+)".*/\1/p' \
+            "$MANIFEST" |
+            head -1
+    )"
+
+    BRANCH="${BRANCH:-unknown}"
+    BUILT_AT="${BUILT_AT:-unknown}"
+fi
+
+TEMP_MANIFEST="$(mktemp)"
+
+cat >"$TEMP_MANIFEST" <<EOF
+{
+  "commit": "$COMMIT",
+  "branch": "$BRANCH",
+  "built_at": "$BUILT_AT",
+  "verified_at": "$VERIFIED_AT",
+  "verified_on": "$HOSTNAME_VALUE",
+  "python": "$PYTHON_VERSION",
+  "files": $FILE_COUNT,
+  "tests": {
+    "run": $TEST_COUNT,
+    "passed": $TEST_COUNT,
+    "failed": 0,
+    "skipped": $SKIPPED_COUNT
+  },
+  "verification": "passed"
+}
+EOF
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0644 \
+    "$TEMP_MANIFEST" \
+    "$MANIFEST"
+
+rm -f "$TEMP_MANIFEST"
 
 echo
 echo "=== VERIFICATION SUMMARY ==="
 echo "release=$RELEASE"
 echo "files=$FILE_COUNT"
 echo "tests=$TEST_COUNT"
+echo "skipped=$SKIPPED_COUNT"
+echo "manifest=$MANIFEST"
 echo "result=passed"
 
 echo

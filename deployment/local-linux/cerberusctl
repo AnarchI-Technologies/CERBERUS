@@ -12,18 +12,22 @@ CERBERUS local deployment controller
 
 Usage:
   cerberusctl status
+  cerberusctl build <full-commit-hash>
   cerberusctl verify <full-commit-hash>
   cerberusctl stage <full-commit-hash>
   cerberusctl promote <full-commit-hash>
   cerberusctl rollback
+  cerberusctl history
   cerberusctl help
 
 Commands:
   status     Show production, staging, rollback, services, ports, and releases.
+  build      Build an immutable release from a Git commit.
   verify     Compile and test an immutable release.
   stage      Activate an immutable release in staging.
   promote    Promote the staged release to production.
   rollback   Roll production back to the recorded previous release.
+  history    Show immutable releases, verification state, and lane assignment.
   help       Show this help message.
 EOF
 }
@@ -47,6 +51,12 @@ case "$COMMAND" in
         fi
 
         exec "$SCRIPT_DIR/status.sh"
+        ;;
+
+    build)
+        shift
+        require_commit "$@"
+        exec "$SCRIPT_DIR/build-release.sh" "$1"
         ;;
 
     verify)
@@ -74,6 +84,15 @@ case "$COMMAND" in
         fi
 
         exec "$SCRIPT_DIR/rollback-production.sh"
+        ;;
+
+    history)
+        if [ "$#" -ne 1 ]; then
+            usage
+            exit 64
+        fi
+
+        exec "$SCRIPT_DIR/history.sh"
         ;;
 
     help|-h|--help)
