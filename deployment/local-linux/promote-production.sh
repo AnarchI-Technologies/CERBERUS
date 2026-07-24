@@ -42,7 +42,9 @@ fi
 for file in \
     "$RELEASE/requirements.txt" \
     "$RELEASE/src/render_app.py" \
-    "$RELEASE/src/claw_runtime.py"
+    "$RELEASE/src/claw_runtime.py" \
+    "$RELEASE/src/pulse.py" \
+    "$RELEASE/src/pulse_workers.py"
 do
     if [ ! -f "$file" ]; then
         echo "Required file is missing: $file"

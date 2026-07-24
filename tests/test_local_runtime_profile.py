@@ -44,11 +44,73 @@ class LocalRuntimeProfileTests(unittest.TestCase):
 
     def test_render_app_honors_explicit_local_bind_host(self) -> None:
         server = mock.Mock()
-        with mock.patch.dict("os.environ", {"CERBERUS_BIND_HOST": "127.0.0.1", "PORT": "18443", "CLAW_ROYALE_RUNTIME_ENABLED": "false"}, clear=False), mock.patch.object(render_app, "ThreadingHTTPServer", return_value=server) as factory:
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "CERBERUS_BIND_HOST": "127.0.0.1",
+                "PORT": "18443",
+                "CLAW_ROYALE_RUNTIME_ENABLED": "false",
+                "MOLTSTATION_RUNTIME_ENABLED": "false",
+            },
+            clear=False,
+        ), mock.patch.object(
+            render_app, "ThreadingHTTPServer", return_value=server
+        ) as factory:
             render_app.main()
 
         factory.assert_called_once_with(("127.0.0.1", 18443), render_app.CerberusHandler)
         server.serve_forever.assert_called_once_with()
+        server.server_close.assert_called_once_with()
+
+    def test_render_app_routes_worker_lifecycle_through_pulse(self) -> None:
+        events: list[str] = []
+
+        class FakePulse:
+            async def start(self) -> None:
+                events.append("pulse:start")
+
+            async def stop(self) -> None:
+                events.append("pulse:stop")
+
+        server = mock.Mock()
+        server.serve_forever.side_effect = lambda: events.append("server:serve")
+        pulse = FakePulse()
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "CERBERUS_BIND_HOST": "127.0.0.1",
+                "PORT": "18444",
+                "CLAW_ROYALE_RUNTIME_ENABLED": "true",
+                "MOLTSTATION_RUNTIME_ENABLED": "true",
+            },
+            clear=False,
+        ), mock.patch.object(
+            render_app, "ThreadingHTTPServer", return_value=server
+        ), mock.patch.object(
+            render_app, "build_runtime_pulse", return_value=pulse
+        ) as builder:
+            render_app.main()
+
+        builder.assert_called_once_with(
+            claw_enabled=True,
+            claw_runner=render_app.run_claw_runtime,
+            moltstation_enabled=True,
+            moltstation_runner=render_app.run_moltstation_runtime,
+        )
+        self.assertEqual(events, ["pulse:start", "server:serve", "pulse:stop"])
+        server.server_close.assert_called_once_with()
+
+    def test_wsl_systemd_stops_python_with_keyboard_interrupt(self) -> None:
+        production = (
+            ROOT / "deployment" / "local-linux" / "cerberus-release.service"
+        ).read_text(encoding="utf-8")
+        staging = (
+            ROOT / "deployment" / "local-linux" / "cerberus-staging.service"
+        ).read_text(encoding="utf-8")
+
+        for service in (production, staging):
+            self.assertIn("KillSignal=SIGINT", service)
 
     def test_local_launcher_forces_loopback_and_deterministic_model_mode(self) -> None:
         launcher = (ROOT / "deployment" / "local-windows" / "start-cerberus.ps1").read_text(encoding="utf-8")

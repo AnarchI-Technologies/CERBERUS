@@ -47,6 +47,8 @@ REQUIRED_FILES=(
     "$RELEASE/src/render_app.py"
     "$RELEASE/src/claw_runtime.py"
     "$RELEASE/src/claw_config.py"
+    "$RELEASE/src/pulse.py"
+    "$RELEASE/src/pulse_workers.py"
 )
 
 echo

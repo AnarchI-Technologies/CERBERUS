@@ -1,8 +1,8 @@
-"""Tiny Render web entrypoint for Cerberus.
+"""Local WSL service entrypoint for CERBERUS.
 
 This intentionally uses only the Python standard library. The service exposes
 health/readiness checks and a guarded tick endpoint without adding a web
-framework dependency right before launch.
+framework dependency. systemd owns the process; Pulse owns worker lifecycle.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import os
 import sqlite3
 import sys
 import asyncio
-import threading
 import ipaddress
 import requests
 import websockets
@@ -43,6 +42,7 @@ from profit_simulator import simulate as profit_simulate  # noqa: E402
 from secret_env_admin import resolve_secret_value, update_secret_targets  # noqa: E402
 from social_runtime import drain_social_queue_once, social_queue  # noqa: E402
 from moltstation_runtime import run_forever as run_moltstation_runtime  # noqa: E402
+from pulse_workers import build_runtime_pulse  # noqa: E402
 from runtime_state import (
     append_hellion_owner_response,
     append_owner_message,
@@ -1790,17 +1790,29 @@ class CerberusHandler(BaseHTTPRequestHandler):
 def main() -> int:
     port = int(os.getenv("PORT", "10000"))
     bind_host = os.getenv("CERBERUS_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0"
-    if claw_runtime_enabled():
-        thread = threading.Thread(target=lambda: asyncio.run(run_claw_runtime()), daemon=True)
-        thread.start()
-        print("Claw Royale runtime worker started", flush=True)
-    if moltstation_runtime_enabled():
-        thread = threading.Thread(target=lambda: asyncio.run(run_moltstation_runtime()), daemon=True)
-        thread.start()
-        print("MoltStation runtime worker started", flush=True)
-    server = ThreadingHTTPServer((bind_host, port), CerberusHandler)
-    print(f"Cerberus service listening on {bind_host}:{port}", flush=True)
-    server.serve_forever()
+    pulse = build_runtime_pulse(
+        claw_enabled=claw_runtime_enabled(),
+        claw_runner=run_claw_runtime,
+        moltstation_enabled=moltstation_runtime_enabled(),
+        moltstation_runner=run_moltstation_runtime,
+    )
+    server: ThreadingHTTPServer | None = None
+
+    asyncio.run(pulse.start())
+    print("Pulse runtime lifecycle started", flush=True)
+
+    try:
+        server = ThreadingHTTPServer((bind_host, port), CerberusHandler)
+        print(f"Cerberus service listening on {bind_host}:{port}", flush=True)
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("CERBERUS service shutdown requested", flush=True)
+    finally:
+        if server is not None:
+            server.server_close()
+        asyncio.run(pulse.stop())
+        print("Pulse runtime lifecycle stopped", flush=True)
+
     return 0
 
 

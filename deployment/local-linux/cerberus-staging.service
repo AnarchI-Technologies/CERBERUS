@@ -10,6 +10,7 @@ EnvironmentFile=/etc/cerberus/staging.env
 ExecStart=/opt/cerberus-venv/bin/python /opt/cerberus-staging-current/src/render_app.py
 Restart=always
 RestartSec=5
+KillSignal=SIGINT
 TimeoutStopSec=30
 NoNewPrivileges=true
 PrivateTmp=true

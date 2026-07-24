@@ -13,6 +13,7 @@ Environment=CERBERUS_MODEL_GATEWAY_ENABLED=false
 ExecStart=/opt/cerberus-venv/bin/python /opt/cerberus-current/src/render_app.py
 Restart=always
 RestartSec=5
+KillSignal=SIGINT
 TimeoutStopSec=30
 
 [Install]

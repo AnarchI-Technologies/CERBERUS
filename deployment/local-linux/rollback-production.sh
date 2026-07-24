@@ -59,7 +59,9 @@ fi
 for file in \
     "$ROLLBACK_RELEASE/requirements.txt" \
     "$ROLLBACK_RELEASE/src/render_app.py" \
-    "$ROLLBACK_RELEASE/src/claw_runtime.py"
+    "$ROLLBACK_RELEASE/src/claw_runtime.py" \
+    "$ROLLBACK_RELEASE/src/pulse.py" \
+    "$ROLLBACK_RELEASE/src/pulse_workers.py"
 do
     if [ ! -f "$file" ]; then
         echo

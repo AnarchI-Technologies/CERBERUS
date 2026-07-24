@@ -81,7 +81,9 @@ if sudo test -e "$RELEASE"; then
     for file in \
         "$RELEASE/requirements.txt" \
         "$RELEASE/src/render_app.py" \
-        "$RELEASE/src/claw_runtime.py"
+        "$RELEASE/src/claw_runtime.py" \
+        "$RELEASE/src/pulse.py" \
+        "$RELEASE/src/pulse_workers.py"
     do
         if ! sudo test -f "$file"; then
             echo "Existing release is incomplete:"
@@ -115,6 +117,8 @@ for file in \
     "$TEMP_RELEASE/requirements.txt" \
     "$TEMP_RELEASE/src/render_app.py" \
     "$TEMP_RELEASE/src/claw_runtime.py" \
+    "$TEMP_RELEASE/src/pulse.py" \
+    "$TEMP_RELEASE/src/pulse_workers.py" \
     "$TEMP_RELEASE/deployment/local-linux/cerberusctl"
 do
     if [ ! -f "$file" ]; then
