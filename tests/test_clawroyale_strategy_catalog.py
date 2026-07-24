@@ -62,7 +62,9 @@ class StrategyCatalogTests(unittest.TestCase):
         repository = source_root.parent
         provider_paths = {
             item.provider: (
-                repository / "data" / f"{item.provider}.py"
+                repository / "src" / "clawroyale_strategies" / "threat.py"
+                if item.provider == "threat_engine"
+                else repository / "data" / f"{item.provider}.py"
                 if item.provider == "memory_cortex"
                 else repository / "src" / f"{item.provider}.py"
             )

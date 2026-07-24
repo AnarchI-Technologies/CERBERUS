@@ -96,6 +96,10 @@ class LegacyStrategyRegistry:
         descriptor = self.descriptor(strategy_id)
         if not descriptor.required_signals.issubset(state_signals(state, context)):
             return ()
+        provider = self._providers.get(descriptor.provider)
+        evaluate_strategy = getattr(provider, "evaluate_strategy", None)
+        if callable(evaluate_strategy):
+            return tuple(evaluate_strategy(descriptor.intent, state, context))
         active_cache = cache or StrategyCallCache()
         return tuple(
             result
@@ -124,14 +128,23 @@ class LegacyStrategyRegistry:
         cache = StrategyCallCache()
         results: list[Any] = []
         for provider_name in provider_order:
-            results.extend(
-                result
-                for result in self._provider_results(
-                    provider_name, state, context, cache
+            provider = self._providers[provider_name]
+            evaluate_strategy = getattr(provider, "evaluate_strategy", None)
+            if callable(evaluate_strategy):
+                for descriptor in eligible:
+                    if descriptor.provider == provider_name:
+                        results.extend(
+                            evaluate_strategy(descriptor.intent, state, context)
+                        )
+            else:
+                results.extend(
+                    result
+                    for result in self._provider_results(
+                        provider_name, state, context, cache
+                    )
+                    if str(getattr(result, "intent", ""))
+                    in intents_by_provider[provider_name]
                 )
-                if str(getattr(result, "intent", ""))
-                in intents_by_provider[provider_name]
-            )
         return RegistryEvaluation(
             results=tuple(results),
             providers_evaluated=tuple(provider_order),
