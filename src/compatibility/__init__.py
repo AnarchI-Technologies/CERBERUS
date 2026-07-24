@@ -12,6 +12,12 @@ from .legacy_strategy_registry import (
     StrategyRegistryError,
     state_signals,
 )
+from .legacy_strategy_parity import (
+    LEGACY_PROVIDER_ORDER,
+    StrategyParityReport,
+    build_legacy_strategy_providers,
+    compare_legacy_strategy_registry,
+)
 
 __all__ = [
     "ClawRoyaleShadowBridge",
@@ -22,4 +28,8 @@ __all__ = [
     "StrategyCallCache",
     "StrategyRegistryError",
     "state_signals",
+    "LEGACY_PROVIDER_ORDER",
+    "StrategyParityReport",
+    "build_legacy_strategy_providers",
+    "compare_legacy_strategy_registry",
 ]
