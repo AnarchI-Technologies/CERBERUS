@@ -14,5 +14,8 @@ The comparison requires exact equality for candidate order and contents, the
 winning candidate, final action, reason, and side effects. Memory and dossier
 stores are never shared between the paths.
 
-This is a read-only migration gate. It does not change live decision execution,
+After parity passed, the core planner was wired to the registry with
+`CERBERUS_STRATEGY_EXECUTION=legacy` retained as an immediate fallback. The
+registry is the default and reports evaluated-provider, eligible-strategy, and
+skipped-strategy metrics. This changes orchestration only; it does not change
 install behavior, publication behavior, or strategy implementations.
