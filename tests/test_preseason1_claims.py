@@ -17,12 +17,51 @@ for folder in (ROOT / "src", ROOT / "data"):
 from preseason1_claims import (  # noqa: E402
     claim_reached_preseason1_points,
     daily_claim_candidates,
+    objective_progress_snapshot,
     stepped_claim_candidates,
 )
 import claw_runtime  # noqa: E402
 
 
 class Preseason1ClaimTests(unittest.TestCase):
+    def test_progress_snapshot_is_allowlisted_and_identity_free(self) -> None:
+        payload = {
+            "walletAddress": "0xNEVER-RETAIN-THIS",
+            "quests": {
+                "off_beaten_path": {
+                    "currentLevel": 2,
+                    "progress": 17,
+                    "nextTarget": 25,
+                    "status": "active",
+                    "reward": {"token": "secret-ish"},
+                }
+            },
+        }
+
+        self.assertEqual(
+            objective_progress_snapshot(payload),
+            [{"key": "off_beaten_path", "level": 2, "progress": 17, "target": 25, "status": "active"}],
+        )
+
+    def test_progress_snapshot_aggregates_highest_claimed_tier(self) -> None:
+        payload = {
+            "quests": {
+                "survival": {
+                    "tiers": [
+                        {"tier": 1, "claimed": True},
+                        {"tier": 2, "claimed": True},
+                        {"tier": 3, "claimable": True},
+                        {"tier": 4, "status": "locked"},
+                    ]
+                }
+            }
+        }
+
+        self.assertEqual(
+            objective_progress_snapshot(payload),
+            [{"key": "survival", "level": 2, "claimed": True, "claimable": True, "next_tier": 3, "status": "locked"}],
+        )
+
     def test_discovers_only_explicit_unclaimed_stepped_tiers(self) -> None:
         payload = {
             "quests": {

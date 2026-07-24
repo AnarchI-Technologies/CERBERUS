@@ -38,6 +38,16 @@ def _unwrap(payload: Any) -> dict[str, Any]:
     return data if isinstance(data, dict) else {"value": data, "_raw": payload}
 
 
+def _instance_number(value: Any) -> int:
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("official Claw instance ID must be an integer") from exc
+    if number < 1:
+        raise ValueError("official Claw instance ID must be positive")
+    return number
+
+
 class ClawRoyaleClient:
     def __init__(
         self,
@@ -152,6 +162,18 @@ class ClawRoyaleClient:
     def waiting_games(self, *, timeout: float = 5.0) -> dict[str, Any]:
         return self._request("GET", "/games", params={"status": "waiting"}, timeout=timeout)
 
+    def game_state(self, game_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/games/{quote(str(game_id).strip(), safe='')}/state", timeout=10)
+
+    def redeem(self, code: str, idempotency_key: str) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/redeem",
+            headers={"Idempotency-Key": str(idempotency_key).strip()[:80]},
+            json={"code": str(code).strip()[:64]},
+            timeout=10,
+        )
+
     def preseason1_quests(self) -> dict[str, Any]:
         return self._request("GET", "/preseason1/quests", timeout=10)
 
@@ -177,18 +199,29 @@ class ClawRoyaleClient:
             "PUT",
             "/loadout/pack",
             headers={"Idempotency-Key": idempotency_key},
-            json={"packInstanceId": pack_instance_id},
+            json={"packInstanceId": _instance_number(pack_instance_id)},
         )
 
     def clear_active_pack(self, idempotency_key: str) -> dict[str, Any]:
         return self._request("DELETE", "/loadout/pack", headers={"Idempotency-Key": idempotency_key})
+
+    def set_sub_pack(self, pack_instance_id: str, idempotency_key: str) -> dict[str, Any]:
+        return self._request(
+            "PUT",
+            "/loadout/sub-pack",
+            headers={"Idempotency-Key": idempotency_key},
+            json={"packInstanceId": _instance_number(pack_instance_id)},
+        )
+
+    def clear_sub_pack(self, idempotency_key: str) -> dict[str, Any]:
+        return self._request("DELETE", "/loadout/sub-pack", headers={"Idempotency-Key": idempotency_key})
 
     def set_relic_slot(self, type_index: int, relic_instance_id: str, idempotency_key: str) -> dict[str, Any]:
         return self._request(
             "PUT",
             f"/loadout/slot/{type_index}",
             headers={"Idempotency-Key": idempotency_key},
-            json={"relicInstanceId": relic_instance_id},
+            json={"relicInstanceId": _instance_number(relic_instance_id)},
         )
 
     def clear_relic_slot(self, type_index: int, idempotency_key: str) -> dict[str, Any]:
@@ -222,7 +255,7 @@ class ClawRoyaleClient:
             "POST",
             "/reforge",
             json={
-                "relicInstanceId": relic_instance_id,
+                "relicInstanceId": _instance_number(relic_instance_id),
                 "itemKey": item_key,
                 "idempotencyKey": idempotency_key,
             },

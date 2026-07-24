@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -42,8 +43,13 @@ def default_rules() -> dict[str, Any]:
     }
 
 
-def load_hardened_strategy_rules(path: str | Path = DEFAULT_RULES_FILE) -> dict[str, Any]:
-    target = Path(path)
+def hardened_strategy_rules_file() -> Path:
+    runtime_root = os.getenv("CERBERUS_MEMORY_DIR") or os.getenv("CERBERUS_HOME")
+    return Path(runtime_root) / DEFAULT_RULES_FILE.name if runtime_root else DEFAULT_RULES_FILE
+
+
+def load_hardened_strategy_rules(path: str | Path | None = None) -> dict[str, Any]:
+    target = Path(path) if path is not None else hardened_strategy_rules_file()
     try:
         if target.exists():
             data = json.loads(target.read_text(encoding="utf-8"))
@@ -57,8 +63,8 @@ def load_hardened_strategy_rules(path: str | Path = DEFAULT_RULES_FILE) -> dict[
     return default_rules()
 
 
-def save_hardened_strategy_rules(payload: dict[str, Any], path: str | Path = DEFAULT_RULES_FILE) -> Path:
-    target = Path(path)
+def save_hardened_strategy_rules(payload: dict[str, Any], path: str | Path | None = None) -> Path:
+    target = Path(path) if path is not None else hardened_strategy_rules_file()
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True), encoding="utf-8")
     return target

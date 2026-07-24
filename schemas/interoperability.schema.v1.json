@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anarchi.local/schemas/interoperability.schema.v1.json",
+  "title": "AnarchI Interoperability Protocol v1",
+  "description": "Portable capability, command, observation, result, and adapter descriptor messages.",
+  "oneOf": [
+    { "$ref": "#/$defs/adapter_descriptor" },
+    { "$ref": "#/$defs/command" },
+    { "$ref": "#/$defs/observation" },
+    { "$ref": "#/$defs/result" }
+  ],
+  "$defs": {
+    "base": {
+      "type": "object",
+      "required": ["kind", "schema_version"],
+      "properties": {
+        "schema_version": { "const": "anarchi.interop.v1" }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "required": ["name", "version", "modes", "request_schema", "result_schema", "observation_schema"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "modes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "request_schema": { "type": ["object", "boolean"] },
+        "result_schema": { "type": ["object", "boolean"] },
+        "observation_schema": { "type": ["object", "boolean"] }
+      },
+      "additionalProperties": false
+    },
+    "adapter_descriptor": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": ["adapter_id", "adapter_version", "capabilities", "metadata"],
+          "properties": {
+            "kind": { "const": "adapter_descriptor" },
+            "adapter_id": { "type": "string", "minLength": 1 },
+            "adapter_version": { "type": "string", "minLength": 1 },
+            "capabilities": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/capability" }
+            },
+            "metadata": { "type": "object" }
+          }
+        }
+      ]
+    },
+    "command": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": [
+            "command_id",
+            "adapter_id",
+            "capability",
+            "session_id",
+            "payload",
+            "idempotency_key",
+            "correlation_id",
+            "metadata"
+          ],
+          "properties": {
+            "kind": { "const": "command" },
+            "command_id": { "type": "string", "minLength": 1 },
+            "adapter_id": { "type": "string", "minLength": 1 },
+            "capability": { "type": "string", "minLength": 1 },
+            "session_id": { "type": "string", "minLength": 1 },
+            "payload": {},
+            "idempotency_key": { "type": "string" },
+            "correlation_id": { "type": "string" },
+            "metadata": { "type": "object" }
+          }
+        }
+      ]
+    },
+    "observation": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": [
+            "observation_id",
+            "adapter_id",
+            "capability",
+            "session_id",
+            "sequence",
+            "payload",
+            "correlation_id",
+            "metadata"
+          ],
+          "properties": {
+            "kind": { "const": "observation" },
+            "observation_id": { "type": "string", "minLength": 1 },
+            "adapter_id": { "type": "string", "minLength": 1 },
+            "capability": { "type": "string", "minLength": 1 },
+            "session_id": { "type": "string", "minLength": 1 },
+            "sequence": { "type": "integer", "minimum": 0 },
+            "payload": {},
+            "correlation_id": { "type": "string" },
+            "metadata": { "type": "object" }
+          }
+        }
+      ]
+    },
+    "result": {
+      "allOf": [
+        { "$ref": "#/$defs/base" },
+        {
+          "type": "object",
+          "required": [
+            "result_id",
+            "command_id",
+            "adapter_id",
+            "capability",
+            "status",
+            "payload",
+            "error_code",
+            "error_message",
+            "retryable",
+            "correlation_id",
+            "metadata"
+          ],
+          "properties": {
+            "kind": { "const": "result" },
+            "result_id": { "type": "string", "minLength": 1 },
+            "command_id": { "type": "string", "minLength": 1 },
+            "adapter_id": { "type": "string", "minLength": 1 },
+            "capability": { "type": "string", "minLength": 1 },
+            "status": {
+              "enum": ["succeeded", "failed", "rejected", "pending"]
+            },
+            "payload": {},
+            "error_code": { "type": "string" },
+            "error_message": { "type": "string" },
+            "retryable": { "type": "boolean" },
+            "correlation_id": { "type": "string" },
+            "metadata": { "type": "object" }
+          }
+        }
+      ]
+    }
+  }
+}

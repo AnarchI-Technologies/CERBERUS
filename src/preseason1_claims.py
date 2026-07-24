@@ -29,6 +29,9 @@ GENERIC_CONTAINER_KEYS = {
     "value",
 }
 QUEST_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
+LEVEL_FIELDS = ("level", "currentLevel", "current_level", "currentTier", "current_tier")
+PROGRESS_FIELDS = ("progress", "current", "count", "amount")
+TARGET_FIELDS = ("target", "threshold", "required", "nextTarget", "next_target")
 
 
 def _quest_key(record: dict[str, Any], inherited: str = "") -> str:
@@ -121,6 +124,48 @@ def daily_claim_candidates(payload: Any) -> list[str]:
     return sorted(candidates)
 
 
+def _number(record: dict[str, Any], fields: tuple[str, ...]) -> int | float | None:
+    for field in fields:
+        value = record.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        return value
+    return None
+
+
+def objective_progress_snapshot(payload: Any) -> list[dict[str, Any]]:
+    """Return a small identity-free view of objective progress."""
+
+    snapshots: dict[str, dict[str, Any]] = {}
+    for record, inherited_key in _walk_records(payload):
+        key = _quest_key(record, inherited_key)
+        if not key:
+            continue
+        item = snapshots.setdefault(key, {"key": key})
+        level = _number(record, LEVEL_FIELDS)
+        progress = _number(record, PROGRESS_FIELDS)
+        target = _number(record, TARGET_FIELDS)
+        tier = _tier(record)
+        status = str(record.get("status") or "").strip().lower()
+        if level is not None:
+            item["level"] = max(level, item.get("level", level))
+        if progress is not None:
+            item["progress"] = progress
+        if target is not None:
+            item["target"] = target
+        if status in CLAIMABLE_STATUSES or status in {"claimed", "locked", "active", "in_progress"}:
+            item["status"] = status
+        if _is_claimed(record):
+            item["claimed"] = True
+            if tier is not None:
+                item["level"] = max(tier, item.get("level", tier))
+        if _is_explicitly_claimable(record) and not _is_claimed(record):
+            item["claimable"] = True
+            if tier is not None:
+                item["next_tier"] = min(tier, item.get("next_tier", tier))
+    return [snapshots[key] for key in sorted(snapshots) if len(snapshots[key]) > 1]
+
+
 def claim_reached_preseason1_points(
     client: Any,
     *,
@@ -169,4 +214,6 @@ def claim_reached_preseason1_points(
         "newly_claimed": sum(1 for item in results if item.get("claimed")),
         "results": results,
         "errors": errors,
+        "progress": objective_progress_snapshot(stepped_payload),
+        "daily_progress": objective_progress_snapshot(daily_payload),
     }

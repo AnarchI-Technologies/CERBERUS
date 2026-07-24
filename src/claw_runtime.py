@@ -18,11 +18,14 @@ from urllib.parse import urlparse
 import websockets
 
 from autonomy_suggestions import record_autonomy_observation
-from claw_contract import FREE_ACTIONS, JOIN_DECISIONS, THOUGHT_MAX_CHARS
+from action_postmortem import build_action_postmortem
+from claw_contract import COOLDOWN_ACTIONS, FREE_ACTIONS, JOIN_DECISIONS, PAID_WINNER_FIELDS, THOUGHT_MAX_CHARS
+from claw_policy_shadow import ENFORCED_FREE_ACTIONS, authorize_free_action_execution
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
 from core_loop import cerberus_tick
 from env_loader import hydrate_env
+from execution_coordinator import execute_authorized, reconcile_reserved_free_actions
 from external_wisdom import shared_public_line
 from free_action_abuse import FreeActionCortex
 from game_map import build_live_map
@@ -38,6 +41,7 @@ from onboarding_clients import ClawRoyaleClient
 from postgame_hardening import run_postgame_hardening_pass
 from preseason1_claims import claim_reached_preseason1_points
 from runtime_state import (
+    append_action_postmortem,
     append_social_event,
     claw_runtime_status_file,
     clear_game_id,
@@ -54,6 +58,8 @@ DEFAULT_MAX_RECONNECT_SECONDS = 90
 DEFAULT_ROUTE_PROBE_SECONDS = 15
 DEFAULT_PAID_RETRY_COOLDOWN_SECONDS = 600
 DEFAULT_PRESEASON1_CLAIM_INTERVAL_SECONDS = 60
+WEB_SESSION_BACKOFF_SECONDS = 60
+TERMINAL_QUARANTINE_BACKOFF_SECONDS = 60
 BACKGROUND_TASKS: set[asyncio.Task[Any]] = set()
 JOIN_PATH = "/ws/join"
 AGENT_PATH = "/ws/agent"
@@ -62,6 +68,7 @@ NO_HELLO_DECISIONS = {
 }
 DEFAULT_WS_PATHS = (
     "/ws/join",
+    "/ws/agent",
 )
 VALID_GAME_MODES = {"free", "offchain", "onchain"}
 ROOM_LIST_KEYS = (
@@ -76,6 +83,7 @@ ROOM_LIST_KEYS = (
     "value",
 )
 from turn_state_model import TurnState
+from v2_contracts import contract_dict
 ROOM_COUNT_KEYS = (
     "agentCount",
     "agentsCount",
@@ -216,6 +224,48 @@ def extract_game_id(payload: Any) -> str:
     return next((str(item) for item in candidates if item), "")
 
 
+def paid_room_winners(payload: Any) -> list[dict[str, Any]]:
+    """Return only display-safe v1.13.1 paid-room winner fields."""
+    if not isinstance(payload, dict):
+        return []
+    containers = [payload]
+    for key in ("data", "room", "state"):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            containers.append(value)
+            room = value.get("room")
+            if isinstance(room, dict):
+                containers.append(room)
+    winners = next((item.get("winners") for item in containers if isinstance(item.get("winners"), list)), [])
+    return [
+        {key: row.get(key) for key in PAID_WINNER_FIELDS if key in row}
+        for row in winners[:5]
+        if isinstance(row, dict)
+    ]
+
+
+def record_paid_room_winners(
+    config: ClawRuntimeConfig, game_id: str, payload: Any | None = None
+) -> list[dict[str, Any]]:
+    winners = paid_room_winners(payload)
+    source = "game_ended"
+    if not winners and game_id:
+        try:
+            winners = paid_room_winners(
+                ClawRoyaleClient(api_key=config.api_key, base_url=config.base_url).game_state(game_id)
+            )
+            source = "finished_game_state"
+        except Exception:
+            winners = []
+    if winners:
+        update_status(
+            paid_room_winners=winners,
+            paid_room_winner_unit="Moltz",
+            paid_room_winner_source=source,
+        )
+    return winners
+
+
 def frame_value(payload: dict[str, Any], key: str) -> Any:
     if key in payload:
         return payload.get(key)
@@ -291,10 +341,42 @@ def is_terminal_game_error(message: str) -> bool:
     )
 
 
+def terminal_game_blocked(status: dict[str, Any], game_id: str) -> bool:
+    terminal_id = str(status.get("terminal_game_id") or "")
+    return bool(terminal_id and game_id and terminal_id == game_id)
+
+
+def objective_levels_from_status(status: dict[str, Any]) -> dict[str, int]:
+    claims = status.get("preseason1_claims") if isinstance(status.get("preseason1_claims"), dict) else {}
+    progress = claims.get("progress") if isinstance(claims.get("progress"), list) else []
+    levels: dict[str, int] = {}
+    for row in progress:
+        if not isinstance(row, dict) or not row.get("key") or row.get("level") is None:
+            continue
+        try:
+            levels[str(row["key"])] = max(0, int(row["level"]))
+        except (TypeError, ValueError):
+            continue
+    return levels
+
+
 def action_envelope(action: dict[str, Any]) -> dict[str, Any]:
     thought = public_action_thought(action)
     data = {key: value for key, value in action.items() if not key.startswith("_")}
     return {"type": "action", "data": data, "thought": thought}
+
+
+async def coordinate_free_action_send(ws: Any, state: TurnState, action: dict[str, Any]):  # type: ignore[no-untyped-def]
+    allowed, event, decision, request, policy, policy_record = authorize_free_action_execution(state, action)
+    if not allowed:
+        return None, policy_record
+    envelope = action_envelope(action)
+
+    async def send() -> dict[str, Any]:
+        await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
+        return {"code": "sent"}
+
+    return await execute_authorized(request, policy, send, event=event, decision=decision), policy_record
 
 
 def action_signature(action: dict[str, Any], *, turn: int = 0) -> str:
@@ -874,6 +956,8 @@ def wants_action(payload: dict[str, Any], snapshot: dict[str, Any] | None, *, ga
         state = TurnState.from_snapshot(snapshot)
         if not has_usable_turn_facts(state):
             return False
+        if agent_state_terminal(state):
+            return False
         if not state.can_take_main_action:
             return False
     if frame_type in {"agent_view", "turn_advanced"}:
@@ -888,11 +972,17 @@ def has_free_action_window(state: TurnState | None) -> bool:
     if not isinstance(state, TurnState):
         return False
     try:
+        if agent_state_terminal(state):
+            return False
         if not state.has_broadcast_channel and not state.visible_items and not state.current_region.items and not state.inventory:
             return False
         return bool(FreeActionCortex().evaluate(state, {}))
     except Exception:
         return False
+
+
+def agent_state_terminal(state: TurnState | None) -> bool:
+    return isinstance(state, TurnState) and (not state.self.is_alive or state.self.hp <= 0)
 
 
 def has_usable_turn_facts(state: TurnState) -> bool:
@@ -917,7 +1007,7 @@ def discover_version(api_base: str = CLAW_API_BASE) -> str:
         return version
     except Exception as exc:
         update_status(last_error=f"version discovery failed: {str(exc)[:180]}")
-        return os.getenv("CLAW_ROYALE_VERSION", "1.9.0").strip() or "1.9.0"
+        return active_claw_version()
 
 
 def load_config() -> ClawRuntimeConfig:
@@ -962,6 +1052,8 @@ def websocket_url(config: ClawRuntimeConfig, path: str) -> str:
 
 def reconnect_delay_seconds(config: ClawRuntimeConfig, reconnects: int, error: Exception) -> int:
     message = str(error).lower()
+    if web_session_controls_agent(error):
+        return max(WEB_SESSION_BACKOFF_SECONDS, config.min_reconnect_seconds)
     if "http 404" in message or "not found" in message:
         raw = os.getenv("CLAW_ROYALE_ROUTE_PROBE_SECONDS", str(DEFAULT_ROUTE_PROBE_SECONDS))
         try:
@@ -969,6 +1061,27 @@ def reconnect_delay_seconds(config: ClawRuntimeConfig, reconnects: int, error: E
         except ValueError:
             return DEFAULT_ROUTE_PROBE_SECONDS
     return min(config.max_reconnect_seconds, config.min_reconnect_seconds * reconnects)
+
+
+def clean_close_delay_seconds(config: ClawRuntimeConfig, status: dict[str, Any]) -> int:
+    if status.get("terminal_game_id") or str(status.get("state") or "") == "terminal_game_waiting":
+        return max(TERMINAL_QUARANTINE_BACKOFF_SECONDS, config.min_reconnect_seconds)
+    return max(1, config.min_reconnect_seconds)
+
+
+def websocket_close_code(error: Exception) -> int | None:
+    for candidate in (getattr(error, "code", None), getattr(getattr(error, "rcvd", None), "code", None)):
+        try:
+            if candidate is not None:
+                return int(candidate)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def web_session_controls_agent(error: Exception) -> bool:
+    message = str(error).lower()
+    return websocket_close_code(error) == 4030 or "web session active" in message or "4030" in message
 
 
 def account_status_summary(config: ClawRuntimeConfig) -> dict[str, Any]:
@@ -1103,6 +1216,12 @@ def record_action_result_learning(payload: dict[str, Any], *, status: dict[str, 
             "state": status.get("state") or "",
         }
     )
+    try:
+        append_action_postmortem(
+            build_action_postmortem(action=last_action, payload=payload, snapshot=snapshot)
+        )
+    except Exception:
+        pass
 
     store = CompactMemoryStore().load()
     store.remember_turn(
@@ -1137,6 +1256,20 @@ def record_action_result_learning(payload: dict[str, Any], *, status: dict[str, 
             update_status(last_lesson_compile=compiled)
     except Exception:
         return
+
+
+def server_action_window_open(state: TurnState, server_can_act: bool | None) -> bool:
+    """Outcome/event truth may close a stale snapshot's main-action window."""
+    return state.can_take_main_action and server_can_act is not False
+
+
+def accepted_cooldown_action_result(payload: dict[str, Any], status: dict[str, Any]) -> bool:
+    """Recognize an accepted cooldown action even when event order is reversed."""
+    last_action = status.get("last_action") if isinstance(status.get("last_action"), dict) else {}
+    action_type = str(last_action.get("type") or "")
+    error_text = str(payload.get("message") or payload.get("error") or "")
+    success_raw = payload.get("success", payload.get("ok"))
+    return action_type in COOLDOWN_ACTIONS and not error_text and success_raw is not False
 
 
 def _balance_float(value: Any) -> float:
@@ -1365,6 +1498,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
     )
     async with websockets.connect(url, additional_headers=extra_headers, ping_interval=20, ping_timeout=20) as ws:
         gameplay_ready = False
+        server_can_act: bool | None = None
         schedule_preseason1_claim_sweep(config)
         update_status(state="connected", endpoint=url, connected_at=int(time.time()), reconnects=read_json(claw_runtime_status_file()).get("reconnects", 0))
         async for raw in ws:
@@ -1376,6 +1510,9 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             if not isinstance(payload, dict):
                 continue
             frame_type = str(payload.get("type") or payload.get("event") or payload.get("op") or "message")
+            winners = paid_room_winners(payload) if frame_type == "game_ended" else []
+            if winners:
+                update_status(paid_room_winners=winners, paid_room_winner_unit="Moltz")
             if frame_type in {"ping"}:
                 await ws.send(json.dumps({"type": "pong"}))
                 continue
@@ -1432,11 +1569,21 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 continue
             if frame_type in {"action_result", "can_act_changed"}:
                 error_text = str(payload.get("message") or payload.get("error") or "")
+                action_status = read_json(claw_runtime_status_file())
                 if "not running" in error_text.lower():
                     gameplay_ready = False
+                reported_can_act = frame_value(payload, "canAct")
+                if frame_type == "can_act_changed" and reported_can_act is not None:
+                    server_can_act = bool(reported_can_act)
+                elif frame_type == "action_result" and "cooldown" in error_text.lower():
+                    server_can_act = False
                 if frame_type == "action_result":
-                    record_action_result_learning(payload)
+                    if accepted_cooldown_action_result(payload, action_status):
+                        server_can_act = False
+                    record_action_result_learning(payload, status=action_status)
                 if is_terminal_game_error(error_text):
+                    terminal_id = str(action_status.get("current_game_id") or stored_game_id() or "")
+                    record_paid_room_winners(config, terminal_id, payload)
                     clear_game_id()
                     update_status(postgame_maintenance_pending=True)
                     record_account_balance(config, stage="game_ended")
@@ -1445,6 +1592,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                         state="game_ended",
                         last_frame_type=frame_type,
                         current_game_id="",
+                        terminal_game_id=terminal_id,
                         game_status="ended",
                         gameplay_ready=False,
                         can_act=False,
@@ -1488,6 +1636,20 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 continue
             snapshot = unwrap_snapshot(payload)
             game_id = extract_game_id(payload) or extract_game_id(snapshot or {})
+            terminal_status = read_json(claw_runtime_status_file())
+            if terminal_game_blocked(terminal_status, game_id):
+                gameplay_ready = False
+                clear_game_id()
+                update_status(
+                    state="terminal_game_waiting",
+                    current_game_id="",
+                    gameplay_ready=False,
+                    can_act=False,
+                    last_error="server-terminal game snapshot suppressed",
+                )
+                continue
+            if game_id and terminal_status.get("terminal_game_id"):
+                update_status(terminal_game_id="")
             if game_id:
                 remember_game_id(game_id)
             status = game_status(payload, snapshot)
@@ -1496,6 +1658,8 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             elif is_non_running_game_status(status):
                 gameplay_ready = False
             elif is_terminal_game_error(str(payload.get("message") or payload.get("error") or status)):
+                terminal_id = game_id or str(terminal_status.get("current_game_id") or stored_game_id() or "")
+                record_paid_room_winners(config, terminal_id, payload)
                 clear_game_id()
                 update_status(postgame_maintenance_pending=True)
                 record_account_balance(config, stage="game_ended")
@@ -1504,6 +1668,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                     state="game_ended",
                     last_frame_type=frame_type,
                     current_game_id="",
+                    terminal_game_id=terminal_id,
                     game_status="ended",
                     gameplay_ready=False,
                     can_act=False,
@@ -1520,6 +1685,37 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 live_map=build_live_map(snapshot),
             )
             state = TurnState.from_snapshot(snapshot) if snapshot else None
+            if agent_state_terminal(state):
+                terminal_id = game_id or str(terminal_status.get("current_game_id") or stored_game_id() or "")
+                record_paid_room_winners(config, terminal_id, payload)
+                clear_game_id()
+                update_status(postgame_maintenance_pending=True)
+                record_account_balance(config, stage="game_ended")
+                schedule_preseason1_claim_sweep(config, force=True)
+                update_status(
+                    state="game_ended",
+                    current_game_id="",
+                    terminal_game_id=terminal_id,
+                    game_status="ended",
+                    gameplay_ready=False,
+                    can_act=False,
+                    last_error="server snapshot reports terminal agent state",
+                )
+                await ws.close(code=1000, reason="terminal agent snapshot")
+                return
+            if state:
+                for reconciled in reconcile_reserved_free_actions(state):
+                    append_action_audit(
+                        {
+                            "kind": "execution_reconciled",
+                            "action": {"type": reconciled.get("operation"), "target": reconciled.get("target")},
+                            "reason": reconciled.get("status"),
+                            "state": "playing",
+                        }
+                    )
+            if frame_type == "turn_advanced":
+                reported_can_act = frame_value(payload, "canAct")
+                server_can_act = bool(reported_can_act) if reported_can_act is not None else None
             snapshot_sig = snapshot_signature(snapshot)
             runtime_status = read_json(claw_runtime_status_file())
             if state and int(runtime_status.get("last_snapshot_turn") or -1) == int(state.turn) and str(runtime_status.get("last_snapshot_signature") or "") == snapshot_sig:
@@ -1532,8 +1728,11 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 )
                 continue
             free_action_window = bool(state and not state.can_take_main_action and has_free_action_window(state))
-            if snapshot and (wants_action(payload, snapshot, gameplay_ready=gameplay_ready) or free_action_window):
-                action = cerberus_tick(snapshot)
+            main_action_window = bool(state and server_action_window_open(state, server_can_act))
+            if snapshot and ((wants_action(payload, snapshot, gameplay_ready=gameplay_ready) and main_action_window) or free_action_window):
+                decision_snapshot = dict(snapshot)
+                decision_snapshot["_cerberusObjectiveLevels"] = objective_levels_from_status(runtime_status)
+                action = cerberus_tick(decision_snapshot)
                 turn = int(state.turn if state else 0)
                 if duplicate_action_sent(runtime_status, action, turn=turn):
                     append_action_audit(
@@ -1553,18 +1752,52 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                         last_action_candidate=action,
                     )
                     continue
-                await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
-                append_action_audit({"kind": "action_sent", "action": action, "reason": str(action.get("reason") or ""), "state": "playing"})
+                action_type = str(action.get("type") or "")
+                execution_result: dict[str, Any] = {}
+                if action_type in ENFORCED_FREE_ACTIONS:
+                    coordinated, policy_record = await coordinate_free_action_send(ws, state, action)
+                    if coordinated is None or coordinated.status != "accepted":
+                        append_action_audit(
+                            {
+                                "kind": "free_action_execution_suppressed",
+                                "action": action,
+                                "reason": coordinated.status if coordinated else ",".join(policy_record["policy"].get("reasons") or []),
+                                "state": "playing",
+                            }
+                        )
+                        continue
+                    execution_result = contract_dict(coordinated)
+                else:
+                    await ws.send(json.dumps(envelope, ensure_ascii=True, separators=(",", ":")))
+                if str(action.get("type") or "") not in FREE_ACTIONS:
+                    server_can_act = False
+                append_action_audit({"kind": "action_sent", "action": action, "reason": str(action.get("reason") or ""), "state": "playing", "execution_result": execution_result})
                 free_actions = free_actions_from_side_effects(action)
                 for free_action in free_actions:
-                    free_envelope = action_envelope(free_action)
-                    await ws.send(json.dumps(free_envelope, ensure_ascii=True, separators=(",", ":")))
+                    if str(free_action.get("type") or "") in ENFORCED_FREE_ACTIONS:
+                        execution, policy_record = await coordinate_free_action_send(ws, state, free_action)
+                        if execution is None or execution.status != "accepted":
+                            append_action_audit(
+                                {
+                                    "kind": "free_action_execution_suppressed",
+                                    "action": free_action,
+                                    "reason": execution.status if execution else ",".join(policy_record["policy"].get("reasons") or []),
+                                    "state": "playing",
+                                }
+                            )
+                            continue
+                        execution_result = contract_dict(execution)
+                    else:
+                        free_envelope = action_envelope(free_action)
+                        await ws.send(json.dumps(free_envelope, ensure_ascii=True, separators=(",", ":")))
+                        execution_result = {}
                     append_action_audit(
                         {
                             "kind": "free_action_sent",
                             "action": free_action,
                             "reason": str(free_action.get("reason") or ""),
                             "state": "playing",
+                            "execution_result": execution_result,
                         }
                     )
                 update_status(
@@ -1599,18 +1832,36 @@ async def run_forever(config: ClawRuntimeConfig | None = None) -> None:
         path = paths[path_index % len(paths)]
         try:
             await connect_and_play(config, path)
+            reconnects = 0
+            path_index += 1
+            clean_status = read_json(claw_runtime_status_file())
+            clean_delay = clean_close_delay_seconds(config, clean_status)
+            update_status(
+                state="reconnecting",
+                last_error="websocket closed without exception; rotating endpoint",
+                last_failed_path=path,
+                next_path=paths[path_index % len(paths)],
+                candidate_paths=paths,
+                next_retry_seconds=clean_delay,
+            )
+            await asyncio.sleep(clean_delay)
         except Exception as exc:
             reconnects += 1
-            path_index += 1
+            web_controlled = web_session_controls_agent(exc)
+            if not web_controlled:
+                path_index += 1
             delay = reconnect_delay_seconds(config, reconnects, exc)
             status = read_json(claw_runtime_status_file())
             status["reconnects"] = reconnects
-            status["state"] = "reconnecting"
+            status["state"] = "owner_controlled" if web_controlled else "reconnecting"
             status["last_error"] = str(exc)[:500]
             status["next_retry_seconds"] = delay
             status["last_failed_path"] = path
             status["next_path"] = paths[path_index % len(paths)]
             status["candidate_paths"] = paths
+            if web_controlled:
+                status["owner_attention"] = "Claw website play view currently controls this agent; bot is waiting before retry."
+                status["connection_close_code"] = 4030
             status["updated_at"] = int(time.time())
             write_json(claw_runtime_status_file(), status)
             try:

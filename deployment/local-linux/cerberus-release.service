@@ -1,0 +1,20 @@
+[Unit]
+Description=CERBERUS deterministic local runtime
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cerberus-current
+EnvironmentFile=/mnt/c/Users/alexg/Documents/Codex/CERBERUS/.env
+Environment=PORT=10000
+Environment=CERBERUS_BIND_HOST=127.0.0.1
+Environment=CERBERUS_MODEL_GATEWAY_ENABLED=false
+ExecStart=/opt/cerberus-venv/bin/python /opt/cerberus-current/src/render_app.py
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -50,6 +50,28 @@ def alias_file(tmp: str, *, status: str = "production") -> Path:
 
 
 class ModelGatewayTests(unittest.TestCase):
+    def test_embedding_is_local_governed_and_dimension_checked(self) -> None:
+        requests = []
+
+        def transport(path, payload, timeout):  # type: ignore[no-untyped-def]
+            requests.append((path, payload, timeout))
+            return {"embeddings": [[0.1, 0.2], [0.3, 0.4]]}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            aliases = alias_file(tmp, status="evaluation_only")
+            payload = json.loads(aliases.read_text(encoding="utf-8"))
+            payload["aliases"]["cerberus-fast"]["tasks"].append("embedding")
+            aliases.write_text(json.dumps(payload), encoding="utf-8")
+            env = {"CERBERUS_MODEL_GATEWAY_ENABLED": "true"}
+            with mock.patch.dict(os.environ, env, clear=True):
+                batch = OllamaModelGateway(aliases_path=aliases, transport=transport).embed(
+                    alias="cerberus-fast", texts=["ruin", "relic"], allow_evaluation=True
+                )
+
+        self.assertEqual(batch.vectors, ((0.1, 0.2), (0.3, 0.4)))
+        self.assertEqual(requests[0][0], "/api/embed")
+        self.assertNotIn("tools", requests[0][1])
+
     def test_disabled_by_default_and_requests_deterministic_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=True):
             gateway = OllamaModelGateway(aliases_path=alias_file(tmp), transport=lambda *_: {})
@@ -109,6 +131,31 @@ class ModelGatewayTests(unittest.TestCase):
         self.assertEqual(proposal.digest, "abc123")
         self.assertEqual(requests[0][0], "/api/generate")
         self.assertNotIn("tools", requests[0][1])
+
+    def test_readiness_requires_installed_pinned_alias_digests(self) -> None:
+        env = {"CERBERUS_MODEL_GATEWAY_ENABLED": "true"}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, env, clear=True):
+            aliases = alias_file(tmp)
+            ready = OllamaModelGateway(
+                aliases_path=aliases,
+                health_transport=lambda path, timeout: (
+                    {"version": "0.32.1"}
+                    if path == "/api/version"
+                    else {"models": [{"name": "local:test", "digest": "abc123"}]}
+                ),
+            ).readiness()
+            mismatch = OllamaModelGateway(
+                aliases_path=aliases,
+                health_transport=lambda path, timeout: (
+                    {"version": "0.32.1"}
+                    if path == "/api/version"
+                    else {"models": [{"name": "local:test", "digest": "different"}]}
+                ),
+            ).readiness()
+
+        self.assertTrue(ready["aliases_ready"])
+        self.assertEqual(mismatch["digest_mismatches"], ["cerberus-fast"])
+        self.assertEqual(mismatch["mode"], "model_available")
 
     def test_rejects_unknown_output_fields(self) -> None:
         env = {"CERBERUS_MODEL_GATEWAY_ENABLED": "true"}

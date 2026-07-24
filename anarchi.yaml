@@ -1,0 +1,109 @@
+schema_version: 1
+
+identity:
+  organization: AnarchI
+  component: CERBERUS
+  canonical_name: cerberus
+  responsibility: autonomous game platform
+  primary_verb: orchestrate
+
+repository:
+  name: CERBERUS
+  root_contract: anarchi.yaml
+  owner: AnarchI-Technologies
+  remote: AnarchI-Technologies/CERBERUS
+  visibility: private
+
+purpose:
+  deterministic: true
+  maturity: active-development
+  production_state: pre-production
+  description: deterministic game-facing autonomy and strategy platform
+
+runtime:
+  platform: python
+  minimum_version: "3.12"
+  local_entrypoint: quickstart.py
+  runtime_entrypoint: src/main_loop.py
+  service_entrypoint: src/render_app.py
+  dependency_manifest: requirements.txt
+
+deployment:
+  canonical_target: wsl-ubuntu-local
+  operating_system: Ubuntu
+  host_layer: WSL2
+  supervisor: systemd
+  production_service: cerberus.service
+  staging_service: cerberus-staging.service
+  immutable_release_root: /opt/cerberus-releases
+  production_pointer: /opt/cerberus-current
+  staging_pointer: /opt/cerberus-staging-current
+  render_com_status: legacy
+  railway_status: legacy
+
+capabilities:
+  validate: true
+  inspect: true
+  install: false
+  rollback: false
+  publish: false
+  autonomous_gameplay: true
+  strategy: true
+  memory: true
+  social_integrations: true
+  wallet_routing: true
+  external_adapters: true
+
+determinism:
+  default_encoding: utf8-no-bom
+  default_line_endings: lf
+  require_payload_hashes: true
+  require_receipts: true
+  require_backups_before_replacement: true
+  stable_identifiers: true
+
+validation:
+  repository_boundary_required: true
+  path_traversal_forbidden: true
+  payload_hashes_required: true
+  contract_required: true
+  unit_test_command: python -m unittest discover -s tests -v
+  compile_check_command: python -m compileall src data tests main_loop.py quickstart.py sitecustomize.py
+
+security:
+  secrets_provider: local-encrypted-vault
+  target_secrets_provider: Anar-Vault
+  secrets_in_repository: forbidden
+  local_env_file: .env
+  publication_requires_explicit_enablement: true
+
+wavesmith:
+  enabled: true
+  wave_manifest: wave.json
+  repository_contract: anarchi.yaml
+  install_enabled: false
+  publish_enabled: false
+
+kiln:
+  enabled: false
+  review_stage: future
+  historical_context: kiln
+  context_policy: consume historical kiln sections only
+
+relationships:
+  runtime_lifecycle_current: Pulse
+  runtime_lifecycle_target: Pulse
+  event_bus_current: signal-pyre
+  event_bus_target: Switch-Board
+  identity_kernel_target: Anar-Core
+  secrets_target: Anar-Vault
+  telemetry_target: Watchtower
+  reviewer_target: Kiln
+  gameplay_strategist: Hellion
+
+metadata:
+  schema_status: canonical-v1
+  adopted_by: WaveSmith
+  adoption_wave: cerberus-anarchi-adoption-0001
+  deployment_doctrine_wave: cerberus-wsl-deployment-doctrine-0001
+  behavior_change: deployment doctrine aligned to self-hosted WSL Ubuntu

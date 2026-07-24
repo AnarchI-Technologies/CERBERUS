@@ -145,6 +145,7 @@ class TurnState:
     cooldown_remaining_ms: int = 0
     alive_count: int = 0
     available_actions: dict[str, Any] = field(default_factory=dict)
+    objective_levels: dict[str, int] = field(default_factory=dict)
 
     @classmethod
     def from_snapshot(cls, snapshot: dict[str, Any]) -> "TurnState":
@@ -218,6 +219,11 @@ class TurnState:
                 snapshot.get("availableActions"),
                 self_raw.get("availableActions"),
             ),
+            objective_levels={
+                str(key): max(0, _as_int(value))
+                for key, value in _as_dict(snapshot.get("_cerberusObjectiveLevels")).items()
+                if str(key)
+            },
         )
         state.alert_gauge = _as_int(
             view.get("alertGauge")
@@ -283,6 +289,10 @@ class TurnState:
         if isinstance(action, dict) and action.get("cost") not in (None, ""):
             return max(0, _as_int(action.get("cost"), fallback))
         return max(0, fallback)
+
+    def objective_needs_progress(self, key: str, target_level: int = 5) -> bool:
+        level = self.objective_levels.get(key)
+        return level is None or level < target_level
 
     @property
     def can_take_main_action(self) -> bool:

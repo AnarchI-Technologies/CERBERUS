@@ -7,6 +7,7 @@ action/outcome metadata, never the full raw websocket snapshot.
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -21,32 +22,33 @@ for folder in (ROOT / "src", ROOT / "data"):
 from agent_dossiers import AgentDossierStore
 from autonomy_suggestions import record_autonomy_observation
 from claw_contract import KNOWN_ACTION_TYPES, REQUIRED_ACTION_FIELDS, action_cost, is_cooldown_action
-from combat_decider import CombatCortex
+from claw_policy_shadow import evaluate_claw_action_shadow, shadow_enabled
 from combat_decider import target_in_attack_range
 from cortex_types import rest_action
 from decision_engine import make_plan as build_plan
 from decision_engine import active_fallback_action
 from decision_engine import has_usable_turn_facts
-from ep_economy_engine import EconomyCortex
-from free_action_abuse import FreeActionCortex
 from knowledge_base import KnowledgeBase
-from learned_policy_cortex import LearnedPolicyCortex
 from longterm_memory import LongTermMemoryStore
 from memory_system import CompactMemoryStore
-from memory_cortex import MemoryCortex
 from mongo_memory import configured_longterm_memory_store
-from owner_command_cortex import OwnerCommandCortex, action_response_for_owner_command, latest_directive
-from progression_cortex import ProgressionCortex
-from quest_rush_cortex import QuestRushCortex
+from owner_command_cortex import action_response_for_owner_command, latest_directive
 from runtime_state import owner_messages as load_owner_messages
 from runtime_state import append_hellion_owner_response, last_hellion_response_for_command
 from runtime_state import append_social_event
 from settlement_memory import remember_settlement_lessons
-from social_cortex import SocialCortex
 from social_runtime import enqueue_social_effects
-from threat_engine import ThreatCortex
 from turn_state_model import TurnState
-from utility_cortex import UtilityCortex
+from compatibility.legacy_strategy_parity import build_legacy_strategy_providers
+from compatibility.legacy_strategy_registry import LegacyStrategyRegistry
+
+
+STRATEGY_EXECUTION_ENV = "CERBERUS_STRATEGY_EXECUTION"
+
+
+def strategy_execution_mode() -> str:
+    mode = os.getenv(STRATEGY_EXECUTION_ENV, "registry").strip().lower()
+    return mode if mode in {"registry", "legacy"} else "registry"
 
 
 def _call(service: Callable[..., Any] | None, fallback: Any, *args: Any, **kwargs: Any) -> Any:
@@ -544,6 +546,17 @@ def _record_autonomy_or_warn(action: dict[str, Any], state: TurnState | dict[str
         )
 
 
+def _record_policy_shadow_or_warn(action: dict[str, Any], state: TurnState) -> None:
+    if not shadow_enabled():
+        return
+    try:
+        evaluate_claw_action_shadow(state, action)
+    except Exception as exc:
+        action.setdefault("_warnings", []).append(
+            {"type": "save_error", "store": "policy_shadow", "error": str(exc)[:240]}
+        )
+
+
 def cerberus_tick(
     state: dict[str, Any],
     *,
@@ -588,30 +601,28 @@ def cerberus_tick(
     planner = build_plan
     if make_plan is not None:
         planner = make_plan
+    providers = build_legacy_strategy_providers(
+        memory_store=memory,
+        dossier_store=dossiers,
+    )
+    planner_arguments = {
+        "state": turn_state,
+        "threats": threats,
+        "opportunities": opportunities,
+        "memory": memory.agent_context(),
+        "memory_store": memory,
+        "dossier_store": dossiers,
+        "owner_messages": owner_directives or [],
+        "knowledge": knowledge,
+    }
+    if planner is build_plan and strategy_execution_mode() == "registry":
+        planner_arguments["strategy_registry"] = LegacyStrategyRegistry(providers)
+    else:
+        planner_arguments["cortexes"] = list(providers.values())
     plan = _call(
         planner,
         {"action": {"type": "rest"}, "reason": "no planner wired"},
-        state=turn_state,
-        threats=threats,
-        opportunities=opportunities,
-        memory=memory.agent_context(),
-        memory_store=memory,
-        dossier_store=dossiers,
-        owner_messages=owner_directives or [],
-        knowledge=knowledge,
-        cortexes=[
-            ThreatCortex(),
-            OwnerCommandCortex(),
-            LearnedPolicyCortex(),
-            FreeActionCortex(),
-            UtilityCortex(),
-            ProgressionCortex(),
-            QuestRushCortex(),
-            CombatCortex(),
-            EconomyCortex(),
-            SocialCortex(dossier_store=dossiers),
-            MemoryCortex(memory_store=memory, dossier_store=dossiers),
-        ],
+        **planner_arguments,
     )
     action = _call(
         select_action,
@@ -621,6 +632,7 @@ def cerberus_tick(
     )
     action = normalize_action(action)
     action = normalize_action(legalize_action(action, turn_state))
+    _record_policy_shadow_or_warn(action, turn_state)
     _respond_to_owner_command_or_warn(action, owner_directives)
     _remember_settlement_or_warn(action, state, memory)
     _remember_event_learning_or_warn(action, memory, dossiers, turn_state)

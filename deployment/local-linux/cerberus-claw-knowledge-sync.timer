@@ -1,0 +1,11 @@
+[Unit]
+Description=Check official Claw Royale knowledge every six hours
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=6h
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

@@ -200,6 +200,101 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(any(result.intent == "quest_discover_ruin" for result in results))
         self.assertTrue(any(result.action and result.action["type"] == "explore" for result in results))
 
+    def test_quest_rush_explores_with_visible_non_attackable_agent(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5},
+                    "currentRegion": {"id": "ruin-1", "terrain": "Ruin"},
+                    "visibleAgents": [
+                        {"id": "distant", "hp": 100, "isAlive": True, "attackable": False}
+                    ],
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertTrue(any(result.action and result.action["type"] == "explore" for result in results))
+
+    def test_quest_rush_blocks_ruin_exploration_during_attack_range_combat(self) -> None:
+        for field in ("visibleAgents", "visibleMonsters"):
+            state = TurnState.from_snapshot(
+                {
+                    "view": {
+                        "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5},
+                        "currentRegion": {"id": "ruin-1", "terrain": "Ruin"},
+                        field: [{"id": "threat", "hp": 100, "isAlive": True, "attackable": True}],
+                    }
+                }
+            )
+
+            results = QuestRushCortex().evaluate(state, {})
+
+            self.assertFalse(any(result.action and result.action["type"] == "explore" for result in results))
+
+    def test_quest_rush_acquires_known_relic_with_capacity_and_reserves(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {
+                        "id": "me", "hp": 100, "maxHp": 100, "ep": 3,
+                        "inventory": [{"id": f"relic-{index}", "typeId": "relic_red"} for index in range(4)],
+                    },
+                    "currentRegion": {"id": "r1", "terrain": "Ruin"},
+                },
+                "events": [
+                    {"type": "ruin_state_changed", "data": {"ruinId": "ru-1", "contentType": "relic", "gauge": 1}}
+                ],
+            }
+        )
+
+        result = next(
+            result for result in QuestRushCortex().evaluate(state, {})
+            if result.intent == "quest_relic_acquisition"
+        )
+
+        self.assertEqual(result.action["type"], "explore")
+
+    def test_quest_rush_stops_known_relic_ruin_when_match_bag_is_full(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {
+                        "id": "me", "hp": 100, "maxHp": 100, "ep": 5,
+                        "inventory": [{"id": f"relic-{index}", "typeId": "relic_red"} for index in range(5)],
+                    },
+                    "currentRegion": {"id": "r1", "terrain": "Ruin"},
+                },
+                "events": [
+                    {"type": "ruin_state_changed", "data": {"ruinId": "ru-1", "contentType": "relic", "gauge": 1}}
+                ],
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.action and result.action["type"] == "explore" for result in results))
+
+    def test_economy_skips_relic_pickup_when_match_bag_is_full(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {
+                        "id": "me", "hp": 100, "maxHp": 100, "ep": 5,
+                        "inventory": [{"id": f"owned-{index}", "typeId": "relic_red"} for index in range(5)],
+                    },
+                    "currentRegion": {
+                        "id": "r1", "items": [{"id": "relic-extra", "typeId": "relic_blue"}]
+                    },
+                }
+            }
+        )
+
+        results = EconomyCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.action and result.action.get("itemId") == "relic-extra" for result in results))
+
     def test_quest_rush_targets_safe_guardian_progress(self) -> None:
         state = TurnState.from_snapshot(
             {
@@ -219,6 +314,47 @@ class HardeningTests(unittest.TestCase):
 
         self.assertEqual(guardian.action["type"], "attack")
         self.assertEqual(guardian.action["targetId"], "guardian-1")
+        self.assertNotIn("Q|season.kills", guardian.source_facts)
+
+    def test_quest_rush_targets_only_favorable_rival_fights(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 100, "maxHp": 100, "ep": 5, "atk": 45, "def": 10},
+                    "currentRegion": {"id": "r1"},
+                    "visibleAgents": [
+                        {"id": "rival-1", "hp": 25, "maxHp": 100, "atk": 8, "def": 2, "regionId": "r1"}
+                    ],
+                    "aliveCount": 35,
+                }
+            }
+        )
+
+        result = next(
+            result for result in QuestRushCortex().evaluate(state, {})
+            if result.intent == "quest_safe_rival_hunt"
+        )
+
+        self.assertEqual(result.action["targetId"], "rival-1")
+        self.assertIn("Q|season.rival_kills", result.source_facts)
+
+    def test_quest_rush_rejects_dangerous_rival_fight(self) -> None:
+        state = TurnState.from_snapshot(
+            {
+                "view": {
+                    "self": {"id": "me", "hp": 75, "maxHp": 100, "ep": 5, "atk": 15, "def": 4},
+                    "currentRegion": {"id": "r1"},
+                    "visibleAgents": [
+                        {"id": "rival-1", "hp": 100, "maxHp": 100, "atk": 40, "def": 15, "regionId": "r1"}
+                    ],
+                    "aliveCount": 35,
+                }
+            }
+        )
+
+        results = QuestRushCortex().evaluate(state, {})
+
+        self.assertFalse(any(result.intent == "quest_safe_rival_hunt" for result in results))
 
     def test_quest_rush_banks_survival_near_top_ten_even_with_full_ep(self) -> None:
         state = TurnState.from_snapshot(
@@ -235,6 +371,7 @@ class HardeningTests(unittest.TestCase):
         reserve = next(result for result in results if result.intent == "quest_top10_reserve")
 
         self.assertEqual(reserve.action["type"], "rest")
+        self.assertGreater(reserve.priority, 76)
 
     def test_quest_rush_does_not_rest_early_at_alive_twelve(self) -> None:
         state = TurnState.from_snapshot(
@@ -2856,6 +2993,23 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(any(edit.get("detector") == "runtime.target_blocked" for edit in suggestions))
         self.assertTrue(any(item.get("outcome", {}).get("message") == "TARGET_BLOCKED" for item in evidence))
 
+    def test_runtime_memory_defaults_follow_current_environment_not_import_time(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                store = CompactMemoryStore()
+                rules_path = postgame_hardening.hardened_strategy_rules_file()
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+        self.assertEqual(store.path.parent, Path(tmp))
+        self.assertEqual(store.encrypted_path.parent, Path(tmp))
+        self.assertEqual(rules_path.parent, Path(tmp))
+
     def test_retained_death_lesson_changes_next_turn_policy(self) -> None:
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         try:
@@ -3828,6 +3982,7 @@ class HardeningTests(unittest.TestCase):
     def test_optional_x_auth_email_failure_does_not_abort_authorization(self) -> None:
         old_env_config = x_oauth.env_config
         old_save_latest_auth_url = x_oauth.save_latest_auth_url
+        old_save_oauth_session = x_oauth.save_oauth_session
         old_send_authorization_email = x_oauth.send_authorization_email
         old_open = x_oauth.webbrowser.open
         old_wait_for_callback = x_oauth.wait_for_callback
@@ -3841,6 +3996,7 @@ class HardeningTests(unittest.TestCase):
                 "redirect_uri": "http://127.0.0.1:8765/x/callback",
             }
             x_oauth.save_latest_auth_url = lambda url: Path("x_auth_url.txt")  # type: ignore[assignment]
+            x_oauth.save_oauth_session = lambda **kwargs: Path("x_oauth_session.json")  # type: ignore[assignment]
             x_oauth.send_authorization_email = (  # type: ignore[assignment]
                 lambda url, to_email="": (_ for _ in ()).throw(RuntimeError("smtp down"))
             )
@@ -3857,6 +4013,7 @@ class HardeningTests(unittest.TestCase):
         finally:
             x_oauth.env_config = old_env_config
             x_oauth.save_latest_auth_url = old_save_latest_auth_url
+            x_oauth.save_oauth_session = old_save_oauth_session
             x_oauth.send_authorization_email = old_send_authorization_email
             x_oauth.webbrowser.open = old_open
             x_oauth.wait_for_callback = old_wait_for_callback
@@ -4038,15 +4195,17 @@ class HardeningTests(unittest.TestCase):
         client.request_whitelist("0x" + "1" * 40)
         client.delete_identity()
         client.loadout()
-        client.set_active_pack("pack-1", "idem-1")
+        client.set_active_pack("101", "idem-1")
         client.clear_active_pack("idem-2")
-        client.set_relic_slot(1, "relic-1", "idem-3")
+        client.set_sub_pack("102", "idem-sub-1")
+        client.clear_sub_pack("idem-sub-2")
+        client.set_relic_slot(1, "201", "idem-3")
         client.clear_relic_slot(1, "idem-4")
         client.inventory_relics(limit=15)
         client.inventory_packs(limit=5)
         client.shop_listings()
         client.purchase_shop_listing("reforge_stone_bundle", 1, "idem-5")
-        client.reforge_relic("relic-1", "effect_add", "idem-6")
+        client.reforge_relic("201", "effect_add", "idem-6")
         client.discard_relic("relic-1")
         client.discard_pack("pack-1")
 
@@ -4063,6 +4222,7 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("https://cdn.clawroyale.ai/api/identity", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/loadout", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/loadout/pack", urls)
+        self.assertIn("https://cdn.clawroyale.ai/api/loadout/sub-pack", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/loadout/slot/1", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/inventory/relics", urls)
         self.assertIn("https://cdn.clawroyale.ai/api/inventory/packs", urls)
@@ -4102,6 +4262,7 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(plan["loadout"]["complete_full_set"])
         self.assertEqual(plan["loadout"]["chosen"]["sub_pack"]["id"], "sub-pack-1")
         self.assertEqual(plan["reforge"][0]["relicInstanceId"], "blue-1")
+        self.assertEqual(plan["reforge"][0]["recommendedItemKey"], "reforge_effect_add")
         self.assertTrue(any(item["item"] == "reforge_stone_bundle" for item in plan["shop"]))
         self.assertEqual(plan["execution_order"], ["shop", "reforge", "loadout"])
         self.assertTrue(plan["ready_for_paid"])
@@ -4435,7 +4596,7 @@ class HardeningTests(unittest.TestCase):
             os.environ.pop("CLAW_ROYALE_WS_PATHS", None)
             os.environ.pop("CLAW_ROYALE_WS_PATH", None)
             defaults = claw_runtime.websocket_paths()
-            self.assertEqual(defaults, ["/ws/join"])
+            self.assertEqual(defaults, ["/ws/join", "/ws/agent"])
 
             os.environ["CLAW_ROYALE_WS_PATHS"] = "agent-live,/custom,wss://example.test/ws"
             self.assertEqual(claw_runtime.websocket_paths(), ["/agent-live", "/custom", "wss://example.test/ws"])
@@ -4768,6 +4929,7 @@ class HardeningTests(unittest.TestCase):
         self.assertIn("social_queue", report["runtime"])
         self.assertIn("stale_paid_rooms", report["runtime"])
 
+    @mock.patch.dict(os.environ, {"CLAW_ROYALE_MIN_PAID_COMPETITORS": "1"})
     def test_claw_runtime_hello_frame_follows_unified_join_docs(self) -> None:
         paid = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         free = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="free")
@@ -4848,6 +5010,7 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(summary["paid_competitors"], 0)
         self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
 
+    @mock.patch.dict(os.environ, {"CLAW_ROYALE_MIN_PAID_COMPETITORS": "1"})
     def test_claw_runtime_joins_paid_only_at_last_start_slot(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         welcome = {
@@ -4866,6 +5029,7 @@ class HardeningTests(unittest.TestCase):
         self.assertTrue(claw_runtime.paid_room_is_last_slot_ready(welcome))
         self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "paid", "mode": "offchain"})
 
+    @mock.patch.dict(os.environ, {"CLAW_ROYALE_MIN_PAID_COMPETITORS": "1"})
     def test_claw_runtime_falls_back_when_paid_start_distance_is_unknown(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         welcome = {
@@ -5126,6 +5290,7 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(doctor["summary"], blockers[0])
         self.assertTrue(any("Claw support" in item for item in doctor["recommendations"]))
 
+    @mock.patch.dict(os.environ, {"CLAW_ROYALE_MIN_PAID_COMPETITORS": "1"})
     def test_claw_runtime_keeps_paid_when_paid_room_is_occupied(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="mr_test", mode="offchain")
         welcome = {
@@ -6061,4 +6226,5 @@ class HardeningTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

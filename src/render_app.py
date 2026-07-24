@@ -1,8 +1,8 @@
-"""Tiny Render web entrypoint for Cerberus.
+"""Local WSL service entrypoint for CERBERUS.
 
 This intentionally uses only the Python standard library. The service exposes
 health/readiness checks and a guarded tick endpoint without adding a web
-framework dependency right before launch.
+framework dependency. systemd owns the process; Pulse owns worker lifecycle.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import os
 import sqlite3
 import sys
 import asyncio
-import threading
 import ipaddress
 import requests
 import websockets
@@ -38,10 +37,12 @@ from longterm_memory import LongTermMemoryStore  # noqa: E402
 from mongo_memory import configured_longterm_memory_store, mongo_backend_enabled  # noqa: E402
 from memory_system import DEFAULT_MEMORY_DIR, scrub_scalar, stable_hash, utc_now  # noqa: E402
 from owner_command_cortex import acknowledge_owner_command, command_categories, directive_text  # noqa: E402
+from operator_timeline import execution_timeline  # noqa: E402
 from profit_simulator import simulate as profit_simulate  # noqa: E402
 from secret_env_admin import resolve_secret_value, update_secret_targets  # noqa: E402
 from social_runtime import drain_social_queue_once, social_queue  # noqa: E402
 from moltstation_runtime import run_forever as run_moltstation_runtime  # noqa: E402
+from pulse_workers import build_runtime_pulse  # noqa: E402
 from runtime_state import (
     append_hellion_owner_response,
     append_owner_message,
@@ -288,6 +289,7 @@ def stats() -> dict[str, Any]:
             "policy_gaps": profit.get("policy_gaps", [])[:6] if isinstance(profit.get("policy_gaps"), list) else [],
         },
         "owner_messages": owner_messages(),
+        "execution_timeline": execution_timeline(limit=60),
         "env": ready.get("env", {}),
         "admin_settings": admin.get("settings", {}),
         "env_state": {
@@ -711,6 +713,7 @@ def dashboard_html(query: str = "") -> bytes:
             <div class="metric wide"><div class="label">Current Intent</div><div id="current-intent" class="value">loading</div></div>
             <div class="metric wide"><div class="label">Last Action</div><div id="last-action" class="value">loading</div></div>
             <div class="metric wide"><div class="label">Action Audit</div><div id="action-audit" class="owner-log">loading</div></div>
+            <div class="metric wide"><div class="label">Decision / Execution Timeline</div><div id="execution-timeline" class="owner-log">loading</div></div>
             <div class="metric wide"><div class="label">Yield</div><div id="yield" class="value">loading</div></div>
             <div class="metric wide">
               <div class="label">Hellion Suggested Edits</div>
@@ -871,6 +874,18 @@ def dashboard_html(query: str = "") -> bytes:
           (Object.keys(outcome).length ? "<div class='hint'>outcome " + esc(outcome.code || outcome.message || JSON.stringify(outcome).slice(0, 120)) + "</div>" : "") +
         "</div>";
       }}).join("");
+    }}
+    function renderExecutionTimeline(rows) {{
+      const box = document.getElementById("execution-timeline");
+      if (!rows || !rows.length) {{
+        box.textContent = "No coordinated execution evidence yet.";
+        return;
+      }}
+      box.innerHTML = rows.slice(0, 30).map((row) => (
+        "<div class='owner-msg'><strong>" + esc(row.kind || "event") + " · " + esc(row.action || "unknown") + "</strong>" +
+        " <span class='hint'>[" + esc(row.status || "unknown") + (row.policy ? " / " + esc(row.policy) : "") + "]</span><br>" +
+        esc(row.recorded_at || "") + "</div>"
+      )).join("");
     }}
     function renderStuckDoctor(doctor) {{
       const box = document.getElementById("stuck-doctor");
@@ -1099,6 +1114,7 @@ def dashboard_html(query: str = "") -> bytes:
       document.getElementById("public-thought").textContent = data.public_thought || runtime.last_public_thought || "none";
       document.getElementById("current-intent").textContent = runtime.current_intent || [lastAction.type, lastAction.reason].filter(Boolean).join(" | ") || "none";
       renderActionAudit(runtime.action_audit || []);
+      renderExecutionTimeline(data.execution_timeline || []);
       document.getElementById("yield").textContent = "games " + (runtime.games_completed ?? 0) + ", last +" + (runtime.last_balance_delta ?? 0) + ", avg/game " + (runtime.average_balance_delta_per_game ?? 0) + ", target games/day " + (runtime.games_needed_for_1000_per_day || "?");
       document.getElementById("readiness").textContent = "id " + !!readiness.identity + ", wallet " + !!readiness.walletAddress + ", sc " + !!readiness.scWallet + ", paid " + !!readiness.paidReady + ", balance " + (account.balance ?? "?");
       document.getElementById("wallets").textContent = "owner " + (wallets.owner_eoa || "unset") + "; agent " + (wallets.agent_eoa || "unset") + "; molty " + (wallets.molty_wallet || "unset");
@@ -1774,17 +1790,29 @@ class CerberusHandler(BaseHTTPRequestHandler):
 def main() -> int:
     port = int(os.getenv("PORT", "10000"))
     bind_host = os.getenv("CERBERUS_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0"
-    if claw_runtime_enabled():
-        thread = threading.Thread(target=lambda: asyncio.run(run_claw_runtime()), daemon=True)
-        thread.start()
-        print("Claw Royale runtime worker started", flush=True)
-    if moltstation_runtime_enabled():
-        thread = threading.Thread(target=lambda: asyncio.run(run_moltstation_runtime()), daemon=True)
-        thread.start()
-        print("MoltStation runtime worker started", flush=True)
-    server = ThreadingHTTPServer((bind_host, port), CerberusHandler)
-    print(f"Cerberus service listening on {bind_host}:{port}", flush=True)
-    server.serve_forever()
+    pulse = build_runtime_pulse(
+        claw_enabled=claw_runtime_enabled(),
+        claw_runner=run_claw_runtime,
+        moltstation_enabled=moltstation_runtime_enabled(),
+        moltstation_runner=run_moltstation_runtime,
+    )
+    server: ThreadingHTTPServer | None = None
+
+    asyncio.run(pulse.start())
+    print("Pulse runtime lifecycle started", flush=True)
+
+    try:
+        server = ThreadingHTTPServer((bind_host, port), CerberusHandler)
+        print(f"Cerberus service listening on {bind_host}:{port}", flush=True)
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("CERBERUS service shutdown requested", flush=True)
+    finally:
+        if server is not None:
+            server.server_close()
+        asyncio.run(pulse.stop())
+        print("Pulse runtime lifecycle stopped", flush=True)
+
     return 0
 
 

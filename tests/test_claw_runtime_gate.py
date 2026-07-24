@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import sys
 import os
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +19,92 @@ import claw_runtime
 
 
 class ClawRuntimeGameplayGateTests(unittest.TestCase):
+    def test_terminal_quarantine_uses_slow_clean_close_retry(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="fixture", min_reconnect_seconds=5)
+        self.assertEqual(
+            claw_runtime.clean_close_delay_seconds(
+                config, {"state": "terminal_game_waiting", "terminal_game_id": "stale"}
+            ),
+            60,
+        )
+        self.assertEqual(claw_runtime.clean_close_delay_seconds(config, {"state": "connected"}), 5)
+
+    def test_server_terminal_game_id_blocks_stale_resume_snapshot_only(self) -> None:
+        status = {"terminal_game_id": "dead-game"}
+        self.assertTrue(claw_runtime.terminal_game_blocked(status, "dead-game"))
+        self.assertFalse(claw_runtime.terminal_game_blocked(status, "new-game"))
+        self.assertFalse(claw_runtime.terminal_game_blocked({}, "dead-game"))
+
+    def test_clean_socket_close_records_terminal_connector_state(self) -> None:
+        updates: list[dict[str, object]] = []
+
+        class FakeSocket:
+            def __aiter__(self):  # type: ignore[no-untyped-def]
+                return self
+
+            async def __anext__(self) -> str:
+                raise StopAsyncIteration
+
+        class FakeConnect:
+            async def __aenter__(self) -> FakeSocket:
+                return FakeSocket()
+
+            async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+                return None
+
+        config = claw_runtime.ClawRuntimeConfig(
+            api_key="fixture-key",
+            api_base="https://cdn.clawroyale.ai/api",
+            version="1.13.1",
+            mode="free",
+            enabled=True,
+        )
+        with (
+            mock.patch.object(claw_runtime, "discover_version", return_value="1.13.1"),
+            mock.patch.object(claw_runtime, "record_account_balance", return_value={"ok": True}),
+            mock.patch.object(claw_runtime, "record_stale_paid_waiting_games", return_value=[]),
+            mock.patch.object(claw_runtime, "join_blocker_for_account", return_value=""),
+            mock.patch.object(claw_runtime, "prejoin_loadout_report", return_value={"ok": True}),
+            mock.patch.object(claw_runtime, "schedule_preseason1_claim_sweep"),
+            mock.patch.object(claw_runtime, "read_json", return_value={}),
+            mock.patch.object(claw_runtime, "update_status", side_effect=lambda **kwargs: updates.append(kwargs)),
+            mock.patch.object(claw_runtime.websockets, "connect", return_value=FakeConnect()),
+        ):
+            asyncio.run(claw_runtime.connect_and_play(config, "/ws/join"))
+
+        self.assertEqual(updates[0]["state"], "connecting")
+        self.assertEqual(updates[1]["state"], "connected")
+        self.assertEqual(updates[-1], {"state": "socket_closed", "last_error": "websocket closed without terminal game frame"})
+
+    def test_default_paths_include_active_game_resume_endpoint(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(claw_runtime.websocket_paths(), ["/ws/join", "/ws/agent"])
+
+    def test_server_cooldown_truth_closes_stale_snapshot_action_window(self) -> None:
+        state = claw_runtime.TurnState.from_snapshot(
+            {
+                "canAct": True,
+                "view": {"self": {"id": "me", "hp": 100, "ep": 4}, "currentRegion": {"id": "r1"}},
+            }
+        )
+        self.assertTrue(claw_runtime.server_action_window_open(state, None))
+        self.assertTrue(claw_runtime.server_action_window_open(state, True))
+        self.assertFalse(claw_runtime.server_action_window_open(state, False))
+
+    def test_accepted_cooldown_result_recloses_out_of_order_ready_event(self) -> None:
+        status = {"last_action": {"type": "use_item"}}
+        self.assertTrue(claw_runtime.accepted_cooldown_action_result({"ok": True}, status))
+        self.assertFalse(
+            claw_runtime.accepted_cooldown_action_result(
+                {"ok": False, "error": {"code": "COOLDOWN_ACTIVE"}}, status
+            )
+        )
+        self.assertFalse(
+            claw_runtime.accepted_cooldown_action_result(
+                {"ok": True}, {"last_action": {"type": "pickup"}}
+            )
+        )
+
     def test_agent_view_waiting_status_does_not_act(self) -> None:
         payload = {
             "type": "agent_view",
@@ -95,6 +183,22 @@ class ClawRuntimeGameplayGateTests(unittest.TestCase):
         }
 
         self.assertTrue(claw_runtime.has_free_action_window(claw_runtime.TurnState.from_snapshot(snapshot)))
+
+    def test_dead_agent_never_gets_main_or_free_action_window(self) -> None:
+        snapshot = {
+            "gameId": "game-1",
+            "status": "running",
+            "canAct": True,
+            "view": {
+                "self": {"id": "me", "hp": 0, "ep": 10, "isAlive": False},
+                "currentRegion": {"id": "r1", "items": [{"id": "blade-1", "typeId": "sniper"}]},
+            },
+        }
+        state = claw_runtime.TurnState.from_snapshot(snapshot)
+
+        self.assertFalse(claw_runtime.wants_action(snapshot, snapshot, gameplay_ready=True))
+        self.assertFalse(claw_runtime.has_free_action_window(state))
+        self.assertTrue(claw_runtime.agent_state_terminal(state))
 
     def test_action_signature_is_turn_bound_and_reason_insensitive(self) -> None:
         first = claw_runtime.action_signature({"type": "move", "regionId": "r2", "reason": "one"}, turn=7)

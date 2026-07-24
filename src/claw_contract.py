@@ -1,4 +1,4 @@
-"""Deterministic Claw Royale gameplay contract aligned through v1.13.0.
+"""Deterministic Claw Royale gameplay contract aligned through v1.13.1.
 
 Keep volatile API versioning in ``claw_config``. Live OpenAPI and per-snapshot
 fields win; static values here are compatibility fallbacks and stable rules.
@@ -35,9 +35,13 @@ REST_ENDPOINTS = {
     "preseason1_summary": "GET /preseason1/me/summary",
     "preseason1_quest_claim": "POST /preseason1/quests/:key/claim/:tier",
     "preseason1_daily_claim": "POST /preseason1/daily-quests/:key/claim",
+    "redeem": "POST /redeem",
+    "finished_game_state": "GET /games/:gameId/state",
     "loadout": "GET /loadout",
     "loadout_pack": "PUT /loadout/pack",
     "loadout_pack_delete": "DELETE /loadout/pack",
+    "loadout_sub_pack": "PUT /loadout/sub-pack",
+    "loadout_sub_pack_delete": "DELETE /loadout/sub-pack",
     "loadout_slot": "PUT /loadout/slot/:typeIndex",
     "loadout_slot_delete": "DELETE /loadout/slot/:typeIndex",
     "inventory_relics": "GET /inventory/relics",
@@ -274,8 +278,53 @@ ERROR_CODES = {
 
 JOIN_CLOSE_CODES = {
     "HELLO_TIMEOUT": 4003,
+    "SAME_KIND_RECONNECTED": 4008,
+    "WEB_SESSION_ACTIVE": 4030,
+    "BOT_SESSION_ACTIVE": 4031,
     "MATCH_TIMEOUT": "free_assignment_wait_expired",
     "JOIN_CONFIRM_TIMEOUT": "paid_tx_confirmation_wait_expired",
+}
+
+CONNECTION_OWNERSHIP = {
+    "4030": "web session controls this agent; bot waits at least 60 seconds and reports owner attention",
+    "4031": "bot session controls this agent; website play view is refused and bot is not kicked",
+    "4008": "same-kind replacement connection; prior socket closes as reconnected",
+}
+
+PAID_WINNER_FIELDS = ("rank", "agentId", "name", "isAI", "prizeMoltz", "reforgeStones")
+PAID_ECONOMY_UNITS = {
+    "entry_fee": "sMoltz",
+    "prize_pool": "Moltz",
+    "game_ended_prize": "Moltz",
+    "dashboard_balance": "sMoltz",
+    "cross_unit_subtraction_allowed": False,
+}
+
+ITEM_MECHANICS_1_13_1 = {
+    "binoculars": {
+        "vision_bonus": 1,
+        "reveals_stealthed_assassins_in_vision": True,
+        "bypasses_cave_concealment": False,
+    },
+    "vision_ward": {
+        "fixed_installation": True,
+        "lootable": False,
+        "plunderable": False,
+        "drops_on_death": False,
+    },
+}
+
+CLASS_MECHANICS_1_13_1 = {
+    "assassin": {"exposure_refreshes_on_every_damaging_attack": True},
+    "sword_master": {"ranged_immunity_requires_equipped_melee_weapon": True, "melee_range": 0},
+}
+
+WELCOME_BUNDLE = {
+    "code": "WELCOME",
+    "once_per_account": True,
+    "packs": 2,
+    "relics": 3,
+    "effect_reroll_stones": 20,
 }
 
 
