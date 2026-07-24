@@ -64,6 +64,8 @@ class StrategyCatalogTests(unittest.TestCase):
             item.provider: (
                 repository / "src" / "clawroyale_strategies" / "threat.py"
                 if item.provider == "threat_engine"
+                else repository / "src" / "clawroyale_strategies" / "free_action.py"
+                if item.provider == "free_action_abuse"
                 else repository / "data" / f"{item.provider}.py"
                 if item.provider == "memory_cortex"
                 else repository / "src" / f"{item.provider}.py"
