@@ -86,6 +86,17 @@ class ClawRoyaleAdapter:
         else:
             available_actions = []
 
+        cooldown_remaining_ms = int(
+            state.get("cooldownRemainingMs")
+            or view.get("cooldownRemainingMs")
+            or actor.get("cooldownRemainingMs")
+            or 0
+        )
+        advertised_can_act = bool(
+            state.get("canAct")
+            if "canAct" in state
+            else view.get("canAct", False)
+        )
         normalized = {
             "source_type": str(payload.get("type") or state.get("type") or "snapshot")[:80],
             "match_id": str(
@@ -96,11 +107,9 @@ class ClawRoyaleAdapter:
             ),
             "turn": int(state.get("turn") or view.get("turn") or 0),
             "phase": str(state.get("status") or view.get("status") or ""),
-            "can_act": bool(
-                state.get("canAct")
-                if "canAct" in state
-                else view.get("canAct", False)
-            ),
+            "can_act": advertised_can_act and cooldown_remaining_ms <= 0,
+            "can_act_advertised": advertised_can_act,
+            "cooldown_remaining_ms": max(0, cooldown_remaining_ms),
             "actor": _allowed(
                 actor,
                 ("id", "name", "hp", "maxHp", "ep", "maxEp", "isAlive", "cooldownRemaining"),
