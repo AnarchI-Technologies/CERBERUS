@@ -1,6 +1,7 @@
 """Independent ClawRoyale.ai adapter and strategy package."""
 
 from .adapter import ClawRoyaleAdapter, Transport
+from .catalog import STRATEGY_BY_ID, STRATEGY_CATALOG, StrategyDescriptor
 from .contracts import (
     ACTION_CAPABILITY,
     ACTION_TYPES,
@@ -23,8 +24,11 @@ __all__ = [
     "JOIN_CAPABILITY",
     "LEAVE_CAPABILITY",
     "REQUIRED_ACTION_FIELDS",
+    "STRATEGY_BY_ID",
+    "STRATEGY_CATALOG",
     "ClawRoyaleAdapter",
     "Strategy",
+    "StrategyDescriptor",
     "StrategyError",
     "StrategyRegistry",
     "StrategySelection",
