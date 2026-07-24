@@ -1,7 +1,7 @@
-# Local Linux development profile
+# Canonical self-hosted WSL Ubuntu runtime
 
-CERBERUS Linux compatibility can be reproduced on the Windows operator node
-through WSL 2 without replacing GitHub's independent Ubuntu runner.
+CERBERUS runs on the Windows operator node through WSL 2. This is the canonical
+self-hosted runtime and remains independent of GitHub's Ubuntu CI runner.
 
 ## Measured profile — 2026-07-18
 
@@ -9,8 +9,11 @@ through WSL 2 without replacing GitHub's independent Ubuntu runner.
 - Ubuntu 26.04 LTS
 - Linux kernel 6.18.33.2-microsoft-standard-WSL2
 - Python 3.14.4 in `/opt/cerberus-venv`
-- 277 tests passed in 8.173 seconds
-- Two DPAPI-specific tests skipped by explicit Windows platform guards
+- Immutable releases under `/opt/cerberus-releases`
+- Production pointer at `/opt/cerberus-current`
+- Isolated staging pointer at `/opt/cerberus-staging-current`
+- systemd supervision for production, staging, evaluation, and knowledge sync
+- Pulse-managed in-process worker lifecycle
 
 ## Reproduction
 
@@ -24,8 +27,26 @@ The cross-platform compact-memory plaintext fallback remains covered. DPAPI
 vault behavior is tested on Windows because the implementation intentionally
 rejects non-Windows secret-vault use until a vetted Linux crypto backend exists.
 
-WSL is a development and compatibility environment. It is not yet an approved
-production secret or signing host.
+WSL is the production application host. Secrets remain outside Git and are
+loaded from operator-controlled environment files. Browser-wallet seed phrases
+and unrelated personal signing keys must never enter a service profile.
+
+## Release workflow
+
+Use `cerberusctl` to inspect the host and the immutable release scripts to move
+a tested commit through build, verification, staging, promotion, and rollback.
+
+```text
+deployment/local-linux/cerberusctl status
+deployment/local-linux/cerberusctl doctor
+deployment/local-linux/build-release.sh <full-commit>
+deployment/local-linux/verify-release.sh <full-commit>
+deployment/local-linux/activate-staging.sh <full-commit>
+deployment/local-linux/promote-production.sh <full-commit>
+deployment/local-linux/rollback-production.sh
+```
+
+Render.com and Railway are legacy routes and are not part of this workflow.
 
 ## Isolated staging service
 

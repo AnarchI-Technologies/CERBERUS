@@ -28,6 +28,19 @@ runtime:
   service_entrypoint: src/render_app.py
   dependency_manifest: requirements.txt
 
+deployment:
+  canonical_target: wsl-ubuntu-local
+  operating_system: Ubuntu
+  host_layer: WSL2
+  supervisor: systemd
+  production_service: cerberus.service
+  staging_service: cerberus-staging.service
+  immutable_release_root: /opt/cerberus-releases
+  production_pointer: /opt/cerberus-current
+  staging_pointer: /opt/cerberus-staging-current
+  render_com_status: legacy
+  railway_status: legacy
+
 capabilities:
   validate: true
   inspect: true
@@ -78,7 +91,7 @@ kiln:
   context_policy: consume historical kiln sections only
 
 relationships:
-  runtime_lifecycle_current: embedded
+  runtime_lifecycle_current: Pulse
   runtime_lifecycle_target: Pulse
   event_bus_current: signal-pyre
   event_bus_target: Switch-Board
@@ -92,4 +105,5 @@ metadata:
   schema_status: canonical-v1
   adopted_by: WaveSmith
   adoption_wave: cerberus-anarchi-adoption-0001
-  behavior_change: none
+  deployment_doctrine_wave: cerberus-wsl-deployment-doctrine-0001
+  behavior_change: deployment doctrine aligned to self-hosted WSL Ubuntu
