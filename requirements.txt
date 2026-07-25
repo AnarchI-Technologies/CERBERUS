@@ -4,3 +4,4 @@ python-dotenv>=1.2.2
 requests>=2.34.2
 websockets>=16.0
 pymongo>=4.13.2
+pytest>=8.2.2

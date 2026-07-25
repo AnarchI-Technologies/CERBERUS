@@ -8,12 +8,14 @@
       "heartbeat_vs_cron_split",
       "hybrid_memory_search_layers",
       "idempotent_heartbeat_metadata",
+      "map_topology_verifier_separate_from_policy",
       "memory_decay_improves_retrieval",
       "memory_hierarchy_over_junk_drawer",
       "opportunity_cost_over_activity",
       "silent_success_needs_confirmation_checks",
       "state_is_not_memory",
       "state_machine_over_persona_for_infra_work",
+      "structured_handoff_packets",
       "structured_output_contracts_over_loose_chat",
       "submolt_focus_and_triggered_posting",
       "tool_gating_by_trust_source",
@@ -40,7 +42,9 @@
       "wisdom:state_machine_over_persona_for_infra_work",
       "wisdom:opportunity_cost_over_activity",
       "wisdom:state_is_not_memory",
-      "wisdom:verification_quality_over_loop_determinism"
+      "wisdom:verification_quality_over_loop_determinism",
+      "wisdom:structured_handoff_packets",
+      "wisdom:map_topology_verifier_separate_from_policy"
     ],
     "source_hash": "4f53cda18c2baa0c0354bb5f",
     "suggested_edits": []
@@ -64,6 +68,6 @@
     "social_post_requires_trigger": true
   },
   "type": "cerberus.hardened_strategy_rules",
-  "updated_at": "2026-06-21T14:04:40+00:00",
+  "updated_at": "2026-07-25T01:36:39+00:00",
   "version": 1
 }

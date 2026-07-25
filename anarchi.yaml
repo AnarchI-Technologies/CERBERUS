@@ -1,0 +1,48 @@
+project: CERBERUS
+version: 2.0.0
+maintainer: Alexander Gudde <alex.gudde@anarchi.tech>
+description: |
+  The CERBERUS platform is a decoupled, event-driven agent runtime.
+  This top-level contract describes the components that form the complete system.
+
+components:
+  - name: anar-core-contracts
+    repo: AnarchI-Technologies/anar-core-contracts
+    type: library
+    description: The shared communication kernel. Defines events and interfaces.
+    provides:
+      - contract: ISwitchBoard
+      - contract: BaseEvent
+      - contract: LifecycleEvent
+      - contract: GameStateUpdateEvent
+      - contract: ActionRequestEvent
+
+  - name: CERBERUS-Pulse
+    repo: AnarchI-Technologies/CERBERUS-Pulse
+    type: service
+    description: The game-agnostic runtime lifecycle manager.
+    consumes:
+      - contract: ISwitchBoard
+    provides:
+      - event: LifecycleEvent
+
+  - name: CERBERUS-Adapter-ClawRoyale
+    repo: AnarchI-Technologies/CERBERUS-Adapter-ClawRoyale
+    type: service
+    description: The adapter connecting the system to the Claw Royale game API.
+    consumes:
+      - contract: ISwitchBoard
+      - event: LifecycleEvent
+      - event: ActionRequestEvent
+    provides:
+      - event: GameStateUpdateEvent
+
+  - name: CERBERUS-Strategy-Engine
+    repo: AnarchI-Technologies/CERBERUS-Strategy-Engine
+    type: service
+    description: The decision-making core. Contains all AI strategy logic.
+    consumes:
+      - contract: ISwitchBoard
+      - event: GameStateUpdateEvent
+    provides:
+      - event: ActionRequestEvent
