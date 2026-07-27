@@ -1,9 +1,6 @@
-from typing import Any, Dict, List, Optional
-from .types import MessageEvent
+"""Compatibility alias for the extracted Claw Royale social strategy module."""
 
-def process_incoming_messages(messages: List[MessageEvent]) -> Optional[Dict[str, Any]]:
-    """Reacts to incoming messages from other agents."""
-    if not messages:
-        return None
-    # Simple logic: respond to the first message.
-    return {"action_type": "SEND_REPLY", "recipient_id": messages[0].sender_id}
+import sys
+from anarchi_claw_strategies.strategies import social as _implementation
+
+sys.modules[__name__] = _implementation

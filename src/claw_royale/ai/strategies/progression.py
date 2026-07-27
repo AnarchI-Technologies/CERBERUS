@@ -1,7 +1,6 @@
-from typing import Any, Dict, Optional
+"""Compatibility alias for the extracted Claw Royale progression strategy module."""
 
-def evaluate_ruin_entry(game_state: Any) -> Optional[Dict[str, Any]]:
-    """Determines if it's safe and valuable to enter a nearby ruin."""
-    if game_state.get("nearby_ruin") and not game_state.get("nearby_enemies"):
-        return {"action_type": "ENTER_RUIN", "confidence": 0.75}
-    return None
+import sys
+from anarchi_claw_strategies.strategies import progression as _implementation
+
+sys.modules[__name__] = _implementation

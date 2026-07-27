@@ -1,8 +1,6 @@
-from typing import Any, Dict, Optional
+"""Compatibility alias for the extracted Claw Royale owner_command strategy module."""
 
-def parse_and_execute(command: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Parses a command from the owner and translates it into an action."""
-    command_text = command.get("text", "").lower()
-    if "attack" in command_text:
-        return {"action_type": "ATTACK_IMMEDIATE", "priority": "critical"}
-    return None
+import sys
+from anarchi_claw_strategies.strategies import owner_command as _implementation
+
+sys.modules[__name__] = _implementation
