@@ -4,6 +4,8 @@ import threading
 import time
 from typing import Any
 
+from anarchi_adapter_sdk import GameAdapter
+
 from src.events.types import (
     ActionRequestEvent,
     GameStateUpdateEvent,
@@ -13,7 +15,7 @@ from src.events.types import (
 from src.switch_board.interface import ISwitchBoard
 
 
-class ClawRoyaleAdapter:
+class ClawRoyaleAdapter(GameAdapter):
     """
     Connects to the Claw Royale game.
 
@@ -45,6 +47,10 @@ class ClawRoyaleAdapter:
             self._handle_action_request,
         )
 
+
+    def stop(self) -> None:
+        """Stop polling without removing event subscriptions."""
+        self._is_active = False
     def _handle_lifecycle_event(
         self,
         event: LifecycleEvent,
