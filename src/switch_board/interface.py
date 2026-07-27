@@ -1,12 +1,5 @@
-from abc import ABC, abstractmethod
-from typing import Callable, Type
-from src.events.types import BaseEvent
+"""Compatibility shim for the extracted AnarchI Switch Board interface."""
 
-class ISwitchBoard(ABC):
-    @abstractmethod
-    def publish(self, event: BaseEvent) -> None:
-        raise NotImplementedError
+from anarchi_switch_board.interface import ISwitchBoard
 
-    @abstractmethod
-    def subscribe(self, event_type: Type[BaseEvent], handler: Callable[[BaseEvent], None]) -> None:
-        raise NotImplementedError
+__all__ = ["ISwitchBoard"]
