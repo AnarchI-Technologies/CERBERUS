@@ -2428,7 +2428,9 @@ class HardeningTests(unittest.TestCase):
                 social_runtime.enqueue_social_effects(
                     [{"type": "moltybook_draft", "category": "test", "content": "Hellion queued this."}]
                 )
-                result = social_runtime.drain_social_queue_once(client=FailingClient(), max_items=1)
+                result = social_runtime.drain_social_queue_once(
+                    client=FailingClient(), max_items=1, max_retry_attempts=1
+                )
                 queue = social_runtime.social_queue()
 
         finally:
@@ -2454,7 +2456,7 @@ class HardeningTests(unittest.TestCase):
                     ]
                 )
                 with mock.patch("social_runtime.process_social_side_effects", side_effect=RuntimeError("queue exploded")):
-                    result = social_runtime.drain_social_queue_once(max_items=2)
+                    result = social_runtime.drain_social_queue_once(max_items=2, max_retry_attempts=1)
                 queue = social_runtime.social_queue()
         finally:
             if old_memory_dir is None:

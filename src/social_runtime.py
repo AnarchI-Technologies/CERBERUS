@@ -34,6 +34,7 @@ from agent_dossiers import AgentDossierStore
 
 
 SUPPORTED_EFFECTS = {"moltybook_draft", "moltybook_follow"}
+DEFAULT_MAX_RETRY_ATTEMPTS = 3
 FORCED_VOICE_POST_KEY = "forced_voice_recovered_post"
 FORCED_VOICE_POST_TEMPLATE = (
     "Seems that the cat in a box had my tongue in that box for quite the dimensional drift of logic! "
@@ -98,7 +99,8 @@ def enqueue_social_effects(effects: list[dict[str, Any]], *, limit: int = 200) -
         queue.append(cleaned)
         seen.add(cleaned["id"])
     queue = queue[-max(1, limit):]
-    write_json(social_queue_file(), {"queue": queue, "updated_at": int(time.time())})
+    if not write_json(social_queue_file(), {"queue": queue, "updated_at": int(time.time())}):
+        raise OSError("social queue write failed")
     _autodrain_if_enabled()
     return queue
 
@@ -107,6 +109,7 @@ def drain_social_queue_once(
     *,
     client: MoltyBookClient | None = None,
     max_items: int = 5,
+    max_retry_attempts: int = DEFAULT_MAX_RETRY_ATTEMPTS,
 ) -> dict[str, Any]:
     queue = social_queue()
     pending = [item for item in queue if str(item.get("status") or "queued") == "queued"][:max(0, max_items)]
@@ -131,11 +134,25 @@ def drain_social_queue_once(
         result = result_by_id.get(str(item.get("id") or ""))
         if not result:
             continue
-        item["attempts"] = int(item.get("attempts") or 0) + 1
+        attempts = int(item.get("attempts") or 0) + 1
+        item["attempts"] = attempts
         item["last_result"] = compact_result(result)
-        item["status"] = "sent" if result.get("ok") else ("skipped" if result.get("skipped") else "failed")
+        if result.get("ok"):
+            item["status"] = "sent"
+        elif result.get("skipped"):
+            item["status"] = "skipped"
+        elif attempts < max(1, int(max_retry_attempts)):
+            item["status"] = "queued"
+        else:
+            item["status"] = "failed"
         item["updated_at"] = int(time.time())
-    write_json(social_queue_file(), {"queue": queue, "updated_at": int(time.time())})
+    if not write_json(social_queue_file(), {"queue": queue, "updated_at": int(time.time())}):
+        return {
+            "ok": False,
+            "processed": len(pending),
+            "results": results,
+            "error": "social queue write failed",
+        }
     return {"ok": ok, "processed": len(pending), "results": results}
 
 
