@@ -1,0 +1,29 @@
+[Unit]
+Description=CERBERUS authenticated account gateway {{ACCOUNT_ID}}
+After={{CORE_SERVICE}}
+Requires={{CORE_SERVICE}} {{GATEWAY_SOCKET}}
+PartOf={{CORE_SERVICE}}
+
+[Service]
+Type=simple
+# Gateway and core deliberately share the stable host network namespace. Each
+# request opens a fresh connection to the protected account loopback address,
+# so an automatic core restart cannot strand the gateway in a stale namespace.
+User={{SERVICE_USER}}
+Group={{SERVICE_USER}}
+WorkingDirectory={{CURRENT_LINK}}
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile={{ACCOUNT_CREDENTIALS}}
+ExecStart={{VENV_LINK}}/bin/python {{CURRENT_LINK}}/runtime/auth_gateway.py --systemd-socket --upstream-host {{CORE_BIND_HOST}} --upstream-port 10000
+Restart=always
+RestartSec=3
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

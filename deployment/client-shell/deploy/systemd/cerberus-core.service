@@ -1,0 +1,36 @@
+[Unit]
+Description=CERBERUS self-hosted orchestration core
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The core intentionally uses the stable host network namespace. Its protected
+# loopback address survives process restarts; retain the stable host network namespace.
+User=cerberus
+Group=cerberus
+WorkingDirectory=/opt/cerberus-client/current
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=CLAW_ROYALE_RUNTIME_ENABLED=false
+EnvironmentFile=/etc/cerberus-client/runtime.env
+EnvironmentFile=/etc/cerberus-client/credentials.env
+EnvironmentFile=/etc/cerberus-client/core.env
+ExecStart=/usr/bin/env CLAW_ROYALE_RUNTIME_ENABLED=false /opt/cerberus-client/venv-current/bin/python /opt/cerberus-client/current/runtime/secure_core_launcher.py
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+StandardOutput=append:/var/log/cerberus-client/core.log
+StandardError=append:/var/log/cerberus-client/core.log
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/cerberus-client
+ReadWritePaths=/var/log/cerberus-client
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

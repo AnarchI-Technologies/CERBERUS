@@ -1,0 +1,34 @@
+[Unit]
+Description=clawroyale.ai agent {{ACCOUNT_ID}}/{{AGENT_ID}}
+After={{CORE_SERVICE}} {{GATEWAY_SERVICE}}
+Requires={{CORE_SERVICE}} {{GATEWAY_SERVICE}}
+
+[Service]
+Type=simple
+User={{SERVICE_USER}}
+Group={{SERVICE_USER}}
+WorkingDirectory={{CURRENT_LINK}}
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile={{ACCOUNT_RUNTIME}}
+EnvironmentFile={{ACCOUNT_CREDENTIALS}}
+EnvironmentFile={{AGENT_RUNTIME}}
+EnvironmentFile={{AGENT_CREDENTIALS}}
+ExecStart={{VENV_LINK}}/bin/python {{CURRENT_LINK}}/runtime/claw_worker_launcher.py
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+StandardOutput=append:{{AGENT_LOG}}
+StandardError=append:{{AGENT_LOG}}
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={{ACCOUNT_STATE}}
+ReadWritePaths={{ACCOUNT_LOG}}
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

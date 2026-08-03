@@ -1,0 +1,10 @@
+[Unit]
+Description=CERBERUS loopback account socket {{ACCOUNT_ID}}
+
+[Socket]
+ListenStream=127.0.0.1:{{LOOPBACK_PORT}}
+NoDelay=true
+Service={{GATEWAY_SERVICE}}
+
+[Install]
+WantedBy=sockets.target

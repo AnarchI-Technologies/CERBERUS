@@ -1,0 +1,53 @@
+services:
+  - type: web
+    name: cerberus-clawroyale
+    runtime: python
+    buildCommand: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+    startCommand: python runtime/render_supervisor.py
+    healthCheckPath: /healthz
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: CERBERUS_BIND_HOST
+        value: 127.0.0.1
+      - key: CERBERUS_CORE_PORT
+        value: 10001
+      - key: CERBERUS_MEMORY_DIR
+        value: /var/data/cerberus
+      - key: CERBERUS_MEMORY_BACKEND
+        value: sqlite
+      - key: CERBERUS_MODEL_GATEWAY_ENABLED
+        value: "false"
+      - key: CLAW_ROYALE_RUNTIME_ENABLED
+        value: "false"
+      - key: CLAW_ROYALE_DISABLE_PAID_AUTO_UPGRADE
+        value: "true"
+      - key: CLAW_ROYALE_GAME_MODE
+        value: free
+      - key: CLAWROYALE_PLUGIN_ENABLED
+        value: "false"
+      - key: CERBERUS_AGENT_IDS
+        value: default
+      - key: CERBERUS_HTTP_TOKEN
+        generateValue: true
+      - key: CERBERUS_PIN
+        sync: false
+      - key: CLAW_ROYALE_API_KEY__DEFAULT
+        sync: false
+      - key: CLAW_ROYALE_ERC8004_ID__DEFAULT
+        sync: false
+      - key: CERBERUS_AGENT_EOA_PRIVATE_KEY__DEFAULT
+        sync: false
+      - key: CERBERUS_AGENT_EOA_ADDRESS__DEFAULT
+        sync: false
+      - key: CERBERUS_OWNER_EOA_ADDRESS
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DATABASE
+        sync: false
+    disk:
+      name: cerberus-data
+      mountPath: /var/data/cerberus
+      sizeGB: 5
