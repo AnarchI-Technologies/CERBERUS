@@ -6236,6 +6236,7 @@ class HardeningTests(unittest.TestCase):
             {
                 "signature": "0xsig",
                 "joinIntentId": "join-1",
+                "requestId": "request-ignored",
                 "signerAddress": "0x" + "1" * 40,
                 "signingMode": "plain_message",
                 "messageHash": "0xhash",
@@ -6243,6 +6244,10 @@ class HardeningTests(unittest.TestCase):
         )
 
         self.assertEqual(frame, {"type": "sign_submit", "signature": "0xsig", "joinIntentId": "join-1"})
+        self.assertEqual(
+            claw_runtime.sign_submit_frame({"signature": "0xsig", "requestId": "request-2"}),
+            {"type": "sign_submit", "signature": "0xsig", "requestId": "request-2"},
+        )
 
     def test_claw_version_single_source_uses_env_override(self) -> None:
         old = os.environ.get("CLAW_ROYALE_VERSION")
