@@ -81,6 +81,8 @@ class SystemNamespaceTests(unittest.TestCase):
         self.assertEqual(surfaces["vigil"]["artifacts"], ["vigil.apk", "vigil.aab"])
         self.assertEqual(surfaces["vigil"]["defaultReach"], "read-only")
         self.assertTrue(surfaces["vigil"]["supportsExplicitRemoteReach"])
+        self.assertEqual(self.product_manifest["spineProtocol"]["schemaVersion"], "cerberus.spine.v1")
+        self.assertFalse(self.product_manifest["spineProtocol"]["mutationEnabled"])
 
     def test_repository_contract_uses_the_same_names(self) -> None:
         repository_contract = (ROOT / "anarchi.yaml").read_text(encoding="utf-8")

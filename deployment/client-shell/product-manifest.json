@@ -102,6 +102,13 @@
       "supportsExplicitRemoteReach": true
     }
   },
+  "spineProtocol": {
+    "schemaVersion": "cerberus.spine.v1",
+    "schema": "schemas/spine.protocol.v1.json",
+    "sessionPath": "/spine/v1/session",
+    "snapshotPath": "/spine/v1/snapshot",
+    "mutationEnabled": false
+  },
   "localControlContract": {
     "transport": "wsl.exe-to-client-shell",
     "statusFormat": "stable-key-value-lines",

@@ -8,6 +8,11 @@ Spine owns account-scoped orchestration, Pulse owns lifecycle, Switch Board owns
 signal routing, and Co'neck'tion makes unrelated plugin and adapter lineages
 understood through a common language.
 
+Helm and Vigil begin at the authenticated, read-first
+[`Spine protocol v1`](docs/architecture/spine-protocol-v1.md). The protocol
+returns effective Reach and a bounded system snapshot without exposing host
+paths, administrative settings, credentials, wallets, or raw memory records.
+
 ## Observation-only Claw Royale post-mortems
 
 At the existing `game_ended` balance checkpoint, CERBERUS now writes a typed
