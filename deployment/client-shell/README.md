@@ -29,9 +29,9 @@ loopback port, current and staging pointers, and rollback record.
 
 Managed hosting does not add credentials to this download. Credentials are
 provided separately and installed into the protected tenant file by an
-authorized operator. Caddy may expose an API-only route for the future Windows
-desktop client, and Cloudflare Access or Tunnel may add another security layer.
-That client must still send the CERBERUS bearer token; opening the hostname in a
+authorized operator. Caddy may expose an API-only route for **Helm**, the Windows
+operating surface, and Cloudflare Access or Tunnel may add another security layer.
+Helm must still send the CERBERUS bearer token; opening the hostname in a
 normal browser returns `401`. The CERBERUS process remains bound to loopback.
 
 The Anar Core Kernel invariant is absolute: an account may access only data
@@ -199,7 +199,7 @@ sudo bash bin/cerberus-client status \
 Tenant identifiers may contain lowercase letters, numbers, and hyphens only.
 Ports must be unique and must remain bound to `127.0.0.1`. The optional Caddy
 template under `deploy/managed` is an API-only route for the bearer-authenticated
-desktop client, not a browser dashboard. It contains exactly one tenant
+Helm surface, not a browser dashboard. It contains exactly one tenant
 loopback upstream. Cloudflare tokens and tunnel credentials are configured
 outside this artifact.
 

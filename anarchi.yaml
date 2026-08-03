@@ -4,8 +4,19 @@ identity:
   organization: AnarchI
   component: CERBERUS
   canonical_name: cerberus
-  responsibility: autonomous game platform
+  responsibility: complete autonomous game system
   primary_verb: orchestrate
+
+system_namespace:
+  contract: docs/architecture/cerberus-system.v1.json
+  scope: entire-system
+  component_use_forbidden: true
+  windows_surface: Helm
+  android_surface: Vigil
+  account_orchestrator: Spine
+  permission_scope: Reach
+  interoperability: Co'neck'tion
+  lineage_boundary: Neck
 
 repository:
   name: CERBERUS
@@ -91,6 +102,12 @@ kiln:
   context_policy: consume historical kiln sections only
 
 relationships:
+  windows_surface: Helm
+  android_surface: Vigil
+  account_orchestration: Spine
+  permission_model: Reach
+  interoperability: Co'neck'tion
+  extension_boundary: Neck
   runtime_lifecycle_current: Pulse
   runtime_lifecycle_target: Pulse
   event_bus_current: signal-pyre

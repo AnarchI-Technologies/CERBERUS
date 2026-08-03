@@ -3,6 +3,9 @@
   "product": {
     "id": "anarchi.cerberus-clawroyale",
     "name": "CERBERUS + clawroyale.ai",
+    "systemName": "CERBERUS",
+    "systemScope": "entire-system",
+    "namespaceContract": "docs/architecture/cerberus-system.v1.json",
     "artifactModel": "credential-agnostic",
     "releaseModel": "immutable-content-addressed"
   },
@@ -74,8 +77,32 @@
     "agentCredentialsIsolated": true,
     "crossTenantAgentsForbidden": true
   },
-  "desktopControlContract": {
-    "primaryFutureClient": "standalone-windows-executable",
+  "surfaceContracts": {
+    "helm": {
+      "displayName": "Helm",
+      "role": "interactive-operation-configuration-and-administration",
+      "platform": "windows",
+      "artifacts": [
+        "helm.exe",
+        "helm-setup.exe"
+      ],
+      "defaultReach": "standard",
+      "supportsElevatedReach": true
+    },
+    "vigil": {
+      "displayName": "Vigil",
+      "role": "observation-alerts-and-memory-lookup",
+      "platform": "android",
+      "artifacts": [
+        "vigil.apk",
+        "vigil.aab"
+      ],
+      "applicationId": "tech.anarchi.cerberus.vigil",
+      "defaultReach": "read-only",
+      "supportsExplicitRemoteReach": true
+    }
+  },
+  "localControlContract": {
     "transport": "wsl.exe-to-client-shell",
     "statusFormat": "stable-key-value-lines",
     "controlCommands": [

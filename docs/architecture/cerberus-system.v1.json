@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "cerberus.system-namespaces.v1",
+  "system": {
+    "displayName": "CERBERUS",
+    "canonicalName": "cerberus",
+    "scope": "entire-system",
+    "componentUseForbidden": true
+  },
+  "components": {
+    "helm": {
+      "displayName": "Helm",
+      "canonicalName": "helm",
+      "responsibility": "interactive dashboard, local operation, configuration, and administration",
+      "surfaces": ["windows"],
+      "artifacts": ["helm.exe", "helm-setup.exe"]
+    },
+    "vigil": {
+      "displayName": "Vigil",
+      "canonicalName": "vigil",
+      "responsibility": "portable observation, alerts, and memory lookup",
+      "surfaces": ["android"],
+      "artifacts": ["vigil.apk", "vigil.aab"],
+      "applicationId": "tech.anarchi.cerberus.vigil"
+    },
+    "spine": {
+      "displayName": "Spine",
+      "canonicalName": "spine",
+      "responsibility": "account sessions, permissions, state, and orchestration"
+    },
+    "neural-network": {
+      "displayName": "Neural Network",
+      "canonicalName": "neural-network",
+      "responsibility": "memory, context, and learning"
+    },
+    "pulse": {
+      "displayName": "Pulse",
+      "canonicalName": "pulse",
+      "responsibility": "health, lifecycle, and readiness"
+    },
+    "switch-board": {
+      "displayName": "Switch Board",
+      "canonicalName": "switch-board",
+      "responsibility": "typed signal publication, subscription, and routing"
+    },
+    "conecktion": {
+      "displayName": "Co'neck'tion",
+      "canonicalName": "conecktion",
+      "responsibility": "lineage-neutral normalization, translation, validation, and correlation"
+    }
+  },
+  "concepts": {
+    "reach": {
+      "displayName": "Reach",
+      "canonicalName": "reach",
+      "kind": "permission-scope",
+      "levels": ["read-only", "standard", "remote", "elevated", "time-limited"]
+    },
+    "neck": {
+      "displayName": "Neck",
+      "canonicalName": "neck",
+      "kind": "lineage-boundary",
+      "definition": "A translation boundary between one native lineage and the common CERBERUS language."
+    }
+  },
+  "namespaceRules": {
+    "displayNameWordLimit": 3,
+    "canonicalIdentifierPattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+    "apostrophesAllowedOnlyInDisplayNames": true,
+    "componentStyleDisplaySuffixesForbidden": ["Adapter", "Client", "Component", "Core", "Runtime", "SDK", "Service"]
+  },
+  "signalFlow": {
+    "incoming": ["native-source", "neck", "conecktion", "switch-board", "spine", "neural-network", "surface"],
+    "outgoing": ["surface-or-intent", "spine", "switch-board", "conecktion", "neck", "native-destination"],
+    "readiness": ["conecktion-discovery", "contract-validation", "pulse-lifecycle", "switch-board-heartbeat", "spine-readiness"]
+  }
+}
