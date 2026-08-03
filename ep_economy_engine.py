@@ -1,9 +1,6 @@
-def ep_priority(state):
+"""Workspace compatibility alias for the canonical EP economy engine."""
 
-    if state.ep >= 6:
-        return "AGGRESSIVE"
+import sys
+from src import ep_economy_engine as _implementation
 
-    if state.ep <= 2:
-        return "STALL_AND_RECOVER"
-
-    return "BALANCED"
+sys.modules[__name__] = _implementation

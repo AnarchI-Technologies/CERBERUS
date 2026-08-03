@@ -1,10 +1,6 @@
-def predator_mode(state):
+"""Workspace compatibility alias for the canonical predator-mode policy."""
 
-    if len(state.enemies_visible) <= 3:
+import sys
+from src import predator_mode as _implementation
 
-        return {
-            "behavior": "hunt",
-            "priority": "kill_leaders_first",
-            "movement": "zone_pressure",
-            "risk_tolerance": 0.9
-        }
+sys.modules[__name__] = _implementation

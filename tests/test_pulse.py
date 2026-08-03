@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sys
+import threading
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -113,6 +115,25 @@ class PulseLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(PulseLifecycleError, "only be registered"):
             pulse.register(FakeService("late", []))
+
+
+class PulseSwitchBoardCompatibilityTests(unittest.TestCase):
+    def test_sync_heartbeat_publishes_the_legacy_lifecycle_contract(self) -> None:
+        from src.events.types import LifecycleEvent, LifecycleStage
+
+        switch_board = MagicMock()
+        pulse = Pulse(switch_board=switch_board)
+        thread = threading.Thread(target=lambda: pulse.run(duration_seconds=0.1), daemon=True)
+        thread.start()
+        thread.join(timeout=1)
+
+        self.assertFalse(thread.is_alive())
+        events = [call.args[0] for call in switch_board.publish.call_args_list]
+        self.assertTrue(all(isinstance(event, LifecycleEvent) for event in events))
+        self.assertEqual(
+            [event.stage for event in events],
+            [LifecycleStage.STARTING, LifecycleStage.RUNNING, LifecycleStage.STOPPING, LifecycleStage.STOPPED],
+        )
 
 
 if __name__ == "__main__":

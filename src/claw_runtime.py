@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import memory_system
+from pathlib import Path
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -690,26 +692,44 @@ def readiness_blocks_free(welcome: dict[str, Any] | None) -> bool:
     if not isinstance(readiness, dict):
         return False
     free_room = readiness.get("freeRoom") or readiness.get("free_room")
-    identity_only_failure = False
+    recoverable_only_failure = False
     if isinstance(free_room, dict):
         missing = free_room.get("missing") or free_room.get("blockers") or free_room.get("errors")
         blockers = missing if isinstance(missing, list) else []
-        non_identity = [item for item in blockers if not _identity_only_blocker(item)]
-        identity_only_failure = bool(blockers) and not non_identity
-        if free_room.get("ok") is False and (not blockers or non_identity):
+        non_recoverable = [
+            item
+            for item in blockers
+            if not (_identity_only_blocker(item) or _active_free_game_blocker(item))
+        ]
+        recoverable_only_failure = bool(blockers) and not non_recoverable
+        if free_room.get("ok") is False and (not blockers or non_recoverable):
             return True
     for key in ("free", "freeReady", "free_ready"):
-        if readiness.get(key) is False and not identity_only_failure:
+        if readiness.get(key) is False and not recoverable_only_failure:
             return True
     errors = readiness.get("errors") or readiness.get("blockers") or readiness.get("missing")
     if isinstance(errors, list):
-        return any(not _identity_only_blocker(item) for item in errors)
+        return any(
+            not (_identity_only_blocker(item) or _active_free_game_blocker(item))
+            for item in errors
+        )
     return False
 
 
 def _identity_only_blocker(value: Any) -> bool:
     label = str(value).strip().lower().replace("-", "_")
     return "identity" in label or "erc8004" in label or "no_identity" in label
+
+
+def _active_free_game_blocker(value: Any) -> bool:
+    """Treat an existing free game as a resume signal, not a join failure."""
+    if isinstance(value, dict):
+        value = " ".join(
+            str(value.get(key) or "")
+            for key in ("code", "message", "reason", "guide")
+        )
+    label = str(value).strip().lower().replace("-", "_").replace(" ", "_")
+    return "active_free_game_exists" in label
 
 
 def free_fallback_enabled() -> bool:
@@ -868,19 +888,22 @@ def account_identity_ready(account: dict[str, Any]) -> bool:
 
 
 def account_free_ready(account: dict[str, Any]) -> bool:
-    """Identity is optional; only explicit non-identity free blockers stop play."""
+    """Allow identity gaps and an existing free game; block other failures."""
     readiness = account.get("readiness") if isinstance(account.get("readiness"), dict) else {}
     free_room = readiness.get("freeRoom") or readiness.get("free_room")
-    identity_only_failure = False
+    recoverable_only_failure = False
     if isinstance(free_room, dict) and free_room.get("ok") is False:
         blockers = free_room.get("missing") or free_room.get("blockers") or free_room.get("errors")
         if not isinstance(blockers, list) or not blockers:
             return False
-        identity_only_failure = all(_identity_only_blocker(item) for item in blockers)
-        if not identity_only_failure:
+        recoverable_only_failure = all(
+            _identity_only_blocker(item) or _active_free_game_blocker(item)
+            for item in blockers
+        )
+        if not recoverable_only_failure:
             return False
     for key in ("free", "freeReady", "free_ready"):
-        if readiness.get(key) is False and not identity_only_failure:
+        if readiness.get(key) is False and not recoverable_only_failure:
             return False
     return True
 
@@ -1223,7 +1246,16 @@ def record_action_result_learning(payload: dict[str, Any], *, status: dict[str, 
     except Exception:
         pass
 
-    store = CompactMemoryStore().load()
+    memory_dir = Path(
+        os.getenv(
+            "CERBERUS_MEMORY_DIR",
+            str(memory_system.DEFAULT_MEMORY_DIR),
+        )
+    )
+    store = CompactMemoryStore(
+        path=memory_dir / memory_system.DEFAULT_MEMORY_FILE.name,
+        encrypted_path=memory_dir / memory_system.DEFAULT_ENCRYPTED_FILE.name,
+    ).load()
     store.remember_turn(
         _status_snapshot_to_compact_state(status),
         action=last_action,

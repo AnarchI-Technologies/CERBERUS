@@ -1,13 +1,6 @@
-def should_attack(self, enemy, state):
+"""Workspace compatibility alias for the canonical combat decider."""
 
-    expected_damage = (
-        state.atk - (enemy.defense * 0.5)
-    )
+import sys
+from src import combat_decider as _implementation
 
-    lethal = expected_damage >= enemy.hp * 0.6
-
-    return (
-        lethal and
-        state.ep >= 2 and
-        enemy.in_range
-    )
+sys.modules[__name__] = _implementation

@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+import time
 from typing import Protocol, runtime_checkable
 
 
@@ -70,11 +71,35 @@ class PulseStopError(PulseLifecycleError):
 class Pulse:
     """Start registered services in order and stop them in reverse order."""
 
-    def __init__(self) -> None:
+    def __init__(self, switch_board: object | None = None) -> None:
+        if switch_board is not None and not callable(getattr(switch_board, "publish", None)):
+            raise TypeError("switch_board must provide a callable publish(event) capability.")
+        self._switch_board = switch_board
         self._state = PulseState.NEW
         self._services: list[PulseService] = []
         self._active: list[PulseService] = []
         self._events: list[PulseEvent] = []
+
+    def run(self, duration_seconds: float = -1) -> None:
+        """Run the legacy Switch Board heartbeat without weakening async service ownership."""
+
+        if self._switch_board is None:
+            raise PulseLifecycleError("Pulse.run requires a Switch Board")
+        from src.events.types import LifecycleEvent, LifecycleStage
+
+        self._state = PulseState.STARTING
+        self._switch_board.publish(LifecycleEvent(source="Pulse", stage=LifecycleStage.STARTING))
+        self._state = PulseState.RUNNING
+        self._switch_board.publish(LifecycleEvent(source="Pulse", stage=LifecycleStage.RUNNING))
+        started = time.monotonic()
+        while self._state is PulseState.RUNNING:
+            if duration_seconds > 0 and time.monotonic() - started >= duration_seconds:
+                break
+            time.sleep(0.05)
+        self._state = PulseState.STOPPING
+        self._switch_board.publish(LifecycleEvent(source="Pulse", stage=LifecycleStage.STOPPING))
+        self._state = PulseState.STOPPED
+        self._switch_board.publish(LifecycleEvent(source="Pulse", stage=LifecycleStage.STOPPED))
 
     @property
     def state(self) -> PulseState:

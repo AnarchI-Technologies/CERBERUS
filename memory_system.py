@@ -1,12 +1,6 @@
-memory = {
-    "enemy_profiles": {},
-    "kill_paths": [],
-    "zone_history": []
-}
-def update_enemy(enemy):
+"""Workspace compatibility alias for the canonical memory package."""
 
-    memory["enemy_profiles"][enemy.id] = {
-        "aggression": enemy.atk,
-        "survivability": enemy.hp,
-        "behavior": classify(enemy)
-    }
+import sys
+from data import memory_system as _implementation
+
+sys.modules[__name__] = _implementation

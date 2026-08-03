@@ -19,6 +19,35 @@ import claw_runtime
 
 
 class ClawRuntimeGameplayGateTests(unittest.TestCase):
+    def test_active_free_game_is_treated_as_resume_signal(self) -> None:
+        config = claw_runtime.ClawRuntimeConfig(api_key="fixture", mode="offchain")
+        active_game = {"code": "ACTIVE_FREE_GAME_EXISTS", "guide": "references/sc-wallet-policy.md#active-game-free"}
+        welcome = {
+            "type": "welcome",
+            "decision": "ASK_ENTRY_TYPE",
+            "readiness": {
+                "freeRoom": {"ok": False, "missing": [active_game]},
+                "paidRoom": {"ok": True, "mode": {"offchain": True}},
+            },
+        }
+        account = {"ok": True, "readiness": {"freeRoom": {"ok": False, "missing": [active_game]}}}
+
+        self.assertFalse(claw_runtime.readiness_blocks_free(welcome))
+        self.assertTrue(claw_runtime.account_free_ready(account))
+        self.assertEqual(claw_runtime.hello_frame(config, welcome), {"type": "hello", "entryType": "free"})
+
+    def test_active_free_game_does_not_mask_other_free_blockers(self) -> None:
+        welcome = {
+            "readiness": {
+                "freeRoom": {
+                    "ok": False,
+                    "missing": [{"code": "ACTIVE_FREE_GAME_EXISTS"}, {"code": "ACCOUNT_SUSPENDED"}],
+                }
+            }
+        }
+        self.assertTrue(claw_runtime.readiness_blocks_free(welcome))
+        self.assertFalse(claw_runtime.account_free_ready({"ok": True, "readiness": welcome["readiness"]}))
+
     def test_terminal_quarantine_uses_slow_clean_close_retry(self) -> None:
         config = claw_runtime.ClawRuntimeConfig(api_key="fixture", min_reconnect_seconds=5)
         self.assertEqual(

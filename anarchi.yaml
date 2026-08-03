@@ -107,3 +107,29 @@ metadata:
   adoption_wave: cerberus-anarchi-adoption-0001
   deployment_doctrine_wave: cerberus-wsl-deployment-doctrine-0001
   behavior_change: deployment doctrine aligned to self-hosted WSL Ubuntu
+
+components:
+  switch_board:
+    repository: AnarchI-Technologies/switch-board
+    package: anarchi-switch-board
+    role: typed event contracts and deterministic event routing
+  pulse_runtime:
+    repository: AnarchI-Technologies/pulse-runtime
+    package: anarchi-pulse
+    role: game-agnostic lifecycle kernel
+  memory:
+    repository: AnarchI-Technologies/anarchi-memory
+    package: anarchi-memory
+    role: canonical memory and knowledge infrastructure
+  vault:
+    repository: AnarchI-Technologies/anar-vault
+    package: anar-vault
+    role: encrypted storage and secret handling
+  claw_royale_adapter:
+    repository: AnarchI-Technologies/claw-royale-adapter
+    package: anarchi-claw-royale-adapter
+    role: game protocol adapter
+  claw_royale_strategies:
+    repository: AnarchI-Technologies/hellion-strategist
+    package: anarchi-claw-strategies
+    role: extracted strategy families
