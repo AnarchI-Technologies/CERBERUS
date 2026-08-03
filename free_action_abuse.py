@@ -1,14 +1,6 @@
-def free_action_phase(state):
+"""Workspace compatibility alias for canonical free-action strategies."""
 
-    actions = []
+import sys
+from src import free_action_abuse as _implementation
 
-    if best_weapon_available(state):
-        actions.append(equip_best_weapon())
-
-    if loot_nearby(state):
-        actions.append(pickup())
-
-    if enemy_nearby(state):
-        actions.append(talk("scouting bait message"))
-
-    return actions
+sys.modules[__name__] = _implementation

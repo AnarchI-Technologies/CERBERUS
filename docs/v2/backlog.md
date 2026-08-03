@@ -7,30 +7,39 @@
 - [x] Inventory external effect families and provisional capabilities.
 - [x] Add Linux to continuous integration and reproduce it locally in WSL 2.
 - [x] Record the incremental-restructure architecture decision.
-- [ ] Review PRs #1-#3 for unique coverage and consolidate or close them.
-- [ ] Remove test-suite working-tree side effects.
-- [ ] Record deployment smoke-test and rollback procedures.
+- [x] Review PRs #1-#3 and consolidate unique in-scope coverage; close them after publication.
+- [x] Remove test-suite working-tree side effects.
+- [x] Record deployment smoke-test and rollback procedures.
 - [x] Record the initial Windows operator-node hardware profile.
+- [x] Record deterministic action post-mortems with bounded, observation-only experiments.
 - [x] Install and benchmark evaluation-only Ollama candidates.
-- [ ] Build a repeatable Ollama health/readiness check with no-model fallback.
+- [x] Build a repeatable Ollama health/readiness check with no-model fallback.
 
 ## Phase 1 — contracts and policy boundary
 
-- [ ] Define versioned Event, Decision, ActionRequest, PolicyDecision,
+- [x] Define versioned Event, Decision, ActionRequest, PolicyDecision,
   ExecutionResult, MemoryRecord, and AuditRecord schemas.
-- [ ] Implement `ALLOW`, `DENY`, `REVIEW`, and `DEFER` policy outcomes.
-- [ ] Add capability grants and emergency suspension.
-- [ ] Route one free Claw Royale action through the policy/execution seam.
-- [ ] Add adapter contract and sanitized replay tests.
-- [ ] Add a single model gateway; prohibit direct Ollama calls elsewhere.
-- [ ] Add pinned model aliases, deadlines, schema validation, and an inference
+- [x] Implement `ALLOW`, `DENY`, `REVIEW`, and `DEFER` policy outcomes.
+- [x] Add capability grants and emergency suspension to the isolated policy engine.
+- [x] Route one free Claw Royale action through the policy/execution seam.
+- [x] Add the provider-neutral game adapter contract and sanitized Claw replay tests.
+- [x] Add a single model gateway; prohibit direct Ollama calls elsewhere.
+- [x] Add pinned model aliases, deadlines, schema validation, and an inference
   kill switch.
-- [ ] Require semantic evaluation, not merely schema validity, before model
+- [x] Require semantic evaluation, not merely schema validity, before model
   promotion.
+
+## Phase 2 — memory and retrieval boundary
+
+- [x] Add classified memory admission with provenance, retention, secret, and
+  prompt-injection checks.
+- [x] Route one existing knowledge write through admission in shadow mode.
+- [x] Add local embedding retrieval with source IDs and freshness.
+- [x] Define retention compaction and deletion tests per memory class.
 
 ## Production proof
 
-- [ ] Define the 72-hour evaluation protocol and metrics.
-- [ ] Demonstrate no duplicate consequential actions after restart/retry.
-- [ ] Demonstrate rollback and recovery within five minutes.
+- [x] Define the 72-hour evaluation protocol and metrics.
+- [x] Demonstrate no duplicate consequential actions after restart/retry.
+- [x] Demonstrate rollback and recovery within five minutes.
 - [ ] Merge behavioral branches only after recorded production evidence.

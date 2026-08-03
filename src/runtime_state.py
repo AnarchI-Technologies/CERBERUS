@@ -42,7 +42,11 @@ def overridden_memory_dir(path: str | Path):
 
 
 def normalize_agent_id(agent_id: str | None = None) -> str:
-    value = str(agent_id if agent_id is not None else _RUNTIME_AGENT_ID.get() or "").strip().lower()
+    value = str(
+        agent_id
+        if agent_id is not None
+        else _RUNTIME_AGENT_ID.get() or os.getenv("CERBERUS_RUNTIME_AGENT_ID") or ""
+    ).strip().lower()
     return "".join(ch for ch in value if ch.isalnum() or ch in {"-", "_"})[:32]
 
 
@@ -93,6 +97,18 @@ def match_evidence_file() -> Path:
 
 def suggested_edits_file() -> Path:
     return memory_dir() / "suggested_edits.json"
+
+
+def policy_shadow_file() -> Path:
+    return memory_dir() / "policy_shadow.json"
+
+
+def action_postmortems_file() -> Path:
+    return memory_dir() / "action_postmortems.json"
+
+
+def execution_ledger_file() -> Path:
+    return memory_dir() / "execution_ledger.json"
 
 
 def social_event_stack_file() -> Path:
@@ -176,6 +192,76 @@ def append_stream_chat(message: dict[str, Any], *, limit: int = 50) -> list[dict
     except Exception:
         return messages
     return messages
+
+
+def policy_shadow_records(limit: int = 500) -> list[dict[str, Any]]:
+    records = read_json(policy_shadow_file()).get("records", [])
+    if not isinstance(records, list):
+        return []
+    return [item for item in records if isinstance(item, dict)][-limit:]
+
+
+def append_policy_shadow(record: dict[str, Any], *, limit: int = 500) -> list[dict[str, Any]]:
+    records = policy_shadow_records(limit=limit)
+    records.append(_scrub_mapping(record, text_limit=240))
+    records = records[-limit:]
+    write_json(policy_shadow_file(), {"records": records, "updated_at": int(time.time())})
+    return records
+
+
+def action_postmortems(limit: int = 500) -> list[dict[str, Any]]:
+    records = read_json(action_postmortems_file()).get("records", [])
+    if not isinstance(records, list):
+        return []
+    return [item for item in records if isinstance(item, dict)][-limit:]
+
+
+def append_action_postmortem(record: dict[str, Any], *, limit: int = 500) -> list[dict[str, Any]]:
+    records = action_postmortems(limit=limit)
+    records.append(_scrub_mapping(record, text_limit=240))
+    records = records[-limit:]
+    write_json(action_postmortems_file(), {"records": records, "updated_at": int(time.time())})
+    return records
+
+
+def execution_ledger_records(limit: int = 500) -> list[dict[str, Any]]:
+    records = read_json(execution_ledger_file()).get("records", [])
+    if not isinstance(records, list):
+        return []
+    return [item for item in records if isinstance(item, dict)][-limit:]
+
+
+def reserve_execution(
+    idempotency_key: str,
+    request_id: str,
+    *,
+    metadata: dict[str, Any] | None = None,
+    limit: int = 500,
+) -> bool:
+    if not idempotency_key:
+        return False
+    records = execution_ledger_records(limit=limit)
+    if any(item.get("idempotency_key") == idempotency_key for item in records):
+        return False
+    records.append(
+        {
+            "idempotency_key": idempotency_key,
+            "request_id": request_id,
+            "status": "reserved",
+            "metadata": _scrub_mapping(metadata or {}, text_limit=120),
+            "updated_at": int(time.time()),
+        }
+    )
+    return write_json(execution_ledger_file(), {"records": records[-limit:], "updated_at": int(time.time())})
+
+
+def finalize_execution(idempotency_key: str, result: dict[str, Any], *, limit: int = 500) -> None:
+    records = execution_ledger_records(limit=limit)
+    for item in reversed(records):
+        if item.get("idempotency_key") == idempotency_key:
+            item.update({"status": str(result.get("status") or "unknown"), "result": result, "updated_at": int(time.time())})
+            break
+    write_json(execution_ledger_file(), {"records": records[-limit:], "updated_at": int(time.time())})
 
 
 def owner_messages(limit: int = 25) -> list[dict[str, Any]]:

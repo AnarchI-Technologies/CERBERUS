@@ -1,5 +1,21 @@
 # CERBERUS
 
+## Observation-only Claw Royale post-mortems
+
+At the existing `game_ended` balance checkpoint, CERBERUS now writes a typed
+`postmortem` item to the configured long-term memory backend (MongoDB when
+enabled, otherwise SQLite). Each record contains the final action expectation,
+the observed balance/terminal outcome, a deterministic failure category and
+confidence, and a proposed 10-match experiment.
+When the terminal frame provides them, the evidence also includes placement,
+killer, final HP/EP/alive state, remaining-agent count, and at most five recent
+action/outcome summaries. Raw websocket frames are never retained.
+
+This scaffold is intentionally observation-only: post-mortems are not read by
+the decision engine, do not alter actions, and are not promoted into hardened
+strategy rules. Persistence failures are captured in runtime status and never
+interrupt gameplay or postgame maintenance.
+
 CERBERUS is a deterministic agent runtime for game-facing autonomy, identity bootstrapping, secret vaulting, wallet routing, and social/account integrations.
 
 AnarchI is the brand direction behind the system: hardcoding freedom into the systems of tomorrow.
@@ -78,6 +94,21 @@ Optional compile check:
 python -m compileall src data tests main_loop.py quickstart.py sitecustomize.py
 ```
 
+## Managed plugins and adapters
+
+The dashboard's **Extensions** tab exposes two writable runtime folders and keeps their inventories separate:
+
+- `plugins` contains standalone Cerberus plugins.
+- `adapters` contains interoperability adapters.
+
+Both default to subdirectories of `CERBERUS_MEMORY_DIR/extensions`. Set `CERBERUS_EXTENSION_DIR` to move the common
+root. Install requests accept only IDs from the built-in catalog, and extracted files are confined to the matching
+managed folder. Arbitrary download URLs and arbitrary destination paths are not accepted.
+
+The AnarchI Technologies repositories are private. Configure a read-only `CERBERUS_GITHUB_TOKEN` with access to those
+repositories before using an Install button. The token stays server-side and is used only with GitHub's repository
+archive endpoint.
+
 ## Long-Term SQLite Memory
 
 CERBERUS uses the Python standard-library `sqlite3` module for local long-term memory. No extra database package is required.
@@ -113,79 +144,48 @@ The repository includes a GitHub Actions workflow at:
 
 It runs on pushes, pull requests, and manual dispatch. The workflow installs dependencies, compiles the Python modules, and runs the unit test suite.
 
-## Render Launch
+## Self-hosted WSL Ubuntu service
 
-The repo includes a Render Blueprint:
+The canonical CERBERUS deployment is the local WSL 2 Ubuntu server documented
+under `deployment/local-linux`. systemd supervises immutable releases selected
+through `/opt/cerberus-current` and `/opt/cerberus-staging-current`.
 
-```text
-render.yaml
-```
+The service exposes:
 
-It defines a small Python web service with:
-
-- `/healthz` for Render health checks
+- `/healthz` for process health
 - `/ready` for launch preflight
-- `/stats` for dashboard stats
+- `/stats` for dashboard statistics
 - `/dashboard` for the Hellion dashboard
 - `/tick` for guarded JSON turn requests
-- an optional always-on Claw Royale runtime worker when `CLAW_ROYALE_RUNTIME_ENABLED=true`
 
-The service uses a 5 GB persistent disk mounted at:
+`src/render_app.py` remains the service filename for compatibility; it is not a
+Render.com deployment route. Pulse owns the Claw Royale and MoltStation worker
+lifecycle inside the systemd-supervised process.
 
-```text
-/var/data/.cerberus
+Runtime state resolves through `CERBERUS_MEMORY_DIR`. Production uses the
+operator-managed environment profile loaded by `cerberus.service`; staging uses
+the isolated `/etc/cerberus/staging.env` profile and separate state.
+
+The local operator commands are:
+
+```bash
+deployment/local-linux/cerberusctl status
+deployment/local-linux/cerberusctl doctor
+deployment/local-linux/cerberusctl history
 ```
 
-The default Render memory directory is the disk mount itself:
+Build, verify, stage, promote, and rollback scripts live in
+`deployment/local-linux`. Production promotion requires an immutable release
+that passed the complete test suite in staging.
 
-```text
-/var/data/.cerberus
-```
-
-That path must match the mounted Render disk. Compact memory, long-term
-SQLite memory, current-game state, stream chat, voice-lab state, and runtime
-status all resolve through `CERBERUS_MEMORY_DIR`.
-
-Suggested Render environment values:
-
-```text
-CERBERUS_PIN
-CERBERUS_HTTP_TOKEN
-CERBERUS_MEMORY_DIR=/var/data/.cerberus
-CLAW_ROYALE_LIVE_FEED_URL=https://www.clawroyale.ai/games
-CLAW_ROYALE_SPECTATE_BASE_URL=https://www.clawroyale.ai/games/spect
-CLAW_ROYALE_API_KEY
-CLAW_ROYALE_RUNTIME_ENABLED=true
-CLAW_ROYALE_GAME_MODE=offchain
-CLAW_ROYALE_FREE_FALLBACK_ENABLED=true
-CLAW_ROYALE_PAID_LAST_SLOT_ONLY=true
-CERBERUS_PRESEASON1_AUTO_CLAIM_ENABLED=true
-CERBERUS_PRESEASON1_CLAIM_INTERVAL_SECONDS=60
-CLAW_ROYALE_WS_PATHS=/ws/agent,/ws/join
-AGENTMAIL_API_KEY
-AGENTMAIL_INBOX_ID
-AGENTMAIL_EMAIL
-MOLTBOOK_API_KEY
-X_CLIENT_ID
-X_CLIENT_SECRET
-X_REDIRECT_URI
-CERBERUS_AGENT_EOA_PRIVATE_KEY
-CERBERUS_OWNER_EOA_PRIVATE_KEY
-```
-
-Export values from the local encrypted identity vault:
-
-```powershell
-python src\render_env_export.py --format render
-```
-
-The local identity vault uses Windows DPAPI, so Render cannot decrypt it directly. Export locally, then paste only the needed values into Render's secret environment settings.
+`render.yaml` and `src/render_env_export.py` are retained only as legacy
+migration artifacts. Render.com and Railway are not active deployment targets.
 
 Local service test:
 
 ```powershell
 $env:PORT = "18080"
-$env:CERBERUS_MEMORY_DIR = ".render-test-memory"
+$env:CERBERUS_MEMORY_DIR = ".local-test-memory"
 python src\render_app.py
 ```
 
@@ -300,7 +300,7 @@ If you mint the token through the Claw portal or an ERC-8004 registry UI, attach
 python src\claw_identity_token.py attach 123456
 ```
 
-Then rerun `status` and export Render env values again.
+Then rerun `status` and refresh the operator-managed WSL environment profile.
 
 ## AgentMail Quickstart
 
@@ -351,7 +351,7 @@ To skip the follow-up Moltbook status check:
 python src\moltbook_claim_assistant.py claim --no-status
 ```
 
-Use this before exporting Render environment values so the vault contains the latest Moltbook claim state.
+Use this before refreshing the WSL environment profile so the vault contains the latest Moltbook claim state.
 
 ## License
 

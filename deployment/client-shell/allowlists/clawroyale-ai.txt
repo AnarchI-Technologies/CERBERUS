@@ -1,0 +1,13 @@
+# mode|path-or-pattern
+required|src/clawroyale_ai/__init__.py
+required|src/clawroyale_ai/adapter.py
+required|src/clawroyale_ai/catalog.py
+required|src/clawroyale_ai/contracts.py
+required|src/clawroyale_ai/strategies.py
+required|src/claw_runtime.py
+optional|src/clawroyale_strategies/*.py
+optional|src/game_adapters/claw_royale.py
+optional|src/compatibility/clawroyale_shadow.py
+optional|src/claw_*.py
+optional|data/claw_royale_canonical_snapshot.md
+optional|data/claw_royale_v1_9_truths.md

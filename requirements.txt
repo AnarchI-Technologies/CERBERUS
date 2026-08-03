@@ -5,3 +5,11 @@ requests>=2.34.2
 websockets>=16.0
 pymongo>=4.13.2
 pytest>=8.2.2
+anarchi-adapter-sdk @ git+https://github.com/AnarchI-Technologies/adapter-sdk.git@b2011bac9ae62e65cc0ec7e0aeb1e90c01c720c3
+anarchi-switch-board @ git+https://github.com/AnarchI-Technologies/switch-board.git@e9d06dfb40c599dc5c738e9ecdf5b9076b1cac7f
+anarchi-pulse @ git+https://github.com/AnarchI-Technologies/pulse-runtime.git@4baa32aa08371c7994993260f89502a26869b1bd
+anar-vault @ git+https://github.com/AnarchI-Technologies/anar-vault.git@adbf53834795c66f019a4587a047db05e6a52e13
+anarchi-memory @ git+https://github.com/AnarchI-Technologies/anarchi-memory.git@f16461f2b185e483f55f7750e1d3bbd50779509b
+anarchi-strategy-sdk @ git+https://github.com/AnarchI-Technologies/strategy-sdk.git@6848612d5988d69b2ece9062cf0b66f21550fd0e
+anarchi-claw-strategies @ git+https://github.com/AnarchI-Technologies/hellion-strategist.git@c31fbbd3738f3f08fa261d20d31b014e7cf68e6b
+anarchi-claw-royale-adapter @ git+https://github.com/AnarchI-Technologies/claw-royale-adapter.git@2d1aa51bde84b314bec61e33fb57cff116f3f9bd

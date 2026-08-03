@@ -9,7 +9,7 @@ import requests
 
 
 CLAW_API_BASE = "https://cdn.clawroyale.ai/api"
-DEFAULT_CLAW_VERSION = "1.9.0"
+DEFAULT_CLAW_VERSION = "1.13.1"
 
 
 def claw_api_base() -> str:

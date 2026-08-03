@@ -1,7 +1,6 @@
-def avoid_deathzones(state):
-    unsafe = state.pending_deathzones + state.deathzones
+"""Workspace compatibility alias for the canonical death-zone engine."""
 
-    if state.position in unsafe:
-        return "MOVE_SAFE_ZONE"
+import sys
+from src import death_zone_engine as _implementation
 
-    return None
+sys.modules[__name__] = _implementation

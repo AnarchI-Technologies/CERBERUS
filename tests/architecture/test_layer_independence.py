@@ -18,7 +18,7 @@ def test_pulse_and_adapter_integrate_correctly_via_switch_board():
     switch_board = InMemorySwitchBoard()
     mock_game_api = Mock()
     mock_game_api.get_current_state.return_value = {"player_name": "CERBERUS"}
-    
+
     # A mock consumer that represents our Strategy Engine
     mock_consumer = MagicMock()
 

@@ -9,7 +9,7 @@ from typing import Any
 
 from agent_dossiers import AgentDossierStore
 from hardened_strategy import (
-    DEFAULT_RULES_FILE,
+    hardened_strategy_rules_file,
     load_hardened_strategy_rules,
     sanity_check_rules,
     save_hardened_strategy_rules,
@@ -200,7 +200,8 @@ def _social_drafts_from_stack(dossiers: AgentDossierStore) -> tuple[list[dict[st
     return drafts, consumed
 
 
-def _apply_rules_after_sanity(payload: dict[str, Any], *, rules_path: str | Path = DEFAULT_RULES_FILE) -> dict[str, Any]:
+def _apply_rules_after_sanity(payload: dict[str, Any], *, rules_path: str | Path | None = None) -> dict[str, Any]:
+    rules_path = Path(rules_path) if rules_path is not None else hardened_strategy_rules_file()
     check = sanity_check_rules(payload)
     if not check.get("ok"):
         return check
@@ -277,8 +278,9 @@ def run_postgame_hardening_pass(
     *,
     memory: CompactMemoryStore | None = None,
     dossiers: AgentDossierStore | None = None,
-    rules_path: str | Path = DEFAULT_RULES_FILE,
+    rules_path: str | Path | None = None,
 ) -> dict[str, Any]:
+    rules_path = Path(rules_path) if rules_path is not None else hardened_strategy_rules_file()
     memory_store = memory or CompactMemoryStore().load()
     dossier_store = dossiers or AgentDossierStore().load()
     memory_policy = _apply_memory_hierarchy(memory_store)

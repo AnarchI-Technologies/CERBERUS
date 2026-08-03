@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(
+    cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+    pwd
+)"
+
+usage() {
+    cat <<'EOF'
+CERBERUS + clawroyale.ai client shell
+
+Usage:
+  cerberus-client doctor [--scope self-hosted|managed] [--tenant ID]
+  cerberus-client install [--scope self-hosted|managed] [--tenant ID] [--port PORT]
+  cerberus-client configure --runtime FILE --credentials FILE
+                            [--scope self-hosted|managed] [--tenant ID]
+  cerberus-client deploy [--scope self-hosted|managed] [--tenant ID]
+                         [--release RELEASE_ID]
+  cerberus-client status [--scope self-hosted|managed] [--tenant ID]
+  cerberus-client prepare-render --destination DIRECTORY
+
+Self-hosted is the default scope. Managed scope is for authorized AnarchI
+operators and requires a tenant identifier.
+EOF
+}
+
+command="${1:-help}"
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+
+case "$command" in
+    doctor|install|configure|deploy|status|prepare-render)
+        exec bash "$ROOT/scripts/$command.sh" "$@"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        echo "Unknown command: $command" >&2
+        usage >&2
+        exit 64
+        ;;
+esac

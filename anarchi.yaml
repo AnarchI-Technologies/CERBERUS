@@ -1,48 +1,135 @@
-project: CERBERUS
-version: 2.0.0
-maintainer: Alexander Gudde <alex.gudde@anarchi.tech>
-description: |
-  The CERBERUS platform is a decoupled, event-driven agent runtime.
-  This top-level contract describes the components that form the complete system.
+schema_version: 1
+
+identity:
+  organization: AnarchI
+  component: CERBERUS
+  canonical_name: cerberus
+  responsibility: autonomous game platform
+  primary_verb: orchestrate
+
+repository:
+  name: CERBERUS
+  root_contract: anarchi.yaml
+  owner: AnarchI-Technologies
+  remote: AnarchI-Technologies/CERBERUS
+  visibility: private
+
+purpose:
+  deterministic: true
+  maturity: active-development
+  production_state: pre-production
+  description: deterministic game-facing autonomy and strategy platform
+
+runtime:
+  platform: python
+  minimum_version: "3.12"
+  local_entrypoint: quickstart.py
+  runtime_entrypoint: src/main_loop.py
+  service_entrypoint: src/render_app.py
+  dependency_manifest: requirements.txt
+
+deployment:
+  canonical_target: wsl-ubuntu-local
+  operating_system: Ubuntu
+  host_layer: WSL2
+  supervisor: systemd
+  production_service: cerberus.service
+  staging_service: cerberus-staging.service
+  immutable_release_root: /opt/cerberus-releases
+  production_pointer: /opt/cerberus-current
+  staging_pointer: /opt/cerberus-staging-current
+  render_com_status: legacy
+  railway_status: legacy
+
+capabilities:
+  validate: true
+  inspect: true
+  install: false
+  rollback: false
+  publish: false
+  autonomous_gameplay: true
+  strategy: true
+  memory: true
+  social_integrations: true
+  wallet_routing: true
+  external_adapters: true
+
+determinism:
+  default_encoding: utf8-no-bom
+  default_line_endings: lf
+  require_payload_hashes: true
+  require_receipts: true
+  require_backups_before_replacement: true
+  stable_identifiers: true
+
+validation:
+  repository_boundary_required: true
+  path_traversal_forbidden: true
+  payload_hashes_required: true
+  contract_required: true
+  unit_test_command: python -m unittest discover -s tests -v
+  compile_check_command: python -m compileall src data tests main_loop.py quickstart.py sitecustomize.py
+
+security:
+  secrets_provider: local-encrypted-vault
+  target_secrets_provider: Anar-Vault
+  secrets_in_repository: forbidden
+  local_env_file: .env
+  publication_requires_explicit_enablement: true
+
+wavesmith:
+  enabled: true
+  wave_manifest: wave.json
+  repository_contract: anarchi.yaml
+  install_enabled: false
+  publish_enabled: false
+
+kiln:
+  enabled: false
+  review_stage: future
+  historical_context: kiln
+  context_policy: consume historical kiln sections only
+
+relationships:
+  runtime_lifecycle_current: Pulse
+  runtime_lifecycle_target: Pulse
+  event_bus_current: signal-pyre
+  event_bus_target: Switch-Board
+  identity_kernel_target: Anar-Core
+  secrets_target: Anar-Vault
+  telemetry_target: Watchtower
+  reviewer_target: Kiln
+  gameplay_strategist: Hellion
+
+metadata:
+  schema_status: canonical-v1
+  adopted_by: WaveSmith
+  adoption_wave: cerberus-anarchi-adoption-0001
+  deployment_doctrine_wave: cerberus-wsl-deployment-doctrine-0001
+  behavior_change: deployment doctrine aligned to self-hosted WSL Ubuntu
 
 components:
-  - name: anar-core-contracts
-    repo: AnarchI-Technologies/anar-core-contracts
-    type: library
-    description: The shared communication kernel. Defines events and interfaces.
-    provides:
-      - contract: ISwitchBoard
-      - contract: BaseEvent
-      - contract: LifecycleEvent
-      - contract: GameStateUpdateEvent
-      - contract: ActionRequestEvent
-
-  - name: CERBERUS-Pulse
-    repo: AnarchI-Technologies/CERBERUS-Pulse
-    type: service
-    description: The game-agnostic runtime lifecycle manager.
-    consumes:
-      - contract: ISwitchBoard
-    provides:
-      - event: LifecycleEvent
-
-  - name: CERBERUS-Adapter-ClawRoyale
-    repo: AnarchI-Technologies/CERBERUS-Adapter-ClawRoyale
-    type: service
-    description: The adapter connecting the system to the Claw Royale game API.
-    consumes:
-      - contract: ISwitchBoard
-      - event: LifecycleEvent
-      - event: ActionRequestEvent
-    provides:
-      - event: GameStateUpdateEvent
-
-  - name: CERBERUS-Strategy-Engine
-    repo: AnarchI-Technologies/CERBERUS-Strategy-Engine
-    type: service
-    description: The decision-making core. Contains all AI strategy logic.
-    consumes:
-      - contract: ISwitchBoard
-      - event: GameStateUpdateEvent
-    provides:
-      - event: ActionRequestEvent
+  switch_board:
+    repository: AnarchI-Technologies/switch-board
+    package: anarchi-switch-board
+    role: typed event contracts and deterministic event routing
+  pulse_runtime:
+    repository: AnarchI-Technologies/pulse-runtime
+    package: anarchi-pulse
+    role: game-agnostic lifecycle kernel
+  memory:
+    repository: AnarchI-Technologies/anarchi-memory
+    package: anarchi-memory
+    role: canonical memory and knowledge infrastructure
+  vault:
+    repository: AnarchI-Technologies/anar-vault
+    package: anar-vault
+    role: encrypted storage and secret handling
+  claw_royale_adapter:
+    repository: AnarchI-Technologies/claw-royale-adapter
+    package: anarchi-claw-royale-adapter
+    role: game protocol adapter
+  claw_royale_strategies:
+    repository: AnarchI-Technologies/hellion-strategist
+    package: anarchi-claw-strategies
+    role: extracted strategy families

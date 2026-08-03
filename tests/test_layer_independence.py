@@ -15,7 +15,7 @@ def test_pulse_and_adapter_integrate_correctly_via_switch_board():
     switch_board = InMemorySwitchBoard()
     mock_game_api = Mock()
     mock_game_api.get_current_state.return_value = {"player_name": "CERBERUS"}
-    
+
     # A mock consumer that represents our Strategy Engine
     mock_consumer = MagicMock()
 
@@ -36,7 +36,7 @@ def test_pulse_and_adapter_integrate_correctly_via_switch_board():
     mock_game_api.get_current_state.assert_called()
     # Did our mock consumer receive the event?
     mock_consumer.assert_called()
-    
+
     # Check the contents of the received event
     received_event = mock_consumer.call_args[0][0]
     assert isinstance(received_event, GameStateUpdateEvent)

@@ -1,10 +1,6 @@
-def threat_score(enemy):
-    return (
-        enemy.hp * 0.3 +
-        enemy.atk * 0.3 +
-        enemy.kills * 0.4
-    )
+"""Workspace compatibility alias for the canonical threat engine."""
 
+import sys
+from src import threat_engine as _implementation
 
-def rank_threats(enemies):
-    return sorted(enemies, key=threat_score, reverse=True)
+sys.modules[__name__] = _implementation

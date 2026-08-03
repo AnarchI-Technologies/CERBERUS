@@ -1,0 +1,10 @@
+[Unit]
+Description=Collect sanitized CERBERUS production evidence
+After=cerberus.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/cerberus-current
+ExecStart=/opt/cerberus-venv/bin/python /opt/cerberus-current/src/production_evaluation.py --memory-root /var/data/.cerberus
+NoNewPrivileges=true
+PrivateTmp=true

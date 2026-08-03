@@ -1,0 +1,9 @@
+# API-only desktop-client route: exactly one account hostname maps to exactly
+# one authenticated tenant loopback gateway. A normal browser request will get
+# 401 because the future Windows client must send the CERBERUS bearer token.
+# Replace the markers, then add Cloudflare Access or a Cloudflare Tunnel as an
+# additional layer outside this artifact. Never reuse this port or hostname.
+
+{{MANAGEMENT_HOSTNAME}} {
+    reverse_proxy 127.0.0.1:{{LOOPBACK_PORT}}
+}

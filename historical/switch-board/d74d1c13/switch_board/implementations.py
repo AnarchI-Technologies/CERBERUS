@@ -15,7 +15,7 @@ class InMemorySwitchBoard(ISwitchBoard):
                 handler(event)
             except Exception as e:
                 print(f"ERROR: Handler {getattr(handler, "__name__", handler.__class__.__name__)} failed for event {event_type.__name__}: {e}")
-        
+
         # Also notify subscribers for any event (BaseEvent)
         if event_type is not BaseEvent:
             for handler in self._subscribers[BaseEvent]:

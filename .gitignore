@@ -29,6 +29,7 @@ x_oauth_session.json
 *.sqlite-wal
 *.sqlite-shm
 .render-test-memory/
+/tmp/
 
 parts.bin/
 

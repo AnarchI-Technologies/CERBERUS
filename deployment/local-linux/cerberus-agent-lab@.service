@@ -1,0 +1,24 @@
+[Unit]
+Description=CERBERUS isolated live experiment agent %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cerberus-current
+EnvironmentFile=/etc/cerberus/agents/%i.env
+Environment=CERBERUS_RUNTIME_AGENT_ID=%i
+Environment=CERBERUS_MEMORY_DIR=/var/lib/cerberus/agents/%i
+Environment=CERBERUS_BIND_HOST=127.0.0.1
+Environment=CERBERUS_MODEL_GATEWAY_ENABLED=false
+StateDirectory=cerberus/agents/%i
+StateDirectoryMode=0700
+ExecStart=/opt/cerberus-venv/bin/python /opt/cerberus-current/src/render_app.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

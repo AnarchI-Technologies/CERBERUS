@@ -21,6 +21,14 @@ VALUABLE_ITEM_TERMS = (
     "medkit",
     "bandage",
 )
+MATCH_RELIC_CAP = 5
+
+
+def _carried_relic_count(state: TurnState) -> int:
+    return sum(
+        1 for item in state.inventory
+        if "relic" in str(item.get("type") or item.get("typeId") or item.get("name") or "").lower()
+    )
 
 
 class EconomyCortex:
@@ -33,8 +41,11 @@ class EconomyCortex:
 
         # Loadout growth now outranks bankroll growth: relics/packs improve
         # future win rate, while loose sMoltz is only the next premium entry.
+        carried_relics = _carried_relic_count(state)
         for item in state.local_ground_items():
             label = str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
+            if "relic" in label and carried_relics >= MATCH_RELIC_CAP:
+                continue
             if any(term in label for term in ("relic", "pack")):
                 results.append(
                     CortexResult(
@@ -53,6 +64,8 @@ class EconomyCortex:
         # 1. Look for sMoltz bundles on the ground.
         for item in state.local_ground_items():
             label = str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
+            if "relic" in label and carried_relics >= MATCH_RELIC_CAP:
+                continue
             if any(term in label for term in ("moltz", "smoltz")):
                 results.append(
                     CortexResult(
@@ -104,6 +117,8 @@ class EconomyCortex:
         # 3. Collect other valuable items (relics/packs).
         for item in state.local_ground_items():
             label = str(item.get("typeId") or item.get("type") or item.get("name") or "").lower()
+            if "relic" in label and carried_relics >= MATCH_RELIC_CAP:
+                continue
             if weapon_bonus_for_item(item) > 0:
                 continue
             if any(term in label for term in VALUABLE_ITEM_TERMS):

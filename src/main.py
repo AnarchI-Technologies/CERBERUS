@@ -52,7 +52,7 @@ def main():
         if hasattr(event, 'game_state'):
             print(f"\nSTRATEGY ENGINE: Received game state update from {event.source}.")
             print(f"  -> State: {event.game_state}")
-            
+
             # Decide on an action
             action_to_take = {"type": "build", "unit": "Guardian"}
             action_event = ActionRequestEvent(

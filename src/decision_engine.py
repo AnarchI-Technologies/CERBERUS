@@ -171,6 +171,7 @@ def make_plan(
     owner_messages: list[dict[str, Any]] | None = None,
     knowledge: KnowledgeBase | None = None,
     cortexes: list[Cortex] | None = None,
+    strategy_registry: Any = None,
 ) -> dict[str, Any]:
     turn_state = state if isinstance(state, TurnState) else TurnState.from_snapshot(state)
     kb = knowledge or KnowledgeBase().load()
@@ -185,9 +186,22 @@ def make_plan(
         "owner_messages": owner_messages or [],
         "knowledge": kb,
     }
+    if cortexes and strategy_registry is not None:
+        raise ValueError("provide cortexes or strategy_registry, not both")
+
+    registry_metrics = None
     results: list[CortexResult] = []
-    for cortex in cortexes or []:
-        results.extend(cortex.evaluate(turn_state, context))
+    if strategy_registry is not None:
+        evaluation = strategy_registry.evaluate_all(turn_state, context)
+        results.extend(evaluation.results)
+        registry_metrics = {
+            "providers_evaluated": list(evaluation.providers_evaluated),
+            "strategies_eligible": evaluation.strategies_eligible,
+            "strategies_skipped": evaluation.strategies_skipped,
+        }
+    else:
+        for cortex in cortexes or []:
+            results.extend(cortex.evaluate(turn_state, context))
     decision = Arbiter().choose(results, turn_state)
     return {
         "action": decision.to_action(),
@@ -195,4 +209,5 @@ def make_plan(
         "winner": decision.winner.to_plan_entry() if decision.winner else None,
         "candidates": decision.candidates,
         "side_effects": decision.side_effects,
+        "strategy_registry": registry_metrics,
     }

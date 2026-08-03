@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "product": {
+    "id": "anarchi.cerberus-clawroyale",
+    "name": "CERBERUS + clawroyale.ai",
+    "artifactModel": "credential-agnostic",
+    "releaseModel": "immutable-content-addressed"
+  },
+  "components": [
+    {
+      "id": "cerberus",
+      "name": "CERBERUS",
+      "kind": "orchestration-core",
+      "payloadRoot": "payload/cerberus-core",
+      "responsibility": "runtime orchestration, policy, lifecycle, health, and state boundaries"
+    },
+    {
+      "id": "clawroyale.ai",
+      "name": "clawroyale.ai",
+      "kind": "plugin",
+      "payloadRoot": "payload/plugins/clawroyale.ai",
+      "requires": "cerberus",
+      "responsibility": "Claw Royale contracts, adapters, strategies, and game-specific runtime behavior"
+    }
+  ],
+  "commercialModes": [
+    {
+      "id": "self-hosted-license",
+      "commercialShape": "one-time-license",
+      "deploymentOwner": "customer",
+      "configurationOwner": "customer",
+      "credentialOwner": "customer",
+      "targets": [
+        "windows-11-wsl2-ubuntu",
+        "ubuntu-linux-systemd",
+        "customer-render-account"
+      ]
+    },
+    {
+      "id": "managed-hosting",
+      "commercialShape": "monthly-managed-service",
+      "deploymentOwner": "anarchi",
+      "configurationOwner": "anarchi-operator-per-tenant",
+      "credentialOwner": "customer-provided-tenant-scoped",
+      "target": "anarchi-wsl2-cloud-server-spine",
+      "isolation": "shared-immutable-runtime-with-per-tenant-service-config-credentials-state-memory-logs-port-pointers-and-rollback"
+    }
+  ],
+  "credentialPolicy": {
+    "credentialsInArtifact": false,
+    "credentialsInRelease": false,
+    "credentialTemplate": "config/credentials.template",
+    "installedCredentialMode": "0600",
+    "valuesMayBeLogged": false
+  },
+  "anarCoreKernelInvariant": {
+    "statement": "an account may access only data scoped to that account",
+    "enforcement": [
+      "dedicated-managed-tenant-os-user",
+      "strict-account-and-agent-environment-allowlists",
+      "isolated-account-runtime-credentials-state-memory-and-logs",
+      "unique-managed-port-hostname-http-token-and-pin",
+      "managed-mongo-disabled-until-database-principal-scope-is-verifiable",
+      "local-private-network-trust-disabled",
+      "default-deny-authenticated-gateway-for-every-non-health-route",
+      "one-account-caddy-route-to-one-tenant-upstream"
+    ]
+  },
+  "agentModel": {
+    "shape": "one-account-core-to-many-plugin-workers",
+    "registry": "per-account",
+    "workerIdentity": "CERBERUS_RUNTIME_AGENT_ID",
+    "agentConfigurationIsolated": true,
+    "agentCredentialsIsolated": true,
+    "crossTenantAgentsForbidden": true
+  },
+  "desktopControlContract": {
+    "primaryFutureClient": "standalone-windows-executable",
+    "transport": "wsl.exe-to-client-shell",
+    "statusFormat": "stable-key-value-lines",
+    "controlCommands": [
+      "doctor",
+      "install",
+      "configure",
+      "deploy",
+      "status"
+    ],
+    "webConsoleIncluded": false
+  },
+  "deploymentPolicy": {
+    "supervisor": "systemd",
+    "networkDefault": "loopback-only-default-deny-gateway",
+    "healthPath": "/healthz",
+    "externalManagement": [
+      "caddy",
+      "cloudflare-access-or-tunnel"
+    ],
+    "externalManagementPurpose": "api-only-desktop-client-route-with-cerberus-bearer-and-optional-cloudflare-layer",
+    "unsupportedTargets": [
+      "railway"
+    ]
+  },
+  "statePolicy": {
+    "stateInArtifact": false,
+    "stateInImmutableRelease": false,
+    "stateLivesOutsideRelease": true,
+    "managedTenantIsolationRequired": true
+  },
+  "billing": {
+    "backendIncluded": false,
+    "licenseEnforcementIncluded": false
+  }
+}

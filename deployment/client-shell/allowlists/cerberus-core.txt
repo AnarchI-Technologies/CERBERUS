@@ -1,0 +1,13 @@
+# mode|path-or-pattern
+required|requirements.txt
+required|src/render_app.py
+required|src/decision_bridge.py
+optional|LICENSE
+optional|anarchi.yaml
+optional|main_loop.py
+optional|quickstart.py
+optional|sitecustomize.py
+optional|src/*.py
+optional|data/*.py
+optional|data/*.json
+optional|schemas/*.json

@@ -20,6 +20,16 @@
       "context_limit": 4096,
       "temperature": 0,
       "deadline_seconds": 20
+    },
+    "cerberus-embed": {
+      "provider": "ollama",
+      "model": "nomic-embed-text:latest",
+      "digest": "0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f",
+      "status": "evaluation_only",
+      "tasks": ["embedding"],
+      "context_limit": 2048,
+      "temperature": 0,
+      "deadline_seconds": 15
     }
   },
   "production_default": null,

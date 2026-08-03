@@ -226,7 +226,15 @@ def compile_lessons(
             }
         )
 
-    unique_lessons = _dedupe_lessons(lessons)[:24]
+    unique_lessons = sorted(
+        _dedupe_lessons(lessons),
+        key=lambda lesson: (
+            -int(lesson.get("importance", 0) or 0),
+            -float(lesson.get("confidence", 0) or 0),
+            -int(lesson.get("count", 0) or 0),
+            str(lesson.get("key") or lesson.get("text") or ""),
+        ),
+    )[:24]
     memory_store = memory or CompactMemoryStore().load()
     longterm_store = longterm
     for lesson in unique_lessons:

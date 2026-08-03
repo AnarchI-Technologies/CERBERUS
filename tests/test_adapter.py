@@ -41,7 +41,7 @@ def test_handle_lifecycle_event_starts_polling_on_running(adapter_components):
     adapter, mock_switch_board, mock_game_api = adapter_components
     # Arrange
     mock_game_api.get_current_state.return_value = {"status": "ok"}
-    
+
     # Act
     adapter.start()
     # Manually call the handler as the switch board would

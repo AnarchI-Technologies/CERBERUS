@@ -8,6 +8,7 @@ Ollama is absent, slow, or rejected.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -47,6 +48,15 @@ class ModelProposal:
     latency_ms: int
     prompt_tokens: int
     output_tokens: int
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingBatch:
+    alias: str
+    model: str
+    digest: str
+    vectors: tuple[tuple[float, ...], ...]
+    latency_ms: int
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -119,6 +129,7 @@ class OllamaModelGateway:
         endpoint: str | None = None,
         aliases_path: str | Path = DEFAULT_ALIASES_FILE,
         transport: Callable[[str, dict[str, Any], float], dict[str, Any]] | None = None,
+        health_transport: Callable[[str, float], dict[str, Any]] | None = None,
     ):
         self.endpoint = (endpoint or os.getenv("CERBERUS_OLLAMA_ENDPOINT") or DEFAULT_ENDPOINT).rstrip("/")
         host = (urlparse(self.endpoint).hostname or "").lower()
@@ -126,6 +137,7 @@ class OllamaModelGateway:
             raise GatewayValidationError("Ollama endpoint must be loopback-only")
         self.aliases_path = Path(aliases_path)
         self.transport = transport or self._http_post
+        self.health_transport = health_transport or self._http_get
 
     def enabled(self) -> bool:
         return _truthy("CERBERUS_MODEL_GATEWAY_ENABLED") and not _truthy("CERBERUS_INFERENCE_KILL_SWITCH")
@@ -139,10 +151,47 @@ class OllamaModelGateway:
         if not self.enabled():
             return {"ok": False, "mode": "deterministic", "reason": "gateway_disabled"}
         try:
-            response = self.transport("/api/version", {}, max(0.1, timeout))
+            response = self.health_transport("/api/version", max(0.1, timeout))
             return {"ok": True, "mode": "model_available", "version": str(response.get("version") or "")[:40]}
         except Exception as exc:
             return {"ok": False, "mode": "deterministic", "reason": type(exc).__name__}
+
+    def readiness(self, *, timeout: float = 3.0) -> dict[str, Any]:
+        health = self.health(timeout=timeout)
+        if not health.get("ok"):
+            return {**health, "aliases_ready": False, "missing": [], "digest_mismatches": []}
+        try:
+            payload = self.health_transport("/api/tags", max(0.1, timeout))
+            installed = {
+                str(item.get("name") or item.get("model") or ""): str(item.get("digest") or "")
+                for item in payload.get("models", [])
+                if isinstance(item, dict)
+            }
+            missing: list[str] = []
+            mismatches: list[str] = []
+            for alias, config in self.aliases().items():
+                model = str(config.get("model") or "")
+                expected = str(config.get("digest") or "")
+                actual = installed.get(model, "")
+                if not actual:
+                    missing.append(alias)
+                elif expected and actual != expected:
+                    mismatches.append(alias)
+            return {
+                **health,
+                "aliases_ready": not missing and not mismatches,
+                "missing": missing,
+                "digest_mismatches": mismatches,
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "mode": "deterministic",
+                "reason": type(exc).__name__,
+                "aliases_ready": False,
+                "missing": [],
+                "digest_mismatches": [],
+            }
 
     def propose(
         self,
@@ -205,6 +254,60 @@ class OllamaModelGateway:
             output_tokens=int(response.get("eval_count") or 0),
         )
 
+    def embed(
+        self,
+        *,
+        alias: str,
+        texts: list[str],
+        allow_evaluation: bool = False,
+    ) -> EmbeddingBatch:
+        """Create local vectors only; embeddings never carry execution authority."""
+        if not self.enabled():
+            raise GatewayDisabled("model gateway is disabled; retrieval must fail closed")
+        if not texts or len(texts) > 64:
+            raise GatewayValidationError("embedding batch must contain 1 to 64 texts")
+        config = self.aliases().get(alias)
+        if not config or "embedding" not in (config.get("tasks") or []):
+            raise GatewayValidationError(f"alias is not approved for embedding: {alias}")
+        status = str(config.get("status") or "")
+        if status != "production" and not (allow_evaluation and status == "evaluation_only"):
+            raise GatewayValidationError(f"model alias is not promoted: {alias}")
+        safe_texts = [_sanitize(text) for text in texts]
+        deadline = min(60.0, max(0.1, float(config.get("deadline_seconds") or 10)))
+        started = time.monotonic()
+        response = self.transport(
+            "/api/embed",
+            {
+                "model": str(config.get("model") or ""),
+                "input": safe_texts,
+                "truncate": True,
+                "keep_alive": 0,
+            },
+            deadline,
+        )
+        raw_vectors = response.get("embeddings")
+        if not isinstance(raw_vectors, list) or len(raw_vectors) != len(texts):
+            raise GatewayValidationError("embedding response count mismatch")
+        vectors: list[tuple[float, ...]] = []
+        dimensions = 0
+        for raw in raw_vectors:
+            if not isinstance(raw, list) or not raw or len(raw) > 8192:
+                raise GatewayValidationError("embedding vector has invalid dimensions")
+            vector = tuple(float(value) for value in raw)
+            if any(not math.isfinite(value) for value in vector):
+                raise GatewayValidationError("embedding vector contains non-finite values")
+            dimensions = dimensions or len(vector)
+            if len(vector) != dimensions:
+                raise GatewayValidationError("embedding vectors have inconsistent dimensions")
+            vectors.append(vector)
+        return EmbeddingBatch(
+            alias=alias,
+            model=str(config.get("model") or ""),
+            digest=str(config.get("digest") or ""),
+            vectors=tuple(vectors),
+            latency_ms=int((time.monotonic() - started) * 1000),
+        )
+
     def _http_post(self, path: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
         body = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
         request = Request(
@@ -213,6 +316,14 @@ class OllamaModelGateway:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        with urlopen(request, timeout=timeout) as response:
+            result = json.loads(response.read(1_000_000).decode("utf-8"))
+        if not isinstance(result, dict):
+            raise GatewayValidationError("Ollama response must be an object")
+        return result
+
+    def _http_get(self, path: str, timeout: float) -> dict[str, Any]:
+        request = Request(f"{self.endpoint}{path}", method="GET")
         with urlopen(request, timeout=timeout) as response:
             result = json.loads(response.read(1_000_000).decode("utf-8"))
         if not isinstance(result, dict):

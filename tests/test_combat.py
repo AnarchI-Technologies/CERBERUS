@@ -25,7 +25,7 @@ class TestCombatStrategies(unittest.TestCase):
         enemy3 = Unit(id="e3", health=100, max_health=100, damage=10, is_ranged=False, position=(0,0))
 
         context = CombatContext(friendly_units=[], enemy_units=[enemy1, enemy2, enemy3], can_retreat=True, tactical_advantage=1.0)
-        
+
         action = choose_best_target(context)
         self.assertIsNotNone(action)
         self.assertEqual(action["action_type"], "TARGET_UNIT")
