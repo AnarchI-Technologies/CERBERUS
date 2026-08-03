@@ -2570,6 +2570,41 @@ class HardeningTests(unittest.TestCase):
             else:
                 os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
 
+    def test_render_handler_does_not_trust_public_forwarded_client(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.update_admin_settings(trust_private_network_admin=True)
+                handler = render_app.CerberusHandler.__new__(render_app.CerberusHandler)
+                handler.client_address = ("127.0.0.1", 5000)
+                handler.headers = {"X-Forwarded-For": "10.0.0.4, 8.8.8.8"}
+                self.assertFalse(handler._request_is_local_trusted())
+        finally:
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
+    def test_render_handler_fails_closed_without_http_token(self) -> None:
+        old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
+        old_token = os.environ.pop("CERBERUS_HTTP_TOKEN", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["CERBERUS_MEMORY_DIR"] = tmp
+                runtime_state.update_admin_settings(trust_private_network_admin=False)
+                handler = render_app.CerberusHandler.__new__(render_app.CerberusHandler)
+                handler.client_address = ("8.8.8.8", 5000)
+                handler.headers = {}
+                self.assertFalse(handler._authorized())
+        finally:
+            if old_token is not None:
+                os.environ["CERBERUS_HTTP_TOKEN"] = old_token
+            if old_memory_dir is None:
+                os.environ.pop("CERBERUS_MEMORY_DIR", None)
+            else:
+                os.environ["CERBERUS_MEMORY_DIR"] = old_memory_dir
+
     def test_moltybook_secret_admin_route_updates_local_env_without_owner_message(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")
         old_api = os.environ.get("MOLTBOOK_API_KEY")
@@ -5838,6 +5873,7 @@ class HardeningTests(unittest.TestCase):
 
     def test_render_launch_report_endpoint_is_pin_guarded(self) -> None:
         old_pin = os.environ.get("CERBERUS_PIN")
+        old_http_token = os.environ.get("CERBERUS_HTTP_TOKEN")
         old_memory_dir = os.environ.get("CERBERUS_MEMORY_DIR")
         sent = []
 
@@ -5848,7 +5884,12 @@ class HardeningTests(unittest.TestCase):
         class FakeHandler(render_app.CerberusHandler):
             def __init__(self, pin):  # type: ignore[no-untyped-def]
                 self.path = "/admin/launch-report"
-                self.headers = FakeHeaders({"X-Cerberus-Pin": pin})
+                self.headers = FakeHeaders(
+                    {
+                        "Authorization": "Bearer fixture-http-token",
+                        "X-Cerberus-Pin": pin,
+                    }
+                )
 
             def _read_json(self):  # type: ignore[no-untyped-def]
                 return {}
@@ -5859,6 +5900,7 @@ class HardeningTests(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 os.environ["CERBERUS_PIN"] = "123456"
+                os.environ["CERBERUS_HTTP_TOKEN"] = "fixture-http-token"
                 os.environ["CERBERUS_MEMORY_DIR"] = tmp
                 FakeHandler("bad").do_POST()
                 FakeHandler("123456").do_POST()
@@ -5867,6 +5909,10 @@ class HardeningTests(unittest.TestCase):
                 os.environ.pop("CERBERUS_PIN", None)
             else:
                 os.environ["CERBERUS_PIN"] = old_pin
+            if old_http_token is None:
+                os.environ.pop("CERBERUS_HTTP_TOKEN", None)
+            else:
+                os.environ["CERBERUS_HTTP_TOKEN"] = old_http_token
             if old_memory_dir is None:
                 os.environ.pop("CERBERUS_MEMORY_DIR", None)
             else:

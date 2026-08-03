@@ -12,6 +12,7 @@ import os
 import sqlite3
 import sys
 import asyncio
+import hmac
 import ipaddress
 import requests
 import websockets
@@ -32,6 +33,7 @@ from core_loop import cerberus_tick  # noqa: E402
 from claw_config import active_claw_version, claw_api_base  # noqa: E402
 from claw_runtime import public_action_thought, run_forever as run_claw_runtime  # noqa: E402
 from env_loader import hydrate_env  # noqa: E402
+from extension_store import extension_inventory, install_extension  # noqa: E402
 from game_map import build_live_map  # noqa: E402
 from longterm_memory import LongTermMemoryStore  # noqa: E402
 from mongo_memory import configured_longterm_memory_store, mongo_backend_enabled  # noqa: E402
@@ -615,6 +617,11 @@ def dashboard_html(query: str = "") -> bytes:
     .observation-stack {{ display: grid; gap: 8px; }}
     .observation-note {{ border: 1px solid rgba(145,208,255,.12); border-radius: 12px; padding: 10px 11px; background: rgba(14,21,31,.92); font-size: 13px; line-height: 1.4; }}
     .observation-note strong {{ display: block; margin-bottom: 4px; color: #dff9ff; }}
+    .extension-list {{ display: grid; gap: 8px; margin-top: 8px; }}
+    .extension-item {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; border: 1px solid rgba(145,208,255,.12); border-radius: 10px; padding: 9px; background: rgba(14,21,31,.9); }}
+    .extension-name {{ font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }}
+    .extension-meta {{ color: #98a2b3; font-size: 11px; margin-top: 3px; overflow-wrap: anywhere; }}
+    .folder-path {{ font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11px; user-select: all; overflow-wrap: anywhere; }}
     .owner-form {{ display: grid; gap: 8px; margin: 10px 0; }}
     textarea, input {{ width: 100%; border: 1px solid rgba(145,208,255,.14); border-radius: 10px; background: rgba(7,12,18,.94); color: #f4f7fb; padding: 9px; font: inherit; }}
     textarea {{ resize: vertical; min-height: 76px; max-height: 180px; }}
@@ -654,6 +661,7 @@ def dashboard_html(query: str = "") -> bytes:
           <div class="tabs" role="tablist" aria-label="Dashboard sections">
             <button id="tab-overview" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="panel-overview" onclick="setDashboardTab('overview')">Overview</button>
             <button id="tab-observation" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-observation" onclick="setDashboardTab('observation')">Moltstation Observation</button>
+            <button id="tab-extensions" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-extensions" onclick="setDashboardTab('extensions')">Extensions</button>
           </div>
           <section id="panel-overview" class="tab-panel active" role="tabpanel" aria-labelledby="tab-overview">
             <div class="grid">
@@ -744,6 +752,19 @@ def dashboard_html(query: str = "") -> bytes:
               <div class="observation-note"><strong>Visible signals</strong><div id="moltstation-signals">loading</div></div>
             </div>
           </section>
+          <section id="panel-extensions" class="tab-panel" role="tabpanel" aria-labelledby="tab-extensions">
+            <div class="metric wide">
+              <div class="label">Managed Folders</div>
+              <div class="hint">Downloads can write only inside these two folders.</div>
+              <div class="extension-list">
+                <div><div class="label">Plugins</div><div id="plugins-folder" class="folder-path">loading</div></div>
+                <div><div class="label">Adapters</div><div id="adapters-folder" class="folder-path">loading</div></div>
+              </div>
+            </div>
+            <div id="extension-status" class="hint wide">Loading extension catalog...</div>
+            <div class="metric wide"><div class="label">Plugins</div><div id="plugin-list" class="extension-list">loading</div></div>
+            <div class="metric wide"><div class="label">Adapters</div><div id="adapter-list" class="extension-list">loading</div></div>
+          </section>
         </div>
       </aside>
     </section>
@@ -768,12 +789,13 @@ def dashboard_html(query: str = "") -> bytes:
     }}
     function setDashboardTab(tab) {{
       activeTab = tab;
-      [["overview", "tab-overview", "panel-overview"], ["observation", "tab-observation", "panel-observation"]].forEach(([name, tabId, panelId]) => {{
+      [["overview", "tab-overview", "panel-overview"], ["observation", "tab-observation", "panel-observation"], ["extensions", "tab-extensions", "panel-extensions"]].forEach(([name, tabId, panelId]) => {{
         const isActive = name === tab;
         document.getElementById(tabId).classList.toggle("active", isActive);
         document.getElementById(tabId).setAttribute("aria-selected", String(isActive));
         document.getElementById(panelId).classList.toggle("active", isActive);
       }});
+      if (tab === "extensions") loadExtensions();
     }}
     async function fetchJson(url, options) {{
       const opts = options ? {{...options}} : {{}};
@@ -781,6 +803,62 @@ def dashboard_html(query: str = "") -> bytes:
       const join = url.includes("?") ? "&" : "?";
       const res = await fetch(url + join + "_ts=" + Date.now(), opts);
       return {{res, data: await res.json()}};
+    }}
+    function extensionCard(item) {{
+      return "<div class='extension-item'><div><div class='extension-name'>" + esc(item.name || item.id) +
+        "</div><div class='extension-meta'>" + esc(item.repository || "") + " @ " + esc(item.ref || "") +
+        "</div></div><button type='button' class='is-ghost' data-extension-id='" + esc(item.id) + "'>Install</button></div>";
+    }}
+    function installedExtensionCard(item) {{
+      const version = item.version ? "version " + item.version : "manifest version unavailable";
+      return "<div class='extension-item'><div><div class='extension-name'>" + esc(item.name || item.folder) +
+        "</div><div class='extension-meta'>" + esc(version) + " · " + esc(item.path || "") +
+        "</div></div><span class='pill'>Installed</span></div>";
+    }}
+    function extensionList(installed, available) {{
+      const installedHtml = installed.length ? "<div class='label'>Installed</div>" + installed.map(installedExtensionCard).join("") : "<div class='hint'>Nothing installed yet.</div>";
+      const downloadable = available.filter((item) => !item.installed);
+      const availableHtml = downloadable.length ? "<div class='label' style='margin-top:6px'>Available</div>" + downloadable.map(extensionCard).join("") : "<div class='hint'>No additional catalog entries.</div>";
+      return installedHtml + availableHtml;
+    }}
+    function renderExtensions(data) {{
+      const directories = data.directories || {{}};
+      document.getElementById("plugins-folder").textContent = directories.plugins || "unavailable";
+      document.getElementById("adapters-folder").textContent = directories.adapters || "unavailable";
+      const available = data.available || {{}};
+      const installed = data.installed || {{}};
+      document.getElementById("plugin-list").innerHTML = extensionList(installed.plugin || [], available.plugin || []);
+      document.getElementById("adapter-list").innerHTML = extensionList(installed.adapter || [], available.adapter || []);
+      document.querySelectorAll("[data-extension-id]").forEach((button) => button.addEventListener("click", () => installExtension(button.dataset.extensionId)));
+      const count = (installed.plugin || []).length + (installed.adapter || []).length;
+      document.getElementById("extension-status").textContent = count + " installed. Private catalog access " + (data.github_token_configured ? "configured." : "needs CERBERUS_GITHUB_TOKEN.");
+    }}
+    async function loadExtensions() {{
+      const status = document.getElementById("extension-status");
+      try {{
+        const result = await fetchJson("/admin/extensions");
+        if (!result.res.ok || !result.data.ok) throw new Error(result.data.error || String(result.res.status));
+        renderExtensions(result.data);
+      }} catch (error) {{
+        status.textContent = "Could not load extensions: " + error.message;
+      }}
+    }}
+    async function installExtension(extensionId) {{
+      const status = document.getElementById("extension-status");
+      const pin = document.getElementById("owner-pin").value.trim();
+      status.textContent = "Installing " + extensionId + "...";
+      try {{
+        const result = await fetchJson("/admin/extensions/install", {{
+          method: "POST",
+          headers: {{"Content-Type": "application/json", "X-Cerberus-Pin": pin}},
+          body: JSON.stringify({{extension_id: extensionId}}),
+        }});
+        if (!result.res.ok || !result.data.ok) throw new Error(result.data.error || String(result.res.status));
+        renderExtensions(result.data.inventory);
+        status.textContent = "Installed " + extensionId + ".";
+      }} catch (error) {{
+        status.textContent = "Install failed: " + error.message;
+      }}
     }}
     function runtimeBlockers(data) {{
       const blockers = [];
@@ -1478,6 +1556,15 @@ class CerberusHandler(BaseHTTPRequestHandler):
         if parsed.path == "/stream/stats":
             self._send(stream_state())
             return
+        if parsed.path == "/admin/extensions":
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            try:
+                self._send(extension_inventory())
+            except Exception as exc:
+                self._send({"ok": False, "error": str(exc)[:500]}, status=500)
+            return
         self._send({"ok": False, "error": "not_found"}, status=404)
 
     def do_POST(self) -> None:  # noqa: N802
@@ -1492,6 +1579,31 @@ class CerberusHandler(BaseHTTPRequestHandler):
                 self._send({"ok": True, "chat": append_stream_chat(message)})
             except Exception as exc:
                 self._send({"ok": False, "error": str(exc)[:240]}, status=500)
+            return
+        if parsed.path == "/admin/extensions/install":
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            try:
+                payload = self._read_json()
+            except Exception as exc:
+                self._send({"ok": False, "error": str(exc)[:240]}, status=400)
+                return
+            pin = self.headers.get("X-Cerberus-Pin", "") or str(payload.get("pin") or "")
+            if not self._pin_authorized(pin):
+                self._send({"ok": False, "error": "invalid_pin"}, status=401)
+                return
+            try:
+                result = install_extension(str(payload.get("extension_id") or ""))
+                self._send({**result, "inventory": extension_inventory()})
+            except FileExistsError as exc:
+                self._send({"ok": False, "error": str(exc)}, status=409)
+            except ValueError as exc:
+                self._send({"ok": False, "error": str(exc)}, status=400)
+            except requests.RequestException as exc:
+                self._send({"ok": False, "error": f"download failed: {str(exc)[:300]}"}, status=502)
+            except Exception as exc:
+                self._send({"ok": False, "error": str(exc)[:500]}, status=500)
             return
         if parsed.path == "/admin/suggested-edits":
             if not self._authorized():
@@ -1724,10 +1836,11 @@ class CerberusHandler(BaseHTTPRequestHandler):
     def _authorized(self) -> bool:
         if self._request_is_local_trusted():
             return True
-        token = os.getenv("CERBERUS_HTTP_TOKEN")
+        token = os.getenv("CERBERUS_HTTP_TOKEN", "").strip()
         if not token:
-            return True
-        return self.headers.get("Authorization") == f"Bearer {token}"
+            return False
+        provided = str(getattr(self, "headers", {}).get("Authorization", ""))
+        return hmac.compare_digest(provided, f"Bearer {token}")
 
     def _pin_authorized(self, pin: str) -> bool:
         if self._request_is_local_trusted():
@@ -1741,6 +1854,9 @@ class CerberusHandler(BaseHTTPRequestHandler):
             return False
         client_address = getattr(self, "client_address", ())
         host = client_address[0] if isinstance(client_address, tuple) and client_address else ""
+        forwarded = str(getattr(self, "headers", {}).get("X-Forwarded-For", "")).strip()
+        if forwarded:
+            host = forwarded.split(",")[-1].strip()
         try:
             ip = ipaddress.ip_address(host)
         except ValueError:

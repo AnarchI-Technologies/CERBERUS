@@ -78,6 +78,21 @@ Optional compile check:
 python -m compileall src data tests main_loop.py quickstart.py sitecustomize.py
 ```
 
+## Managed plugins and adapters
+
+The dashboard's **Extensions** tab exposes two writable runtime folders and keeps their inventories separate:
+
+- `plugins` contains standalone Cerberus plugins.
+- `adapters` contains interoperability adapters.
+
+Both default to subdirectories of `CERBERUS_MEMORY_DIR/extensions`. Set `CERBERUS_EXTENSION_DIR` to move the common
+root. Install requests accept only IDs from the built-in catalog, and extracted files are confined to the matching
+managed folder. Arbitrary download URLs and arbitrary destination paths are not accepted.
+
+The AnarchI Technologies repositories are private. Configure a read-only `CERBERUS_GITHUB_TOKEN` with access to those
+repositories before using an Install button. The token stays server-side and is used only with GitHub's repository
+archive endpoint.
+
 ## Long-Term SQLite Memory
 
 CERBERUS uses the Python standard-library `sqlite3` module for local long-term memory. No extra database package is required.
