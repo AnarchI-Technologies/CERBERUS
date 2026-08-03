@@ -1,5 +1,21 @@
 # CERBERUS
 
+## Observation-only Claw Royale post-mortems
+
+At the existing `game_ended` balance checkpoint, CERBERUS now writes a typed
+`postmortem` item to the configured long-term memory backend (MongoDB when
+enabled, otherwise SQLite). Each record contains the final action expectation,
+the observed balance/terminal outcome, a deterministic failure category and
+confidence, and a proposed 10-match experiment.
+When the terminal frame provides them, the evidence also includes placement,
+killer, final HP/EP/alive state, remaining-agent count, and at most five recent
+action/outcome summaries. Raw websocket frames are never retained.
+
+This scaffold is intentionally observation-only: post-mortems are not read by
+the decision engine, do not alter actions, and are not promoted into hardened
+strategy rules. Persistence failures are captured in runtime status and never
+interrupt gameplay or postgame maintenance.
+
 CERBERUS is a deterministic agent runtime for game-facing autonomy, identity bootstrapping, secret vaulting, wallet routing, and social/account integrations.
 
 AnarchI is the brand direction behind the system: hardcoding freedom into the systems of tomorrow.

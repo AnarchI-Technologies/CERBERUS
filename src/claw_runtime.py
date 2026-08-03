@@ -41,6 +41,7 @@ from loadout_shop_reforge import (
 from memory_system import CompactMemoryStore
 from onboarding_clients import ClawRoyaleClient
 from postgame_hardening import run_postgame_hardening_pass
+from postmortem_learning import build_postmortem, record_postmortem
 from preseason1_claims import claim_reached_preseason1_points
 from runtime_state import (
     append_action_postmortem,
@@ -1380,7 +1381,55 @@ def schedule_preseason1_claim_sweep(config: ClawRuntimeConfig, *, force: bool = 
     return True
 
 
-def record_account_balance(config: ClawRuntimeConfig, *, stage: str) -> dict[str, Any]:
+def _terminal_postmortem_evidence(status: dict[str, Any], payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Extract bounded terminal facts without retaining a raw server frame."""
+    frame = payload if isinstance(payload, dict) else {}
+    data = next(
+        (frame.get(key) for key in ("data", "payload", "result", "game") if isinstance(frame.get(key), dict)),
+        frame,
+    )
+    snapshot = status.get("last_snapshot") if isinstance(status.get("last_snapshot"), dict) else {}
+
+    def value(*keys: str) -> Any:
+        for source in (data, frame, snapshot):
+            for key in keys:
+                if isinstance(source, dict) and source.get(key) is not None:
+                    return source.get(key)
+        return None
+
+    audit = status.get("action_audit") if isinstance(status.get("action_audit"), list) else []
+    recent_actions = []
+    for row in audit[-12:]:
+        if not isinstance(row, dict) or row.get("kind") not in {"action_sent", "action_result"}:
+            continue
+        action = row.get("action") if isinstance(row.get("action"), dict) else {}
+        outcome = row.get("outcome") if isinstance(row.get("outcome"), dict) else {}
+        recent_actions.append(
+            {
+                "type": str(action.get("type") or "unknown")[:48],
+                "target": str(action.get("targetId") or action.get("regionId") or action.get("itemId") or "")[:96],
+                "ok": outcome.get("ok") if "ok" in outcome else None,
+                "code": str(outcome.get("code") or "")[:80],
+            }
+        )
+    return {
+        "placement": value("placement", "rank", "finalPlacement", "finalRank"),
+        "killer_id": value("killerId", "attackerId", "winnerId") or "",
+        "killer_name": value("killerName", "attackerName", "winnerName") or "",
+        "final_hp": value("hp", "currentHp"),
+        "final_ep": value("ep", "currentEp"),
+        "alive": value("alive", "isAlive"),
+        "alive_count": value("alive_count", "aliveCount", "remainingAgents"),
+        "recent_actions": recent_actions[-5:],
+    }
+
+
+def record_account_balance(
+    config: ClawRuntimeConfig,
+    *,
+    stage: str,
+    terminal_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     status = read_json(claw_runtime_status_file())
     account = account_status_summary(config)
     if not account.get("ok"):
@@ -1410,6 +1459,20 @@ def record_account_balance(config: ClawRuntimeConfig, *, stage: str) -> dict[str
         games_needed_for_1000_per_day=int((1000 + per_game - 1) // per_game) if per_game > 0 else 0,
     )
     if stage == "game_ended":
+        postmortem = build_postmortem(
+            game_id=str(status.get("current_game_id") or stored_game_id() or ""),
+            last_action=status.get("last_action") if isinstance(status.get("last_action"), dict) else {},
+            balance_delta=delta,
+            terminal_error=str(status.get("last_error") or ""),
+            action_audit=status.get("action_audit") if isinstance(status.get("action_audit"), list) else [],
+            terminal_evidence=_terminal_postmortem_evidence(status, terminal_payload),
+        )
+        try:
+            postmortem["memory_id"] = record_postmortem(postmortem)
+            postmortem["recorded"] = True
+        except Exception as exc:
+            postmortem["recorded"] = False
+            postmortem["record_error"] = str(exc)[:240]
         append_social_event(
             {
                 "kind": "match_end",
@@ -1422,6 +1485,7 @@ def record_account_balance(config: ClawRuntimeConfig, *, stage: str) -> dict[str
         except Exception as exc:
             maintenance = {"ok": False, "error": str(exc)[:500]}
         update_status(
+            last_postmortem=postmortem,
             postgame_maintenance=maintenance,
             postgame_maintenance_pending=False,
         )
@@ -1618,7 +1682,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                     record_paid_room_winners(config, terminal_id, payload)
                     clear_game_id()
                     update_status(postgame_maintenance_pending=True)
-                    record_account_balance(config, stage="game_ended")
+                    record_account_balance(config, stage="game_ended", terminal_payload=payload)
                     schedule_preseason1_claim_sweep(config, force=True)
                     update_status(
                         state="game_ended",
@@ -1694,7 +1758,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 record_paid_room_winners(config, terminal_id, payload)
                 clear_game_id()
                 update_status(postgame_maintenance_pending=True)
-                record_account_balance(config, stage="game_ended")
+                record_account_balance(config, stage="game_ended", terminal_payload=payload)
                 schedule_preseason1_claim_sweep(config, force=True)
                 update_status(
                     state="game_ended",
@@ -1722,7 +1786,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
                 record_paid_room_winners(config, terminal_id, payload)
                 clear_game_id()
                 update_status(postgame_maintenance_pending=True)
-                record_account_balance(config, stage="game_ended")
+                record_account_balance(config, stage="game_ended", terminal_payload=payload)
                 schedule_preseason1_claim_sweep(config, force=True)
                 update_status(
                     state="game_ended",
