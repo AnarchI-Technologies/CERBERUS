@@ -1,5 +1,13 @@
 # CERBERUS
 
+CERBERUS names the complete system, not one executable or server process. Its
+canonical responsibility map is defined in
+[`docs/architecture/cerberus-system-namespaces.md`](docs/architecture/cerberus-system-namespaces.md):
+Helm is the Windows operating surface, Vigil is the Android observation surface,
+Spine owns account-scoped orchestration, Pulse owns lifecycle, Switch Board owns
+signal routing, and Co'neck'tion makes unrelated plugin and adapter lineages
+understood through a common language.
+
 ## Observation-only Claw Royale post-mortems
 
 At the existing `game_ended` balance checkpoint, CERBERUS now writes a typed

@@ -15,7 +15,16 @@ Assert-True `
     ($manifest.anarCoreKernelInvariant.statement -eq 'an account may access only data scoped to that account') `
     'Anar Core account-data invariant is missing.'
 Assert-True `
-    ($manifest.desktopControlContract.webConsoleIncluded -eq $false) `
+    ($manifest.product.systemScope -eq 'entire-system') `
+    'CERBERUS must name the entire system.'
+Assert-True `
+    ($manifest.surfaceContracts.helm.defaultReach -eq 'standard') `
+    'Helm must default to Standard Reach.'
+Assert-True `
+    ($manifest.surfaceContracts.vigil.defaultReach -eq 'read-only') `
+    'Vigil must default to Read-only Reach.'
+Assert-True `
+    ($manifest.localControlContract.webConsoleIncluded -eq $false) `
     'The client shell must not bundle a web console.'
 
 $tenantUnit = Get-Content -LiteralPath (Join-Path $root 'deploy/systemd/cerberus-core@.service') -Raw
