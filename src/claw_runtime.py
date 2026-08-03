@@ -23,7 +23,7 @@ from claw_contract import COOLDOWN_ACTIONS, FREE_ACTIONS, JOIN_DECISIONS, PAID_W
 from claw_policy_shadow import ENFORCED_FREE_ACTIONS, authorize_free_action_execution
 from claw_config import CLAW_API_BASE, active_claw_version, claw_api_base, reconcile_claw_version
 from claw_signing import ClawSigningError, sign_typed_data_frame
-from core_loop import cerberus_tick
+from decision_bridge import decide_action
 from env_loader import hydrate_env
 from execution_coordinator import execute_authorized, reconcile_reserved_free_actions
 from external_wisdom import shared_public_line
@@ -1732,7 +1732,7 @@ async def connect_and_play(config: ClawRuntimeConfig, path: str) -> None:
             if snapshot and ((wants_action(payload, snapshot, gameplay_ready=gameplay_ready) and main_action_window) or free_action_window):
                 decision_snapshot = dict(snapshot)
                 decision_snapshot["_cerberusObjectiveLevels"] = objective_levels_from_status(runtime_status)
-                action = cerberus_tick(decision_snapshot)
+                action = decide_action(decision_snapshot)
                 turn = int(state.turn if state else 0)
                 if duplicate_action_sent(runtime_status, action, turn=turn):
                     append_action_audit(
