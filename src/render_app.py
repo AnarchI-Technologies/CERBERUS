@@ -43,6 +43,7 @@ from operator_timeline import execution_timeline  # noqa: E402
 from profit_simulator import simulate as profit_simulate  # noqa: E402
 from secret_env_admin import resolve_secret_value, update_secret_targets  # noqa: E402
 from social_runtime import drain_social_queue_once, social_queue  # noqa: E402
+from spine_protocol import session_document, snapshot_document  # noqa: E402
 from moltstation_runtime import run_forever as run_moltstation_runtime  # noqa: E402
 from pulse_workers import build_runtime_pulse  # noqa: E402
 from runtime_state import (
@@ -1555,6 +1556,17 @@ class CerberusHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/stream/stats":
             self._send(stream_state())
+            return
+        if parsed.path in {"/spine/v1/session", "/spine/v1/snapshot"}:
+            if not self._authorized():
+                self._send({"ok": False, "error": "unauthorized"}, status=401)
+                return
+            surface = self.headers.get("X-Cerberus-Surface", "unknown")
+            reach = ("read-only", "standard") if self._request_is_local_trusted() else ("read-only",)
+            if parsed.path == "/spine/v1/session":
+                self._send(session_document(surface=surface, reach=reach))
+            else:
+                self._send(snapshot_document(stats(), surface=surface, reach=reach))
             return
         if parsed.path == "/admin/extensions":
             if not self._authorized():
